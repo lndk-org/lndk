@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 futures = "0.3.26"
+tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic_lnd = "0.5.0"
