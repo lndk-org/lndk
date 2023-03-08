@@ -66,9 +66,9 @@ impl LndCfg {
 
 fn parse_args() -> Result<LndCfg, ArgsError> {
     let mut args = std::env::args_os();
-	if args.next().is_none() { 
-		return Err(ArgsError::NoArgs) 
-	}
+    if args.next().is_none() {
+        return Err(ArgsError::NoArgs);
+    }
 
     let address = match args.next() {
         Some(arg) => arg.into_string().expect("address is not UTF-8"),
