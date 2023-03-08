@@ -5,6 +5,8 @@ use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::util::logger::{Level, Logger, Record};
+use log::{debug, error, info, trace, warn};
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
@@ -15,6 +17,8 @@ use tonic_lnd::{Client, ConnectError};
 
 #[tokio::main]
 async fn main() {
+    simple_logger::init_with_level(log::Level::Info).unwrap();
+
     let args = match parse_args() {
         Ok(args) => args,
         Err(args) => panic!("Bad arguments: {args}"),
@@ -29,7 +33,7 @@ async fn main() {
         .expect("failed to get info");
 
     let pubkey = PublicKey::from_str(&info.into_inner().identity_pubkey).unwrap();
-    println!("Starting lndk for node: {pubkey}");
+    info!("Starting lndk for node: {pubkey}");
 
     let _node_signer = LndNodeSigner::new(pubkey, client.signer());
 }
@@ -132,6 +136,20 @@ impl EntropySource for MessengerUtilities {
         let mut buf = [0u8; 32];
         f.read_exact(&mut buf).unwrap();
         buf
+    }
+}
+
+impl Logger for MessengerUtilities {
+    fn log(&self, record: &Record) {
+        let args_str = record.args.to_string();
+        match record.level {
+            Level::Gossip => {}
+            Level::Trace => trace!("{}", args_str),
+            Level::Debug => debug!("{}", args_str),
+            Level::Info => info!("{}", args_str),
+            Level::Warn => warn!("{}", args_str),
+            Level::Error => error!("{}", args_str),
+        }
     }
 }
 
