@@ -2,6 +2,23 @@
 
 An experimental attempt at using [LDK](https://github.com/lightningdevkit/rust-lightning) to implement [bolt 12](https://github.com/lightning/bolts/pull/798) features for [LND](https://github.com/lightningnetwork/lnd).
 
+## Setting up LNDK
+
+To run `LNDK`, `LND` is assumed to be running. For directions on how to do this, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
+
+When compiling `LND`, make sure that the peersrpc and signerrpc services are enabled, like this:
+
+`make install --tags="peersrpc signerrpc"`
+
+In order to successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
+
+`cargo run -- <ADDRESS> <TLSPATH> <MACAROONPATH>`
+
+Or in a more concrete example:
+
+`cargo run -- https://localhost:10009 /home/<USERNAME>/.lnd/tls.cert /home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
+
+**Remember** that the grpc address must start with https:// for the program to work.
 
 ## Architecture
 There are three components relevant to our architecture:
