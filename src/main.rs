@@ -7,7 +7,7 @@ use tonic_lnd::{Client, ConnectError};
 async fn main() {
     let args = match parse_args() {
         Ok(args) => args,
-        Err(args) => panic!("Bad arguments: {}", args),
+        Err(args) => panic!("Bad arguments: {args}"),
     };
 
     let mut client = get_lnd_client(args).expect("failed to connect");
@@ -20,7 +20,7 @@ async fn main() {
 
     // We only print it here, note that in real-life code you may want to call `.into_inner()` on
     // the response to get the message.
-    println!("{:#?}", info);
+    println!("{info:#?}");
 }
 
 fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
@@ -57,19 +57,18 @@ struct LndCfg {
 impl LndCfg {
     fn new(address: String, cert: String, macaroon: String) -> LndCfg {
         LndCfg {
-            address: address,
-            cert: cert,
-            macaroon: macaroon,
+            address,
+            cert,
+            macaroon,
         }
     }
 }
 
 fn parse_args() -> Result<LndCfg, ArgsError> {
     let mut args = std::env::args_os();
-    match args.next() {
-        None => return Err(ArgsError::NoArgs),
-        _ => {}
-    };
+	if args.next().is_none() { 
+		return Err(ArgsError::NoArgs) 
+	}
 
     let address = match args.next() {
         Some(arg) => arg.into_string().expect("address is not UTF-8"),
