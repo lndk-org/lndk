@@ -3,11 +3,13 @@ use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
-use lightning::chain::keysinterface::{KeyMaterial, NodeSigner, Recipient};
+use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::msgs::UnsignedGossipMessage;
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 use std::str::FromStr;
 use tonic_lnd::{Client, ConnectError};
 
@@ -118,6 +120,18 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
 
     fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
         unimplemented!("not required for onion messaging");
+    }
+}
+
+// MessengerUtilities implements some utilites required for onion messenging.
+struct MessengerUtilities {}
+
+impl EntropySource for MessengerUtilities {
+    fn get_secure_random_bytes(&self) -> [u8; 32] {
+        let mut f = File::open("/dev/urandom").unwrap();
+        let mut buf = [0u8; 32];
+        f.read_exact(&mut buf).unwrap();
+        buf
     }
 }
 
