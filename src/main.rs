@@ -3,8 +3,10 @@ use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
-use lightning::chain::keysinterface::{KeyMaterial, NodeSigner, Recipient};
+use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::msgs::UnsignedGossipMessage;
+use rand_chacha::ChaCha20Rng;
+use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
@@ -118,6 +120,30 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
 
     fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
         unimplemented!("not required for onion messaging");
+    }
+}
+
+// MessengerUtilities implements some utilites required for onion messenging.
+struct MessengerUtilities {
+    entropy_source: RefCell<ChaCha20Rng>,
+}
+
+impl MessengerUtilities {
+    fn new() -> Self {
+        MessengerUtilities {
+            entropy_source: RefCell::new(ChaCha20Rng::from_entropy()),
+        }
+    }
+}
+
+impl EntropySource for MessengerUtilities {
+    // TODO: surface LDK's EntropySource and use instead.
+    fn get_secure_random_bytes(&self) -> [u8; 32] {
+        let mut chacha_bytes: [u8; 32] = [0; 32];
+        self.entropy_source
+            .borrow_mut()
+            .fill_bytes(&mut chacha_bytes);
+        chacha_bytes
     }
 }
 
