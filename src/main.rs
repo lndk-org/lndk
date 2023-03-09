@@ -5,6 +5,8 @@ use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::ln::peer_handler::IgnoringMessageHandler;
+use lightning::onion_message::OnionMessenger;
 use lightning::util::logger::{Level, Logger, Record};
 use log::{debug, error, info, trace, warn};
 use std::cell::RefCell;
@@ -35,7 +37,14 @@ async fn main() {
     let pubkey = PublicKey::from_str(&info.into_inner().identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}");
 
-    let _node_signer = LndNodeSigner::new(pubkey, client.signer());
+    let node_signer = LndNodeSigner::new(pubkey, client.signer());
+    let messenger_utils = MessengerUtilities {};
+    let _onion_messenger = OnionMessenger::new(
+        &messenger_utils,
+        &node_signer,
+        &messenger_utils,
+        IgnoringMessageHandler {},
+    );
 }
 
 struct LndNodeSigner<'a> {
