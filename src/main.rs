@@ -23,7 +23,8 @@ use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
-    lnrpc::NodeInfoRequest, lnrpc::PeerEvent, tonic::Status, Client, ConnectError,
+    lnrpc::NodeInfo, lnrpc::NodeInfoRequest, lnrpc::PeerEvent, tonic::Response, tonic::Status,
+    Client, ConnectError,
 };
 
 const ONION_MESSAGE_OPTIONAL: u32 = 39;
@@ -141,6 +142,40 @@ impl fmt::Display for ProducerError {
 trait PeerEventProducer {
     fn receive(&mut self) -> Result<PeerEvent, Status>;
     fn onion_support(&mut self, pubkey: &PublicKey) -> Result<bool, Box<dyn Error>>;
+}
+
+struct PeerStream<F: FnMut(&PublicKey) -> Result<Response<NodeInfo>, Status>> {
+    peer_subscription: tonic_lnd::tonic::Streaming<PeerEvent>,
+    node_info: F,
+}
+
+impl<F: FnMut(&PublicKey) -> Result<Response<NodeInfo>, Status>> PeerEventProducer
+    for PeerStream<F>
+{
+    fn receive(&mut self) -> Result<PeerEvent, Status> {
+        match block_on(self.peer_subscription.message()) {
+            Ok(event) => match event {
+                Some(peer_event) => Ok(peer_event),
+                None => Err(Status::unknown("no event provided")),
+            },
+            Err(e) => Err(Status::unknown(format!("streaming error: {e}"))),
+        }
+    }
+
+    fn onion_support(&mut self, pubkey: &PublicKey) -> Result<bool, Box<dyn Error>> {
+        let resp = (self.node_info)(pubkey)?.into_inner();
+        match resp.node {
+            Some(node) => Ok(node.features.contains_key(&ONION_MESSAGE_OPTIONAL)),
+            // If we couldn't find the node announcement, just assume that the node does not support onion messaging.
+            None => {
+                warn!(
+                    "node {:?} not found in graph, assuming no onion message support",
+                    pubkey
+                );
+                Ok(false)
+            }
+        }
+    }
 }
 
 fn produce_peer_events(
