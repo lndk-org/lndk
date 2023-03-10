@@ -191,6 +191,25 @@ trait PeerEventProducer {
     async fn onion_support(&mut self, pubkey: &PublicKey) -> bool;
 }
 
+struct PeerStream {
+    peer_subscription: tonic_lnd::tonic::Streaming<PeerEvent>,
+    client: tonic_lnd::LightningClient,
+}
+
+#[async_trait]
+impl PeerEventProducer for PeerStream {
+    async fn receive(&mut self) -> Result<PeerEvent, Status> {
+        match self.peer_subscription.message().await? {
+            Some(peer_event) => Ok(peer_event),
+            None => Err(Status::unknown("no event provided")),
+        }
+    }
+
+    async fn onion_support(&mut self, pubkey: &PublicKey) -> bool {
+        lookup_onion_support(pubkey, &mut self.client).await
+    }
+}
+
 // Consumes a stream of peer online/offline events from the PeerEventProducer until the stream exits (by sending an
 // error) or the producer receives the signal to exit (via close of the exit channel).
 //
