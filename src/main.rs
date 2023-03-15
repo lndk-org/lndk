@@ -5,8 +5,7 @@ use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::features::InitFeatures;
-use lightning::ln::msgs::UnsignedGossipMessage;
-use lightning::ln::msgs::{Init, OnionMessageHandler};
+use lightning::ln::msgs::{Init, OnionMessageHandler, UnsignedGossipMessage};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
@@ -21,6 +20,7 @@ use std::marker::Copy;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
+use std::thread;
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
     lnrpc::NodeInfo, lnrpc::NodeInfoRequest, lnrpc::PeerEvent, tonic::Response, tonic::Status,
@@ -85,7 +85,8 @@ async fn main() -> Result<(), ()> {
     }
 
     // Create an onion messenger that depends on LND's signer client and consume related events.
-    let node_signer = LndNodeSigner::new(pubkey, client.signer());
+    let mut node_client = client.signer().clone();
+    let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
     let messenger_utils = MessengerUtilities::new();
     let onion_messenger = OnionMessenger::new(
         &messenger_utils,
@@ -94,13 +95,15 @@ async fn main() -> Result<(), ()> {
         IgnoringMessageHandler {},
     );
 
-    run_onion_messenger(peer_support, onion_messenger)
+    let mut peers_client = client.lightning().clone();
+    run_onion_messenger(peer_support, &mut peers_client, onion_messenger)
 }
 
 // Responsible for initializing the onion messenger provided with the correct start state and managing onion message
 // event producers and consumers.
 fn run_onion_messenger<ES: Deref, NS: Deref, L: Deref, CMH: Deref>(
     current_peers: HashMap<PublicKey, bool>,
+    ln_client: &mut tonic_lnd::LightningClient,
     onion_messenger: OnionMessenger<ES, NS, L, CMH>,
 ) -> Result<(), ()>
 where
@@ -117,9 +120,44 @@ where
             .map_err(|_| ())?
     }
 
+    // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
+    // starting up. The onion messenger can handle superfluous online/offline reports, so it's okay if this ends
+    // up creating some duplicate events. The event subscription from LND blocks until it gets its first event (which
+    // could take very long), so we get the subscription itself inside of our producer thread.
+    let mut peers_client = ln_client.clone();
+    let peer_events_handler = thread::spawn(move || {
+        let peer_subscription = block_on(
+            peers_client.subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {}),
+        )
+        .expect("peer subscription failed")
+        .into_inner();
+
+        let node_info = |pubkey: &PublicKey| -> Result<Response<NodeInfo>, Status> {
+            block_on(peers_client.get_node_info(NodeInfoRequest {
+                pub_key: pubkey.to_string(),
+                ..Default::default()
+            }))
+        };
+
+        match produce_peer_events(
+            PeerStream {
+                peer_subscription,
+                node_info,
+            },
+            sender,
+        ) {
+            Ok(_) => debug!("Peer events producer exited"),
+            Err(e) => error!("Peer events producer exited: {e}"),
+        };
+    });
+
     consume_messenger_events(onion_messenger, receiver).map_err(|e| {
         error!("run onion messenger: {e}");
-    })
+    })?;
+
+    peer_events_handler
+        .join()
+        .map_err(|e| debug!("peer events: {:?}", e))
 }
 
 #[derive(Debug)]
