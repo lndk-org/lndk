@@ -20,8 +20,11 @@ use std::fmt;
 use std::marker::Copy;
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::mpsc::{channel, Receiver};
-use tonic_lnd::{lnrpc::NodeInfoRequest, Client, ConnectError};
+use std::sync::mpsc::{channel, Receiver, SendError, Sender};
+use tonic_lnd::{
+    lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
+    lnrpc::NodeInfoRequest, lnrpc::PeerEvent, tonic::Status, Client, ConnectError,
+};
 
 const ONION_MESSAGE_OPTIONAL: u32 = 39;
 
@@ -116,6 +119,78 @@ where
     consume_messenger_events(onion_messenger, receiver).map_err(|e| {
         error!("run onion messenger: {e}");
     })
+}
+
+#[derive(Debug)]
+enum ProducerError {
+    SendError(SendError<MessengerEvents>),
+    StreamError(MessengerEvents),
+}
+
+impl Error for ProducerError {}
+
+impl fmt::Display for ProducerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProducerError::SendError(e) => write!(f, "error sending messenger event: {e}"),
+            ProducerError::StreamError(s) => write!(f, "LND stream {s} exited"),
+        }
+    }
+}
+
+trait PeerEventProducer {
+    fn receive(&mut self) -> Result<PeerEvent, Status>;
+    fn onion_support(&mut self, pubkey: &PublicKey) -> Result<bool, Box<dyn Error>>;
+}
+
+fn produce_peer_events(
+    mut source: impl PeerEventProducer,
+    events: Sender<MessengerEvents>,
+) -> Result<(), ProducerError> {
+    loop {
+        match source.receive() {
+            Ok(peer_event) => match peer_event.r#type() {
+                PeerOnline => {
+                    let pubkey = PublicKey::from_str(&peer_event.pub_key).unwrap();
+                    match source.onion_support(&pubkey) {
+                        Ok(onion_support) => {
+                            let event = MessengerEvents::PeerConnected(pubkey, onion_support);
+                            match events.send(event) {
+                                Ok(_) => debug!("peer events sent: {event}"),
+                                Err(err) => return Err(ProducerError::SendError(err)),
+                            };
+                        }
+                        // If we couldn't lookup the peer's onion message support, just log the error and ignore the
+                        // connection event.
+                        Err(e) => {
+                            warn!("onion support lookup failed for {pubkey}: {e}, ignoring connection event");
+                            continue;
+                        }
+                    };
+                }
+                PeerOffline => {
+                    let event = MessengerEvents::PeerDisconnected(
+                        PublicKey::from_str(&peer_event.pub_key).unwrap(),
+                    );
+                    match events.send(event) {
+                        Ok(_) => debug!("peer events sent: {event}"),
+                        Err(err) => return Err(ProducerError::SendError(err)),
+                    };
+                }
+            },
+            Err(s) => {
+                info!("peer events receive failed: {s}");
+
+                let event = MessengerEvents::ProducerExit(ConsumerError::PeerProducerExit);
+                match events.send(event) {
+                    Ok(_) => debug!("peer events sent: {event}"),
+                    Err(err) => error!("peer events: send producer exit failed: {err}"),
+                }
+
+                return Err(ProducerError::StreamError(event));
+            }
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -441,6 +516,15 @@ mod tests {
             }
     }
 
+    mock! {
+        PeerProducer{}
+
+        impl PeerEventProducer for PeerProducer{
+            fn receive(&mut self) -> Result<PeerEvent, Status>;
+            fn onion_support(&mut self, pubkey: &PublicKey) -> Result<bool, Box<dyn Error>>;
+        }
+    }
+
     #[test]
     fn test_consume_messenger_events() {
         let (sender, receiver) = channel();
@@ -507,5 +591,61 @@ mod tests {
         let (sender_done, receiver_done) = channel();
         drop(sender_done);
         assert!(consume_messenger_events(MockOnionHandler::new(), receiver_done).is_ok());
+    }
+
+    #[test]
+    fn test_produce_peer_events() {
+        let (sender, receiver) = channel();
+
+        let mut mock = MockPeerProducer::new();
+
+        // Peer connects and we successfully lookup its support for onion messages.
+        mock.expect_receive().times(1).returning(|| {
+            Ok(PeerEvent {
+                pub_key: pubkey().to_string(),
+                r#type: i32::from(PeerOnline),
+            })
+        });
+        mock.expect_onion_support().times(1).returning(|_| Ok(true));
+
+        // Peer connects and we fail to lookup onion message support - no event should be sent. We don't need the
+        // exact error type here, so just use a producer exit for convenience.
+        mock.expect_receive().times(1).returning(|| {
+            Ok(PeerEvent {
+                pub_key: pubkey().to_string(),
+                r#type: i32::from(PeerOnline),
+            })
+        });
+        mock.expect_onion_support()
+            .returning(|_| Err(Box::new(ConsumerError::PeerProducerExit)));
+
+        // Peer disconnects.
+        mock.expect_receive().times(1).returning(|| {
+            Ok(PeerEvent {
+                pub_key: pubkey().to_string(),
+                r#type: i32::from(PeerOffline),
+            })
+        });
+
+        mock.expect_receive()
+            .times(1)
+            .returning(|| Err(Status::unknown("mock stream err")));
+
+        matches!(
+            produce_peer_events(mock, sender).expect_err("producer should error"),
+            ProducerError::StreamError(_)
+        );
+
+        matches!(
+            receiver.recv().unwrap(),
+            MessengerEvents::PeerConnected(_, _)
+        );
+
+        matches!(
+            receiver.recv().unwrap(),
+            MessengerEvents::PeerDisconnected(_)
+        );
+
+        matches!(receiver.recv().unwrap(), MessengerEvents::ProducerExit(_));
     }
 }
