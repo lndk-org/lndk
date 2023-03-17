@@ -9,22 +9,25 @@ use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::ln::msgs::{Init, OnionMessageHandler};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::onion_message::OnionMessenger;
+use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::marker::Copy;
+use std::ops::Deref;
 use std::str::FromStr;
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::{channel, Receiver};
 use tonic_lnd::{
-    lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, tonic::Code, tonic::Status, Client,
-    ConnectError, LightningClient, PeersClient,
+    lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::NodeInfoRequest, tonic::Code,
+    tonic::Status, Client, ConnectError, LightningClient, PeersClient,
 };
 
+const ONION_MESSAGES_REQUIRED: u32 = 38;
 const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 #[tokio::main]
@@ -66,16 +69,101 @@ async fn main() -> Result<(), ()> {
         }
     }
 
+    // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
+    // connected. This sets up our "start state" for the messenger correctly.
+    let current_peers = client
+        .lightning()
+        .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+            latest_error: false,
+        })
+        .await
+        .map_err(|e| {
+            error!("Could not lookup current peers: {e}");
+        })?;
+
+    let mut peer_support = HashMap::new();
+    for peer in current_peers.into_inner().peers {
+        let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+        let onion_support = lookup_onion_support(&pubkey, client.lightning()).await;
+        peer_support.insert(pubkey, onion_support);
+    }
+
+    // Create an onion messenger that depends on LND's signer client and consume related events.
     let node_signer = LndNodeSigner::new(pubkey, client.signer());
     let messenger_utils = MessengerUtilities::new();
-    let _onion_messenger = OnionMessenger::new(
+    let onion_messenger = OnionMessenger::new(
         &messenger_utils,
         &node_signer,
         &messenger_utils,
         IgnoringMessageHandler {},
     );
 
-    Ok(())
+    run_onion_messenger(peer_support, onion_messenger).await
+}
+
+// Responsible for initializing the onion messenger provided with the correct start state and managing onion message
+// event producers and consumers.
+async fn run_onion_messenger<ES: Deref, NS: Deref, L: Deref, CMH: Deref>(
+    current_peers: HashMap<PublicKey, bool>,
+    onion_messenger: OnionMessenger<ES, NS, L, CMH>,
+) -> Result<(), ()>
+where
+    ES::Target: EntropySource,
+    NS::Target: NodeSigner,
+    L::Target: Logger,
+    CMH::Target: CustomOnionMessageHandler + Sized,
+{
+    // Setup channels that we'll use to communicate onion messenger events. We buffer our channels by the number of
+    // peers that the node currently has so that we can send all of our startup online events in one go (before we
+    // boot up the consumer). The number of peers that we have is also related to the number of events we can expect
+    // to process, so it's a sensible enough buffer size.
+    let (sender, receiver) = channel(current_peers.len());
+    for (peer, onion_support) in current_peers {
+        sender
+            .send(MessengerEvents::PeerConnected(peer, onion_support))
+            .await
+            .map_err(|e| {
+                error!("Notify peer connected: {e}");
+            })?
+    }
+
+    // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
+    // allow interior mutibility (see LndNodeSigner) so this function can't safely be passed off to another thread.
+    consume_messenger_events(onion_messenger, receiver)
+        .await
+        .map_err(|e| {
+            error!("run onion messenger: {e}");
+        })
+}
+
+// lookup_onion_support performs a best-effort lookup in the node's view of the graph to determine whether it supports
+// onion messaging. If the node is not found, or we have not seen its announcement yet, a warning is logged and we
+// assume that onion messaging is not supported.
+async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::LightningClient) -> bool {
+    match client
+        .get_node_info(NodeInfoRequest {
+            pub_key: pubkey.to_string(),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(peer) => match peer.into_inner().node {
+            Some(node) => {
+                node.features.contains_key(&ONION_MESSAGES_OPTIONAL)
+                    || node.features.contains_key(&ONION_MESSAGES_REQUIRED)
+            }
+            None => {
+                warn!("Peer {pubkey} not found in graph on startup, assuming no onion support");
+                false
+            }
+        },
+        Err(e) => {
+            warn!(
+                "Could not lookup peer {pubkey} in graph: {e}, assuming no onion message support"
+            );
+            false
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
