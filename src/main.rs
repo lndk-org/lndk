@@ -8,23 +8,25 @@ use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::ln::msgs::{Init, OnionMessageHandler};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::onion_message::OnionMessenger;
+use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::marker::Copy;
+use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::mpsc::Receiver;
-use tonic_lnd::{Client, ConnectError};
+use std::sync::mpsc::{channel, Receiver};
+use tonic_lnd::{lnrpc::NodeInfoRequest, Client, ConnectError};
 
 const ONION_MESSAGE_OPTIONAL: u32 = 39;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), ()> {
     simple_logger::init_with_level(log::Level::Info).unwrap();
 
     let args = match parse_args() {
@@ -43,15 +45,79 @@ async fn main() {
     let pubkey = PublicKey::from_str(&info.into_inner().identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}");
 
+    // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
+    // connected. This sets up our "start state" for the messenger correctly.
+    let current_peers = client
+        .lightning()
+        .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+            latest_error: false,
+        })
+        .await
+        .expect("list peers failed")
+        .into_inner()
+        .peers;
+
+    let mut peer_support = HashMap::new();
+    for peer in current_peers {
+        let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+        let onion_support = match block_on(client.lightning().get_node_info(NodeInfoRequest {
+            pub_key: pubkey.to_string(),
+            ..Default::default()
+        })) {
+            Ok(peer) => match peer.into_inner().node {
+                Some(node) => node.features.contains_key(&ONION_MESSAGE_OPTIONAL),
+                None => {
+                    warn!("Peer {pubkey} not found in graph on startup, assuming no onion support");
+                    false
+                }
+            },
+            Err(e) => {
+                warn!("Could not lookup peer {pubkey} in graph: {e}, assuming no onion message support");
+                false
+            }
+        };
+
+        peer_support.insert(pubkey, onion_support);
+    }
+
+    // Create an onion messenger that depends on LND's signer client and consume related events.
     let node_signer = LndNodeSigner::new(pubkey, client.signer());
     let messenger_utils = MessengerUtilities::new();
-    let _onion_messenger = OnionMessenger::new(
+    let onion_messenger = OnionMessenger::new(
         &messenger_utils,
         &node_signer,
         &messenger_utils,
         IgnoringMessageHandler {},
     );
+
+    run_onion_messenger(peer_support, onion_messenger)
 }
+
+// Responsible for initializing the onion messenger provided with the correct start state and managing onion message
+// event producers and consumers.
+fn run_onion_messenger<ES: Deref, NS: Deref, L: Deref, CMH: Deref>(
+    current_peers: HashMap<PublicKey, bool>,
+    onion_messenger: OnionMessenger<ES, NS, L, CMH>,
+) -> Result<(), ()>
+where
+    ES::Target: EntropySource,
+    NS::Target: NodeSigner,
+    L::Target: Logger,
+    CMH::Target: CustomOnionMessageHandler + Sized,
+{
+    // Setup channels that we'll use to communicate onion messenger events.
+    let (sender, receiver) = channel();
+    for (peer, onion_support) in current_peers {
+        sender
+            .send(MessengerEvents::PeerConnected(peer, onion_support))
+            .map_err(|_| ())?
+    }
+
+    consume_messenger_events(onion_messenger, receiver).map_err(|e| {
+        error!("run onion messenger: {e}");
+    })
+}
+
 #[derive(Debug, Copy, Clone)]
 enum ConsumerError {
     // Internal onion messenger implementation has experienced an error.
