@@ -5,7 +5,9 @@ use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
+use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::ln::msgs::{Init, OnionMessageHandler};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::OnionMessenger;
 use lightning::util::logger::{Level, Logger, Record};
@@ -15,7 +17,9 @@ use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+use std::marker::Copy;
 use std::str::FromStr;
+use tokio::sync::mpsc::Receiver;
 use tonic_lnd::{
     lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, tonic::Code, tonic::Status, Client,
     ConnectError, LightningClient, PeersClient,
@@ -70,6 +74,89 @@ async fn main() -> Result<(), ()> {
         &messenger_utils,
         IgnoringMessageHandler {},
     );
+
+    Ok(())
+}
+
+#[derive(Debug, Copy, Clone)]
+enum ConsumerError {
+    // Internal onion messenger implementation has experienced an error.
+    OnionMessengerFailure,
+
+    // The producer responsible for peer connection events has exited.
+    PeerProducerExit,
+}
+
+impl Error for ConsumerError {}
+
+impl fmt::Display for ConsumerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConsumerError::OnionMessengerFailure => {
+                write!(f, "consumer err: onion messenger failure")
+            }
+            ConsumerError::PeerProducerExit => write!(f, "consumer err: peer producer exit"),
+        }
+    }
+}
+
+// MessengerEvents represents all of the events that are relevant to onion messages.
+#[derive(Debug, Copy, Clone)]
+enum MessengerEvents {
+    PeerConnected(PublicKey, bool),
+    PeerDisconnected(PublicKey),
+    ProducerExit(ConsumerError),
+}
+
+impl fmt::Display for MessengerEvents {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MessengerEvents::PeerConnected(p, o) => {
+                write!(
+                    f,
+                    "messenger event: {p} connected, onion message support: {o}"
+                )
+            }
+            MessengerEvents::PeerDisconnected(p) => write!(f, "messenger event: {p} disconnected"),
+            MessengerEvents::ProducerExit(s) => write!(f, "messenger event: {s} exited"),
+        }
+    }
+}
+
+// consume_messenger_events receives a series of events and delivers them to the onion messenger provided.
+async fn consume_messenger_events(
+    onion_messenger: impl OnionMessageHandler,
+    mut events: Receiver<MessengerEvents>,
+) -> Result<(), ConsumerError> {
+    while let Some(onion_event) = events.recv().await {
+        info!("Consume messenger events received: {onion_event}");
+
+        match onion_event {
+            MessengerEvents::PeerConnected(pubkey, onion_support) => {
+                let init_features = if onion_support {
+                    let onion_message_optional: u64 = 1 << ONION_MESSAGES_OPTIONAL;
+                    InitFeatures::from_le_bytes(onion_message_optional.to_le_bytes().to_vec())
+                } else {
+                    InitFeatures::empty()
+                };
+
+                onion_messenger
+                    .peer_connected(
+                        &pubkey,
+                        &Init {
+                            features: init_features,
+                            remote_network_address: None,
+                        },
+                        false,
+                    )
+                    .map_err(|_| ConsumerError::OnionMessengerFailure)?
+            }
+            MessengerEvents::PeerDisconnected(pubkey) => onion_messenger.peer_disconnected(&pubkey),
+            MessengerEvents::ProducerExit(e) => {
+                return Err(e);
+            }
+        }
+    }
 
     Ok(())
 }
@@ -388,8 +475,14 @@ async fn set_feature_bit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::secp256k1::PublicKey;
+    use hex;
+    use lightning::ln::features::{InitFeatures, NodeFeatures};
+    use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
+    use lightning::util::events::OnionMessageProvider;
     use mockall::mock;
     use std::collections::HashMap;
+    use tokio::sync::mpsc::channel;
 
     mock! {
         InfoRetriever{}
@@ -527,5 +620,111 @@ mod tests {
             .expect_err("set_feature_bit should error");
 
         matches!(set_feature_err, SetOnionBitError::SetBitFail);
+    }
+
+    fn pubkey() -> PublicKey {
+        PublicKey::from_slice(
+            &hex::decode("02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619")
+                .unwrap()[..],
+        )
+        .unwrap()
+    }
+
+    mock! {
+            OnionHandler{}
+
+            impl OnionMessageProvider for OnionHandler {
+                fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
+            }
+
+            impl OnionMessageHandler for OnionHandler {
+                fn handle_onion_message(&self, peer_node_id: &PublicKey, msg: &OnionMessage);
+                fn peer_connected(&self, their_node_id: &PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
+                fn peer_disconnected(&self, their_node_id: &PublicKey);
+                fn provided_node_features(&self) -> NodeFeatures;
+                fn provided_init_features(&self, their_node_id: &PublicKey) -> InitFeatures;
+            }
+    }
+
+    #[tokio::test]
+    async fn test_consume_messenger_events() {
+        let (sender, receiver) = channel(4);
+
+        let pk = pubkey();
+        let mut mock = MockOnionHandler::new();
+
+        // Peer connected: onion messaging supported.
+        sender
+            .send(MessengerEvents::PeerConnected(pk, true))
+            .await
+            .unwrap();
+
+        mock.expect_peer_connected()
+            .withf(|_: &PublicKey, init: &Init, _: &bool| init.features.supports_onion_messages())
+            .return_once(|_, _, _| Ok(()));
+
+        // Peer connected: onion messaging not supported.
+        sender
+            .send(MessengerEvents::PeerConnected(pk, false))
+            .await
+            .unwrap();
+
+        mock.expect_peer_connected()
+            .withf(|_: &PublicKey, init: &Init, _: &bool| !init.features.supports_onion_messages())
+            .return_once(|_, _, _| Ok(()));
+
+        // Cover peer disconnected events.
+        sender
+            .send(MessengerEvents::PeerDisconnected(pk))
+            .await
+            .unwrap();
+        mock.expect_peer_disconnected().return_once(|_| ());
+
+        // Finally, send a producer exit event to test exit.
+        sender
+            .send(MessengerEvents::ProducerExit(
+                ConsumerError::PeerProducerExit,
+            ))
+            .await
+            .unwrap();
+
+        let consume_err = consume_messenger_events(mock, receiver)
+            .await
+            .expect_err("consume should error");
+        matches!(consume_err, ConsumerError::PeerProducerExit);
+    }
+
+    #[tokio::test]
+    async fn test_consumer_exit_onion_messenger_failure() {
+        let (sender, receiver) = channel(1);
+
+        let pk = pubkey();
+        let mut mock = MockOnionHandler::new();
+
+        // Send a peer connected event, but mock out an error on the handler's connected function.
+        sender
+            .send(MessengerEvents::PeerConnected(pk, true))
+            .await
+            .unwrap();
+        mock.expect_peer_connected().return_once(|_, _, _| Err(()));
+
+        let consume_err = consume_messenger_events(mock, receiver)
+            .await
+            .expect_err("consume should error");
+        matches!(consume_err, ConsumerError::OnionMessengerFailure);
+    }
+
+    #[tokio::test]
+    async fn test_consumer_clean_exit() {
+        // Test the case where our receiving channel is closed and we exit without error. Dropping
+        // the sender manually has the effect of closing the channel.
+        let (sender_done, receiver_done) = channel(1);
+        drop(sender_done);
+
+        assert!(
+            consume_messenger_events(MockOnionHandler::new(), receiver_done)
+                .await
+                .is_ok()
+        );
     }
 }
