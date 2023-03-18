@@ -1,0 +1,19 @@
+[[param]]
+name = "address"
+type = "String"
+optional = false
+doc = "LND GRPC address, kindly note that the address must start with https:// ."
+
+
+[[param]]
+name = "cert"
+type = "String"
+optional = false
+doc = "The path to LND tls certificate file"
+
+
+[[param]]
+name = "macaroon"
+type = "String"
+optional = false
+doc = "The path to LND macaroon file"

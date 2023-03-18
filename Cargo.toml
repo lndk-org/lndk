@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.configure_me]
+spec = "config_spec.toml"
 
 [dependencies]
 bitcoin = "0.29.2"
@@ -15,3 +17,8 @@ log = "0.4.17"
 simple_logger = "4.0.0"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic_lnd = "0.5.1"
+configure_me = "0.4"
+
+
+[build-dependencies]
+configure_me_codegen = "0.4.4"

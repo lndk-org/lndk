@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate configure_me;
+
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
@@ -12,20 +15,19 @@ use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
-use std::error::Error;
-use std::fmt;
 use std::str::FromStr;
 use tonic_lnd::{Client, ConnectError};
+
+include_config!();
 
 #[tokio::main]
 async fn main() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
 
-    let args = match parse_args() {
-        Ok(args) => args,
-        Err(args) => panic!("Bad arguments: {args}"),
-    };
-
+    let lnd_config = Config::including_optional_config_files(&[""])
+        .unwrap_or_exit()
+        .0;
+    let args = LndCfg::new(lnd_config.address, lnd_config.cert, lnd_config.macaroon);
     let mut client = get_lnd_client(args).expect("failed to connect");
 
     let info = client
@@ -178,27 +180,6 @@ fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
     block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
 }
 
-#[derive(Debug)]
-enum ArgsError {
-    NoArgs,
-    AddressRequired,
-    CertRequired,
-    MacaroonRequired,
-}
-
-impl Error for ArgsError {}
-
-impl fmt::Display for ArgsError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ArgsError::NoArgs => write!(f, "No command line arguments provided."),
-            ArgsError::AddressRequired => write!(f, "LND's RPC server address is required."),
-            ArgsError::CertRequired => write!(f, "Path to LND's tls certificate is required."),
-            ArgsError::MacaroonRequired => write!(f, "Path to LND's macaroon is required."),
-        }
-    }
-}
-
 struct LndCfg {
     address: String,
     cert: String,
@@ -213,28 +194,4 @@ impl LndCfg {
             macaroon,
         }
     }
-}
-
-fn parse_args() -> Result<LndCfg, ArgsError> {
-    let mut args = std::env::args_os();
-    if args.next().is_none() {
-        return Err(ArgsError::NoArgs);
-    }
-
-    let address = match args.next() {
-        Some(arg) => arg.into_string().expect("address is not UTF-8"),
-        None => return Err(ArgsError::AddressRequired),
-    };
-
-    let cert_file = match args.next() {
-        Some(arg) => arg.into_string().expect("cert is not UTF-8"),
-        None => return Err(ArgsError::CertRequired),
-    };
-
-    let macaroon_file = match args.next() {
-        Some(arg) => arg.into_string().expect("macaroon is not UTF-8"),
-        None => return Err(ArgsError::MacaroonRequired),
-    };
-
-    Ok(LndCfg::new(address, cert_file, macaroon_file))
 }
