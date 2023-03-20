@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
@@ -15,7 +16,9 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
-use tonic_lnd::{Client, ConnectError};
+use tonic_lnd::{tonic::Code, tonic::Status, Client, ConnectError, LightningClient, PeersClient};
+
+const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 #[tokio::main]
 async fn main() {
@@ -33,9 +36,24 @@ async fn main() {
         .get_info(tonic_lnd::lnrpc::GetInfoRequest {})
         .await
         .expect("failed to get info");
+    let info_clone = info.into_inner().clone();
+    let info_clone_2 = info_clone.clone();
 
-    let pubkey = PublicKey::from_str(&info.into_inner().identity_pubkey).unwrap();
+    let pubkey = PublicKey::from_str(&info_clone.identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}");
+
+    if !info_clone_2.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
+        let mut node_info_retriever = GetInfoClient {
+            client: &mut client.lightning().clone(),
+        };
+        let mut announcement_updater = UpdateNodeAnnClient {
+            peers_client: client.peers(),
+        };
+        match set_feature_bit(&mut node_info_retriever, &mut announcement_updater).await {
+            Ok(_) => {}
+            Err(err) => panic!("Error setting feaure bit: {err}"),
+        }
+    }
 
     let node_signer = LndNodeSigner::new(pubkey, client.signer());
     let messenger_utils = MessengerUtilities::new();
@@ -237,4 +255,126 @@ fn parse_args() -> Result<LndCfg, ArgsError> {
     };
 
     Ok(LndCfg::new(address, cert_file, macaroon_file))
+}
+
+#[derive(Debug)]
+enum SetOnionBitError {
+    UnimplementedPeersService,
+    SetBitFail,
+    UpdateAnnouncementErr(Status),
+    GetInfoErr(Status),
+}
+
+impl Error for SetOnionBitError {}
+
+impl fmt::Display for SetOnionBitError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SetOnionBitError::UnimplementedPeersService => write!(
+                f,
+                "Peer service is unimplemented. Remember to
+                enable the peerrpc services when building LND with make tags='peerrpc signrpc'"
+            ),
+            SetOnionBitError::SetBitFail => {
+                write!(f, "onion messaging feature bit failed to be set")
+            }
+            SetOnionBitError::UpdateAnnouncementErr(err) => {
+                write!(f, "error setting update announcement: {err}")
+            }
+            SetOnionBitError::GetInfoErr(err) => write!(f, "get_info error: {err}"),
+        }
+    }
+}
+
+#[async_trait]
+trait NodeInfoRetriever {
+    async fn get_info(
+        &mut self,
+        request: tonic_lnd::lnrpc::GetInfoRequest,
+    ) -> Result<tonic_lnd::lnrpc::GetInfoResponse, SetOnionBitError>;
+}
+
+struct GetInfoClient<'a> {
+    client: &'a mut LightningClient,
+}
+
+#[async_trait]
+impl<'a> NodeInfoRetriever for GetInfoClient<'a> {
+    async fn get_info(
+        &mut self,
+        request: tonic_lnd::lnrpc::GetInfoRequest,
+    ) -> Result<tonic_lnd::lnrpc::GetInfoResponse, SetOnionBitError> {
+        match self.client.get_info(request).await {
+            Ok(resp) => Ok(resp.into_inner()),
+            Err(status) => Err(SetOnionBitError::GetInfoErr(status)),
+        }
+    }
+}
+
+/// UpdateNodeAnnouncement defines the peer functionality needed to set the onion
+/// messaging feature bit.
+#[async_trait]
+trait UpdateNodeAnnouncement {
+    async fn update_node_announcement(
+        &mut self,
+        request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
+    ) -> Result<(), SetOnionBitError>;
+}
+
+struct UpdateNodeAnnClient<'a> {
+    peers_client: &'a mut PeersClient,
+}
+
+#[async_trait]
+impl<'a> UpdateNodeAnnouncement for UpdateNodeAnnClient<'a> {
+    async fn update_node_announcement(
+        &mut self,
+        request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
+    ) -> Result<(), SetOnionBitError> {
+        match self.peers_client.update_node_announcement(request).await {
+            Ok(_) => Ok(()),
+            Err(status) => {
+                if status.code() == Code::Unimplemented {
+                    return Err(SetOnionBitError::UnimplementedPeersService);
+                }
+
+                return Err(SetOnionBitError::UpdateAnnouncementErr(status));
+            }
+        }
+    }
+}
+
+/// Sets the onion messaging feature bit (described in this PR:
+/// https://github.com/lightning/bolts/pull/759/), to signal that we support
+/// onion messaging. This needs to be done every time LND starts up, because LND
+/// does not currently persist the custom feature bits that are set via the RPC.
+async fn set_feature_bit(
+    client: &mut impl NodeInfoRetriever,
+    peers_client: &mut impl UpdateNodeAnnouncement,
+) -> Result<(), SetOnionBitError> {
+    let update = tonic_lnd::peersrpc::UpdateFeatureAction {
+        action: i32::from(tonic_lnd::peersrpc::UpdateAction::Add),
+        feature_bit: ONION_MESSAGES_OPTIONAL as i32,
+    };
+    let feature_updates = vec![update];
+
+    peers_client
+        .update_node_announcement(tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest {
+            feature_updates,
+            color: Default::default(),
+            alias: Default::default(),
+            address_updates: Default::default(),
+        })
+        .await?;
+
+    // Call get_info again to check the bit was actually set.
+    let info = client.get_info(tonic_lnd::lnrpc::GetInfoRequest {}).await?;
+
+    if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
+        return Err(SetOnionBitError::SetBitFail);
+    }
+
+    info!("Successfully set onion messaging bit");
+
+    Ok(())
 }
