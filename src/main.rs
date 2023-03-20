@@ -384,3 +384,148 @@ async fn set_feature_bit(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::mock;
+    use std::collections::HashMap;
+
+    mock! {
+        InfoRetriever{}
+
+        #[async_trait]
+        impl NodeInfoRetriever for InfoRetriever{
+            async fn get_info(
+                &mut self, request: tonic_lnd::lnrpc::GetInfoRequest,
+            ) -> Result<tonic_lnd::lnrpc::GetInfoResponse, SetOnionBitError>;
+        }
+    }
+
+    mock! {
+        NodeAnnouncementUpdater{}
+
+        #[async_trait]
+        impl UpdateNodeAnnouncement for NodeAnnouncementUpdater{
+            async fn update_node_announcement(
+                &mut self, request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
+            ) -> Result<(), SetOnionBitError>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_feature_bit_success() {
+        let mut client_mock = MockInfoRetriever::new();
+        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
+
+        // Let's first test that when the peer & main clients return the values
+        // we need, set_feature_bit works ok.
+        peers_client_mock
+            .expect_update_node_announcement()
+            .returning(|_| Ok(()));
+
+        client_mock.expect_get_info().returning(|_| {
+            Ok(GetInfoResponse {
+                features: HashMap::from([(
+                    ONION_MESSAGES_OPTIONAL,
+                    tonic_lnd::lnrpc::Feature {
+                        name: String::from("onion_message"),
+                        is_known: true,
+                        is_required: false,
+                    },
+                )]),
+                ..Default::default()
+            })
+        });
+
+        let set_feature_bit = set_feature_bit(&mut client_mock, &mut peers_client_mock).await;
+
+        matches!(set_feature_bit, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn test_update_node_announcement_failure() {
+        let mut client_mock = MockInfoRetriever::new();
+        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
+
+        peers_client_mock
+            .expect_update_node_announcement()
+            .returning(|_| {
+                Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
+                    Code::Unavailable,
+                    "",
+                )))
+            });
+
+        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
+            .await
+            .expect_err("set_feature_bit should error");
+
+        // If the peers client returns a Status error, set_feature_bit should
+        // return that error.
+        matches!(set_feature_err, SetOnionBitError::UpdateAnnouncementErr(_));
+
+        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
+        peers_client_mock
+            .expect_update_node_announcement()
+            .returning(|_| {
+                Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
+                    Code::Unimplemented,
+                    "",
+                )))
+            });
+
+        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
+            .await
+            .expect_err("set_feature_bit should error with unavailable");
+
+        // If the peers client returns Code::Unimplemented, we should get
+        // the correct error message.
+        matches!(set_feature_err, SetOnionBitError::UnimplementedPeersService);
+    }
+
+    #[tokio::test]
+    async fn test_check_if_onion_message_set_failure() {
+        let mut client_mock = MockInfoRetriever::new();
+        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
+
+        peers_client_mock
+            .expect_update_node_announcement()
+            .returning(|_| Ok(()));
+
+        client_mock.expect_get_info().returning(|_| {
+            Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
+                Code::Unavailable,
+                "",
+            )))
+        });
+
+        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
+            .await
+            .expect_err("set_feature_bit should error with unavailable");
+
+        matches!(set_feature_err, SetOnionBitError::UpdateAnnouncementErr(_));
+
+        // If get_info returns a response with the wrong feature bit set,
+        // set_feature_bit should throw another error.
+        client_mock.expect_get_info().returning(|_| {
+            Ok(GetInfoResponse {
+                features: HashMap::from([(
+                    8,
+                    tonic_lnd::lnrpc::Feature {
+                        name: String::from("testing"),
+                        is_known: true,
+                        is_required: false,
+                    },
+                )]),
+                ..Default::default()
+            })
+        });
+
+        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
+            .await
+            .expect_err("set_feature_bit should error");
+
+        matches!(set_feature_err, SetOnionBitError::SetBitFail);
+    }
+}

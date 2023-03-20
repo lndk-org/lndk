@@ -17,3 +17,6 @@ simple_logger = "4.0.0"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = "0.8.3"
 tonic_lnd = "0.5.1"
+
+[dev-dependencies]
+mockall = "0.11.3"
