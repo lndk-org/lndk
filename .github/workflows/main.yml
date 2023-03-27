@@ -19,7 +19,7 @@ jobs:
         name: cargo build
         with:
           command: build
-          args: --release --all-features
+          args: --release --all-features --locked
       - uses: actions-rs/cargo@v1
         name: cargo test
         with:
