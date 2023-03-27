@@ -24,6 +24,7 @@ use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler, UnsignedGossi
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
+use lightning::util::ser::Readable;
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
@@ -31,6 +32,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::io::Cursor;
 use std::marker::Copy;
 use std::ops::Deref;
 use std::path::PathBuf;
@@ -39,12 +41,15 @@ use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
-    lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::NodeInfoRequest, lnrpc::PeerEvent,
-    tonic::Code, tonic::Status, Client, ConnectError, LightningClient, PeersClient,
+    lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::NodeInfoRequest,
+    lnrpc::PeerEvent, tonic::Code, tonic::Status, Client, ConnectError, LightningClient,
+    PeersClient,
 };
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 const ONION_MESSAGES_OPTIONAL: u32 = 39;
+
+const ONION_MESSAGE_TYPE: u32 = 513;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -335,6 +340,72 @@ async fn produce_peer_events(
     }
 }
 
+#[async_trait]
+trait IncomingMessageProducer {
+    async fn receive(&mut self) -> Result<CustomMessage, Status>;
+}
+
+/// Consumes a stream of incoming message events from the IncomingMessageProducer until the stream exits (by sending an
+/// error) or the producer receives the signal to exit (via close of the exit channel).
+///
+/// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
+/// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
+/// that the consumer has already exited (the receiving end of the channel has hung up), and we can't send any more
+/// events anyway.
+async fn produce_incoming_message_events(
+    mut source: impl IncomingMessageProducer,
+    events: Sender<MessengerEvents>,
+    mut exit: Receiver<()>,
+) -> Result<(), ProducerError> {
+    loop {
+        select! (
+        // Select biased so that we'll always check our exit signal before attempting to receive. This allows more
+        // deterministic tests, and ensures that the producer will exit when requested (and won't queue up a series
+        // of events that can't be consumed, possibly blocking if the channel buffer is small).
+        biased;
+
+        _ = exit.recv() => {
+            info!("Peer events received signal to quit");
+            return Ok(())
+        }
+        onion_message = source.receive() => {
+            match onion_message {
+                Ok(incoming_message) => {
+                    if incoming_message.r#type != ONION_MESSAGE_TYPE {
+                        trace!("Ignoring custom message: {}", incoming_message.r#type);
+                        continue;
+                    }
+
+                    let pubkey = PublicKey::from_slice(&incoming_message.peer).unwrap();
+                    let res = OnionMessage::read(&mut Cursor::new(incoming_message.data));
+                    match res {
+                        Ok(onion_message) => {
+                            let event = MessengerEvents::IncomingMessage(pubkey, onion_message);
+                            let event_str = format!("{event:?}");
+                            match events.send(event).await {
+                                Ok(_) => debug!("Incoming messages sent: {event_str}"),
+                                Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
+                            };
+                        },
+                        Err(e) => error!("Invalid onion message from: {pubkey}: {e}"),
+                    };
+                },
+                Err(s) => {
+                    info!("Incoming message events receive failed: {s}");
+                    let event = MessengerEvents::ProducerExit(ConsumerError::IncomingMessageProducerExit);
+                    let event_str = format!("{event:?}");
+                    match events.send(event).await {
+                        Ok(_) => debug!("Incoming message events sent: {event_str}"),
+                        Err(err) => error!("Incoming message events: send producer exit failed: {err}"),
+                    };
+
+                    return Err(ProducerError::StreamError(format!("{s}")));
+                },
+            };
+        });
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum ConsumerError {
     // Internal onion messenger implementation has experienced an error.
@@ -342,6 +413,9 @@ enum ConsumerError {
 
     // The producer responsible for peer connection events has exited.
     PeerProducerExit,
+
+    // The producer responsible for incoming messages has exited.
+    IncomingMessageProducerExit,
 }
 
 impl Error for ConsumerError {}
@@ -353,6 +427,9 @@ impl fmt::Display for ConsumerError {
                 write!(f, "consumer err: onion messenger failure")
             }
             ConsumerError::PeerProducerExit => write!(f, "consumer err: peer producer exit"),
+            ConsumerError::IncomingMessageProducerExit => {
+                write!(f, "consumer err: incoming message producer exit")
+            }
         }
     }
 }
@@ -701,6 +778,7 @@ mod tests {
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
     use lightning::util::events::OnionMessageProvider;
     use lightning::util::ser::Readable;
+    use lightning::util::ser::Writeable;
     use mockall::mock;
     use std::collections::HashMap;
     use std::io::Cursor;
@@ -1068,5 +1146,76 @@ mod tests {
         let mock = MockPeerProducer::new();
         drop(exit_sender);
         assert!(produce_peer_events(mock, sender, exit).await.is_ok());
+    }
+
+    mock! {
+        MessageProducer{}
+
+        #[async_trait]
+        impl IncomingMessageProducer for MessageProducer {
+            async fn receive(&mut self) -> Result<CustomMessage, Status>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_produce_incoming_message_events() {
+        let (sender, mut receiver) = channel(2);
+        let (_exit_sender, exit) = channel(1);
+
+        let mut mock = MockMessageProducer::new();
+
+        // Send a custom message that is not relevant to us.
+        mock.expect_receive().times(1).returning(|| {
+            Ok(CustomMessage {
+                peer: pubkey().serialize().to_vec(),
+                r#type: 3,
+                data: vec![1, 2, 3],
+            })
+        });
+
+        // Send a custom message that is an onion message.
+        mock.expect_receive().times(1).returning(|| {
+            let mut w = vec![];
+            onion_message().write(&mut w).unwrap();
+
+            Ok(CustomMessage {
+                peer: pubkey().serialize().to_vec(),
+                r#type: ONION_MESSAGE_TYPE,
+                data: w,
+            })
+        });
+
+        mock.expect_receive()
+            .times(1)
+            .returning(|| Err(Status::unknown("mock stream err")));
+
+        matches!(
+            produce_incoming_message_events(mock, sender, exit)
+                .await
+                .expect_err("producer should error"),
+            ProducerError::StreamError(_),
+        );
+
+        matches!(
+            receiver.recv().await.unwrap(),
+            MessengerEvents::IncomingMessage(_, _),
+        );
+
+        matches!(
+            receiver.recv().await.unwrap(),
+            MessengerEvents::ProducerExit(_)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_produce_incoming_message_exit() {
+        let (sender, _receiver) = channel(2);
+        let (exit_sender, exit) = channel(1);
+
+        let mock = MockMessageProducer::new();
+        drop(exit_sender);
+        assert!(produce_incoming_message_events(mock, sender, exit)
+            .await
+            .is_ok());
     }
 }
