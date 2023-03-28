@@ -45,7 +45,7 @@ async fn main() -> Result<(), ()> {
     info!("Starting lndk for node: {pubkey}");
 
     if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
-        info!("Attempting to set onion messaging feature bit...");
+        info!("Attempting to set onion messaging feature bit ({ONION_MESSAGES_OPTIONAL})");
 
         let mut node_info_retriever = GetInfoClient {
             client: &mut client.lightning().clone(),
@@ -56,7 +56,7 @@ async fn main() -> Result<(), ()> {
         match set_feature_bit(&mut node_info_retriever, &mut announcement_updater).await {
             Ok(_) => {}
             Err(err) => {
-                error!("error setting feaure bit: {err}");
+                error!("Error setting feature bit: {err}");
                 return Err(());
             }
         }
