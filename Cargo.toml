@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.66"
 bitcoin = "0.29.2"
 futures = "0.3.26"
 lightning = "0.0.114"
@@ -14,4 +15,8 @@ rand_core = "0.6.4"
 log = "0.4.17"
 simple_logger = "4.0.0"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
+tonic = "0.8.3"
 tonic_lnd = "0.5.1"
+
+[dev-dependencies]
+mockall = "0.11.3"
