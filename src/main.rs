@@ -38,13 +38,13 @@ async fn main() -> Result<(), ()> {
         .lightning()
         .get_info(GetInfoRequest {})
         .await
-        .expect("failed to get info");
-    let info_inner = info.into_inner().clone();
+        .expect("failed to get info")
+        .into_inner();
 
-    let pubkey = PublicKey::from_str(&info_inner.identity_pubkey).unwrap();
+    let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}");
 
-    if !info_inner.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
+    if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
         info!("Attempting to set onion messaging feature bit...");
 
         let mut node_info_retriever = GetInfoClient {
