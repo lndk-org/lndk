@@ -29,7 +29,10 @@ async fn main() -> Result<(), ()> {
 
     let args = match parse_args() {
         Ok(args) => args,
-        Err(args) => panic!("Bad arguments: {args}"),
+        Err(e) => {
+            error!("Invalid arguments: {e}");
+            return Err(());
+        }
     };
 
     let mut client = get_lnd_client(args).expect("failed to connect");
