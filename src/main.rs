@@ -37,7 +37,10 @@ async fn main() -> Result<(), ()> {
 
     let args = match parse_args() {
         Ok(args) => args,
-        Err(args) => panic!("Bad arguments: {args}"),
+        Err(e) => {
+            error!("Invalid arguments: {e}");
+            return Err(());
+        }
     };
 
     let mut client = get_lnd_client(args).expect("failed to connect");
@@ -46,14 +49,14 @@ async fn main() -> Result<(), ()> {
         .lightning()
         .get_info(GetInfoRequest {})
         .await
-        .expect("failed to get info");
-    let info_inner = info.into_inner().clone();
+        .expect("failed to get info")
+        .into_inner();
 
-    let pubkey = PublicKey::from_str(&info_inner.identity_pubkey).unwrap();
+    let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}");
 
-    if !info_inner.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
-        info!("Attempting to set onion messaging feature bit...");
+    if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
+        info!("Attempting to set onion messaging feature bit ({ONION_MESSAGES_OPTIONAL})");
 
         let mut node_info_retriever = GetInfoClient {
             client: &mut client.lightning().clone(),
@@ -64,7 +67,7 @@ async fn main() -> Result<(), ()> {
         match set_feature_bit(&mut node_info_retriever, &mut announcement_updater).await {
             Ok(_) => {}
             Err(err) => {
-                error!("error setting feaure bit: {err}");
+                error!("Error setting feature bit: {err}");
                 return Err(());
             }
         }
