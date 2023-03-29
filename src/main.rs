@@ -152,15 +152,18 @@ where
     }
 
     // Setup channels that we'll use to signal to spawned producers that an exit has occurred elsewhere so they should
-    // exit.
-    let (exit_sender, exit_receiver) = channel(1);
+    // exit, and a tokio task set to track all our spawned tasks.
+    let (peers_exit_sender, peers_exit_receiver) = channel(1);
+    let (messages_exit_sender, messages_exit_receiver) = channel(1);
+    let mut set = tokio::task::JoinSet::new();
 
     // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
     // starting up. The onion messenger can handle superfluous online/offline reports, so it's okay if this ends
     // up creating some duplicate events. The event subscription from LND blocks until it gets its first event (which
     // could take very long), so we get the subscription itself inside of our producer thread.
     let mut peers_client = ln_client.clone();
-    let peer_events_handler = tokio::spawn(async move {
+    let peers_sender = sender.clone();
+    set.spawn(async move {
         let peer_subscription = peers_client
             .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
             .await
@@ -172,10 +175,30 @@ where
             client: peers_client,
         };
 
-        match produce_peer_events(peer_stream, sender, exit_receiver).await {
+        match produce_peer_events(peer_stream, peers_sender, peers_exit_receiver).await {
             Ok(_) => debug!("Peer events producer exited"),
             Err(e) => error!("Peer events producer exited: {e}"),
         };
+    });
+
+    // Subscribe to custom messaging events from LND so that we can receive incoming messages.
+    let mut messages_client = ln_client.clone();
+    set.spawn(async move {
+        let message_subscription = messages_client
+            .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
+            .await
+            .expect("message subscription failed")
+            .into_inner();
+
+        let message_stream = MessageStream {
+            message_subscription,
+        };
+
+        match produce_incoming_message_events(message_stream, sender, messages_exit_receiver).await
+        {
+            Ok(_) => debug!("Message events producer exited"),
+            Err(e) => error!("Message events producer exited: {e}"),
+        }
     });
 
     // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
@@ -190,20 +213,26 @@ where
 
     // Once the consumer has exit, we drop our exit signal channel's sender so that the receiving channels will close.
     // This signals to all producers that it's time to exit, so we can await their exit once we've done this.
-    drop(exit_sender);
+    drop(peers_exit_sender);
+    drop(messages_exit_sender);
 
-    let peer_events_result = peer_events_handler.await;
-    match peer_events_result {
-        Ok(_) => info!("Peer events exited"),
-        Err(_) => error!("Peer events exited with an error"),
+    // Tasks will independently exit, so we can assert that they do so in any order.
+    let mut task_err = false;
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok(_) => info!("Producer exited"),
+            Err(_) => {
+                task_err = true;
+                error!("Producer exited with an error");
+            }
+        };
     }
-
     // Exit with an error if any task did not exit cleanly.
-    if consume_result.is_err() || peer_events_result.is_err() {
-        Err(())
-    } else {
-        Ok(())
+    if consume_result.is_err() || task_err {
+        return Err(());
     }
+
+    Ok(())
 }
 
 // lookup_onion_support performs a best-effort lookup in the node's view of the graph to determine whether it supports
