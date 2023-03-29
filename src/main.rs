@@ -303,15 +303,17 @@ async fn produce_peer_events(
                             let pubkey = PublicKey::from_str(&peer_event.pub_key).unwrap();
                             let onion_support = source.onion_support(&pubkey).await;
                             let event = MessengerEvents::PeerConnected(pubkey, onion_support);
+                            let event_str = format!("{event:?}");
                             match events.send(event).await {
-                                Ok(_) => debug!("Peer events sent: {event}"),
+                                Ok(_) => debug!("Peer events sent: {event_str}"),
                                 Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
                             };
                         }
                         PeerOffline => {
                             let event = MessengerEvents::PeerDisconnected(PublicKey::from_str(&peer_event.pub_key).unwrap());
+                            let event_str = format!("{event:?}");
                             match events.send(event).await {
-                                Ok(_) => debug!("Peer events sent: {event}"),
+                                Ok(_) => debug!("Peer events sent: {event_str}"),
                                 Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
                             };
                         }
@@ -320,8 +322,9 @@ async fn produce_peer_events(
                         info!("Peer events receive failed: {s}");
 
                         let event = MessengerEvents::ProducerExit(ConsumerError::PeerProducerExit);
+                        let event_str = format!("{event:?}");
                         match events.send(event).await {
-                            Ok(_) => debug!("Peer events sent: {event}"),
+                            Ok(_) => debug!("Peer events sent: {event_str}"),
                             Err(err) => error!("Peer events: send producer exit failed: {err}"),
                         }
                         return Err(ProducerError::StreamError(format!("{s}")));
@@ -355,7 +358,7 @@ impl fmt::Display for ConsumerError {
 }
 
 // MessengerEvents represents all of the events that are relevant to onion messages.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 enum MessengerEvents {
     PeerConnected(PublicKey, bool),
     PeerDisconnected(PublicKey),
