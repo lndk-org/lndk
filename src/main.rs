@@ -121,10 +121,10 @@ where
     CMH::Target: CustomOnionMessageHandler + Sized,
 {
     // Setup channels that we'll use to communicate onion messenger events. We buffer our channels by the number of
-    // peers that the node currently has so that we can send all of our startup online events in one go (before we
-    // boot up the consumer). The number of peers that we have is also related to the number of events we can expect
-    // to process, so it's a sensible enough buffer size.
-    let (sender, receiver) = channel(current_peers.len());
+    // peers (+1 because we require a non-zero buffer) that the node currently has so that we can send all of our
+    // startup online events in one go (before we boot up the consumer). The number of peers that we have is also
+    // related to the number of events we can expect to process, so it's a sensible enough buffer size.
+    let (sender, receiver) = channel(current_peers.len() + 1);
     for (peer, onion_support) in current_peers {
         sender
             .send(MessengerEvents::PeerConnected(peer, onion_support))
