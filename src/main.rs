@@ -345,6 +345,20 @@ trait IncomingMessageProducer {
     async fn receive(&mut self) -> Result<CustomMessage, Status>;
 }
 
+struct MessageStream {
+    message_subscription: tonic_lnd::tonic::Streaming<CustomMessage>,
+}
+
+#[async_trait]
+impl IncomingMessageProducer for MessageStream {
+    async fn receive(&mut self) -> Result<CustomMessage, Status> {
+        match self.message_subscription.message().await? {
+            Some(msg) => Ok(msg),
+            None => Err(Status::unknown("no message provided")),
+        }
+    }
+}
+
 /// Consumes a stream of incoming message events from the IncomingMessageProducer until the stream exits (by sending an
 /// error) or the producer receives the signal to exit (via close of the exit channel).
 ///
