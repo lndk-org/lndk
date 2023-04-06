@@ -1,0 +1,22 @@
+[general]
+conf_file_param = "conf"
+
+[[param]]
+name = "address"
+type = "String"
+optional = false
+doc = "LND GRPC address, kindly note that the address must start with https:// ip address : port."
+
+
+[[param]]
+name = "cert"
+type = "std::path::PathBuf"
+optional = false
+doc = "The path to LND tls certificate file. Note: the abosolute tls certificate file path is required here."
+
+
+[[param]]
+name = "macaroon"
+type = "std::path::PathBuf"
+optional = false
+doc = "The path to LND macaroon file. Note: the abosolute macaroon file path is required here."
