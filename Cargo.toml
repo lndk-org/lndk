@@ -19,13 +19,19 @@ log = "0.4.17"
 simple_logger = "4.0.0"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = "0.8.3"
-tonic_lnd = "0.5.1"
+tonic_lnd = { git = "https://github.com/Kixunil/tonic_lnd", rev = "0fad10d91b242920723fedafb41251878344363f" }
 hex = "0.4.3"
 configure_me = "0.4.0"
 bytes = "1.4.0"
 
 [dev-dependencies]
+bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
+bitcoind = { version = "0.30.0", features = [ "22_0" ] }
+flate2 = "1.0.25"
+minreq = { version = "2.7.0", features = [ "https" ] }
 mockall = "0.11.3"
+tar = "0.4.38"
+tempfile = "3.5.0"
 
 [build-dependencies]
 configure_me_codegen = "0.4.4"
