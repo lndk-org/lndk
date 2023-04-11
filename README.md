@@ -14,13 +14,25 @@ When compiling `LND`, make sure that the peersrpc and signerrpc services are ena
 
 In order to successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
 
-`cargo run -- <ADDRESS> <TLSPATH> <MACAROONPATH>`
+- `cargo run -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
 
-Or in a more concrete example:
 
-`cargo run -- https://localhost:10009 /home/<USERNAME>/.lnd/tls.cert /home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
+In a more concrete example:
+
+`cargo run -- --address=https://localhost:10009 --cert=/home/<USERNAME>/.lnd/tls.cert --macaroon=/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
 
 **Remember** that the grpc address must start with https:// for the program to work.
+
+- Alternatively, you can use a configuration file to add the required arguments.
+
+* In the lndk directory, create fle named `lndk.conf`.
+* Add the following lines to the file 
+  * `address="https://localhost:10009"` 
+  * `cert="/home/<USERNAME>/.lnd/tls.cert"`
+  * `macaroon="/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon"`
+* Run `cargo run -- --conf lndk.conf`
+
+- Use any of the commands with the --help option for more information about each argument.
 
 ## Architecture
 There are three components relevant to our architecture:

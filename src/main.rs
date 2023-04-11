@@ -1,9 +1,22 @@
+mod internal {
+    #![allow(clippy::enum_variant_names)]
+    #![allow(clippy::unnecessary_lazy_evaluations)]
+    #![allow(clippy::useless_conversion)]
+    #![allow(clippy::never_loop)]
+
+    include!(concat!(env!("OUT_DIR"), "/configure_me_config.rs"));
+}
+
+#[macro_use]
+extern crate configure_me;
+
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
+use internal::*;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessageHandler, UnsignedGossipMessage};
@@ -19,6 +32,7 @@ use std::error::Error;
 use std::fmt;
 use std::marker::Copy;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -35,14 +49,11 @@ const ONION_MESSAGES_OPTIONAL: u32 = 39;
 async fn main() -> Result<(), ()> {
     simple_logger::init_with_level(log::Level::Info).unwrap();
 
-    let args = match parse_args() {
-        Ok(args) => args,
-        Err(e) => {
-            error!("Invalid arguments: {e}");
-            return Err(());
-        }
-    };
+    let lnd_config = Config::including_optional_config_files(&["./lndk.conf"])
+        .unwrap_or_exit()
+        .0;
 
+    let args = LndCfg::new(lnd_config.address, lnd_config.cert, lnd_config.macaroon);
     let mut client = get_lnd_client(args).expect("failed to connect");
 
     let info = client
@@ -534,65 +545,20 @@ fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
     block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
 }
 
-#[derive(Debug)]
-enum ArgsError {
-    NoArgs,
-    AddressRequired,
-    CertRequired,
-    MacaroonRequired,
-}
-
-impl Error for ArgsError {}
-
-impl fmt::Display for ArgsError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ArgsError::NoArgs => write!(f, "No command line arguments provided."),
-            ArgsError::AddressRequired => write!(f, "LND's RPC server address is required."),
-            ArgsError::CertRequired => write!(f, "Path to LND's tls certificate is required."),
-            ArgsError::MacaroonRequired => write!(f, "Path to LND's macaroon is required."),
-        }
-    }
-}
-
 struct LndCfg {
     address: String,
-    cert: String,
-    macaroon: String,
+    cert: PathBuf,
+    macaroon: PathBuf,
 }
 
 impl LndCfg {
-    fn new(address: String, cert: String, macaroon: String) -> LndCfg {
+    fn new(address: String, cert: PathBuf, macaroon: PathBuf) -> LndCfg {
         LndCfg {
             address,
             cert,
             macaroon,
         }
     }
-}
-
-fn parse_args() -> Result<LndCfg, ArgsError> {
-    let mut args = std::env::args_os();
-    if args.next().is_none() {
-        return Err(ArgsError::NoArgs);
-    }
-
-    let address = match args.next() {
-        Some(arg) => arg.into_string().expect("address is not UTF-8"),
-        None => return Err(ArgsError::AddressRequired),
-    };
-
-    let cert_file = match args.next() {
-        Some(arg) => arg.into_string().expect("cert is not UTF-8"),
-        None => return Err(ArgsError::CertRequired),
-    };
-
-    let macaroon_file = match args.next() {
-        Some(arg) => arg.into_string().expect("macaroon is not UTF-8"),
-        None => return Err(ArgsError::MacaroonRequired),
-    };
-
-    Ok(LndCfg::new(address, cert_file, macaroon_file))
 }
 
 #[derive(Debug)]

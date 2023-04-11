@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.configure_me]
+spec = "config_spec.toml"
 
 [dependencies]
 async-trait = "0.1.66"
@@ -18,6 +20,10 @@ tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = "0.8.3"
 tonic_lnd = "0.5.1"
 hex = "0.4.3"
+configure_me = "0.4.0"
 
 [dev-dependencies]
 mockall = "0.11.3"
+
+[build-dependencies]
+configure_me_codegen = "0.4.4"
