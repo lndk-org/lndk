@@ -3,6 +3,7 @@ mod internal {
     #![allow(clippy::unnecessary_lazy_evaluations)]
     #![allow(clippy::useless_conversion)]
     #![allow(clippy::never_loop)]
+    #![allow(clippy::uninlined_format_args)]
 
     include!(concat!(env!("OUT_DIR"), "/configure_me_config.rs"));
 }
