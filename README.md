@@ -10,7 +10,9 @@ To run `LNDK`, `LND` is assumed to be running. For directions on how to do this,
 
 When compiling `LND`, make sure that the peersrpc and signerrpc services are enabled, like this:
 
-`make install --tags="peersrpc signerrpc"`
+`make install --tags="peersrpc signerrpc dev"`
+
+`LND` must also be run with `--protocol.custom-message=513` to allow it to report onion messages to `LNDK`, which requires LND version [v0.16.0-beta)](https://github.com/lightningnetwork/lnd/releases/tag/v0.16.0-beta).
 
 In order to successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
 
