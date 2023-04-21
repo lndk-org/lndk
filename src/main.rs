@@ -159,8 +159,10 @@ where
 
     // Setup channels that we'll use to signal to spawned producers that an exit has occurred elsewhere so they should
     // exit, and a tokio task set to track all our spawned tasks.
+    // TODO: Combine these channels into a single channel.
     let (peers_exit_sender, peers_exit_receiver) = channel(1);
     let (in_messages_exit_sender, in_messages_exit_receiver) = channel(1);
+    let (out_messages_exit_sender, out_messages_exit_receiver) = channel(1);
     let mut set = tokio::task::JoinSet::new();
 
     // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
@@ -189,6 +191,7 @@ where
 
     // Subscribe to custom messaging events from LND so that we can receive incoming messages.
     let mut messages_client = ln_client.clone();
+    let in_msg_sender = sender.clone();
     set.spawn(async move {
         let message_subscription = messages_client
             .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
@@ -200,10 +203,25 @@ where
             message_subscription,
         };
 
-        match produce_incoming_message_events(message_stream, sender, in_messages_exit_receiver).await
+        match produce_incoming_message_events(
+            message_stream,
+            in_msg_sender,
+            in_messages_exit_receiver,
+        )
+        .await
         {
             Ok(_) => debug!("Message events producer exited"),
             Err(e) => error!("Message events producer exited: {e}"),
+        }
+    });
+
+    // Spin up a ticker that polls at an interval for any outgoing messages so that we can pass on outgoing messages to
+    // LND.
+    let interval = time::interval(MSG_POLL_INTERVAL);
+    set.spawn(async move {
+        match produce_outgoing_message_events(sender, out_messages_exit_receiver, interval).await {
+            Ok(_) => debug!("Outgoing message events producer exited."),
+            Err(e) => error!("Outgoing message events producer exited: {e}."),
         }
     });
 
@@ -222,10 +240,11 @@ where
         Err(e) => error!("Consume messenger events exited: {e}"),
     }
 
-    // Once the consumer has exit, we drop our exit signal channel's sender so that the receiving channels will close.
+    // Once the consumer has exited, we drop our exit signal channel's sender so that the receiving channels will close.
     // This signals to all producers that it's time to exit, so we can await their exit once we've done this.
     drop(peers_exit_sender);
     drop(in_messages_exit_sender);
+    drop(out_messages_exit_sender);
 
     // Tasks will independently exit, so we can assert that they do so in any order.
     let mut task_err = false;
