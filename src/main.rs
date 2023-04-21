@@ -24,7 +24,7 @@ use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler, UnsignedGossi
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
-use lightning::util::ser::Readable;
+use lightning::util::ser::{Readable, Writeable};
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
@@ -37,18 +37,19 @@ use std::marker::Copy;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
-use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::{select, time, time::Duration, time::Interval};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
     lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::PeerEvent,
-    tonic::Code, tonic::Status, Client, ConnectError, LightningClient, PeersClient,
+    lnrpc::SendCustomMessageRequest, lnrpc::SendCustomMessageResponse, tonic::Code, tonic::Status,
+    Client, ConnectError, LightningClient, PeersClient,
 };
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 const ONION_MESSAGES_OPTIONAL: u32 = 39;
-
 const ONION_MESSAGE_TYPE: u32 = 513;
+const MSG_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -211,7 +212,11 @@ where
     // This function is expected to finish if any producing thread exits (because we're not longer receiving the
     // events we need).
     let peers = &mut CurrentPeers::new(current_peers);
-    let consume_result = consume_messenger_events(onion_messenger, receiver, peers).await;
+    let mut message_sender = CustomMessenger {
+        client: ln_client.clone(),
+    };
+    let consume_result =
+        consume_messenger_events(onion_messenger, receiver, &mut message_sender, peers).await;
     match consume_result {
         Ok(_) => info!("Consume messenger events exited"),
         Err(e) => error!("Consume messenger events exited: {e}"),
@@ -488,6 +493,7 @@ enum MessengerEvents {
     PeerConnected(PublicKey, bool),
     PeerDisconnected(PublicKey),
     IncomingMessage(PublicKey, OnionMessage),
+    SendOutgoing,
     ProducerExit(ConsumerError),
 }
 
@@ -504,6 +510,9 @@ impl fmt::Display for MessengerEvents {
             MessengerEvents::IncomingMessage(p, _) => {
                 write!(f, "messenger event: {p} incoming onion message")
             }
+            MessengerEvents::SendOutgoing => {
+                write!(f, "messenger event: poll for new outgoing onion messages")
+            }
             MessengerEvents::ProducerExit(s) => write!(f, "messenger event: {s} exited"),
         }
     }
@@ -513,10 +522,15 @@ impl fmt::Display for MessengerEvents {
 async fn consume_messenger_events(
     onion_messenger: impl OnionMessageHandler,
     mut events: Receiver<MessengerEvents>,
+    message_sender: &mut impl SendCustomMessage,
     current_peers: &mut CurrentPeers,
 ) -> Result<(), ConsumerError> {
     while let Some(onion_event) = events.recv().await {
-        info!("Consume messenger events received: {onion_event}");
+        match onion_event {
+            // We don't want to log SendOutgoing events, since we send out this event every 100 ms.
+            MessengerEvents::SendOutgoing => {}
+            _ => info!("Consume messenger events received: {onion_event}."),
+        };
 
         match onion_event {
             MessengerEvents::PeerConnected(pubkey, onion_support) => {
@@ -552,6 +566,13 @@ async fn consume_messenger_events(
             MessengerEvents::IncomingMessage(pubkey, onion_message) => {
                 onion_messenger.handle_onion_message(&pubkey, &onion_message)
             }
+            MessengerEvents::SendOutgoing => {
+                for peer in current_peers.map.keys() {
+                    while let Some(msg) = onion_messenger.next_onion_message_for_peer(*peer) {
+                        relay_outgoing_msg_event(peer, msg, message_sender).await;
+                    }
+                }
+            }
             MessengerEvents::ProducerExit(e) => {
                 return Err(e);
             }
@@ -577,6 +598,89 @@ impl CurrentPeers {
 
     fn peer_disconnected(&mut self, peer_key: PublicKey) {
         self.map.remove(&peer_key);
+    }
+}
+
+#[async_trait]
+trait SendCustomMessage {
+    async fn send_custom_message(
+        &mut self,
+        request: SendCustomMessageRequest,
+    ) -> Result<SendCustomMessageResponse, Status>;
+}
+
+struct CustomMessenger {
+    client: LightningClient,
+}
+
+#[async_trait]
+impl SendCustomMessage for CustomMessenger {
+    async fn send_custom_message(
+        &mut self,
+        request: SendCustomMessageRequest,
+    ) -> Result<SendCustomMessageResponse, Status> {
+        match self.client.send_custom_message(request).await {
+            Ok(resp) => Ok(resp.into_inner()),
+            Err(status) => Err(status),
+        }
+    }
+}
+
+// produce_outgoing_message_events is reponsible for producing outgoing message events at a regular interval.
+async fn produce_outgoing_message_events(
+    events: Sender<MessengerEvents>,
+    mut exit: Receiver<()>,
+    mut interval: Interval,
+) -> Result<(), ProducerError> {
+    loop {
+        select! (
+            // Select biased so that we'll always check our exit signal before attempting to receive. This allows more
+            // deterministic tests, and ensures that the producer will exit when requested (and won't queue up a series
+            // of events that can't be consumed, possibly blocking if the channel buffer is small).
+            biased;
+
+            _ = exit.recv() => {
+                info!("Outgoing messenger events received signal to quit.");
+                return Ok(());
+            }
+
+            _ = interval.tick() => {
+                events.send(MessengerEvents::SendOutgoing).await
+                    .map_err(|e| {
+                        ProducerError::SendError(format!("{e}"))
+                    })?;
+            }
+        )
+    }
+}
+
+// relay_outgoing_msg_event is responsible for passing along new outgoing messages from peers. If a new onion message
+// turns up, it will pass it along to lnd.
+async fn relay_outgoing_msg_event(
+    peer: &PublicKey,
+    msg: OnionMessage,
+    ln_client: &mut impl SendCustomMessage,
+) {
+    let mut buf = vec![];
+    match msg.write(&mut buf) {
+        Ok(_) => {}
+        Err(err) => {
+            error!("Error writing onion message: {}.", err);
+            return;
+        }
+    }
+
+    // Relay this message to LND.
+    let req = tonic_lnd::lnrpc::SendCustomMessageRequest {
+        peer: peer.serialize().to_vec(),
+        r#type: ONION_MESSAGE_TYPE,
+        data: buf,
+    };
+
+    // TODO: To improve resilience, retry this call in the event of a temporary connection error.
+    match ln_client.send_custom_message(req).await {
+        Ok(_) => debug!("Sent outgoing onion message {msg:?} to {peer}."),
+        Err(e) => error!("Error sending custom message {e} to {peer}."),
     }
 }
 
@@ -1060,17 +1164,43 @@ mod tests {
         }
     }
 
+    mock! {
+        SendCustomMessenger{}
+
+        #[async_trait]
+         impl SendCustomMessage for SendCustomMessenger{
+             async fn send_custom_message(&mut self, request: SendCustomMessageRequest) -> Result<SendCustomMessageResponse, Status>;
+         }
+    }
+
     #[tokio::test]
     async fn test_consume_messenger_events() {
-        let (sender, receiver) = channel(5);
+        let (sender, receiver) = channel(6);
 
-        let pk = pubkey();
+        let pk_1 = pubkey();
+        let pk_2 = pubkey();
         let mut mock = MockOnionHandler::new();
-        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk, true)]));
+        let mut sender_mock = MockSendCustomMessenger::new();
+        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk_1, true)]));
+
+        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
+        mock.expect_next_onion_message_for_peer()
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .returning(|_| Some(onion_message()));
+
+        let result = mock.next_onion_message_for_peer(pk_1);
+        assert!(result.is_some());
+
+        mock.checkpoint();
+        mock.expect_next_onion_message_for_peer()
+            .returning(|_| None);
+
+        let result = mock.next_onion_message_for_peer(pk_2);
+        assert!(result.is_none());
 
         // Peer connected: onion messaging supported.
         sender
-            .send(MessengerEvents::PeerConnected(pk, true))
+            .send(MessengerEvents::PeerConnected(pk_1, true))
             .await
             .unwrap();
 
@@ -1080,7 +1210,7 @@ mod tests {
 
         // Peer connected: onion messaging not supported.
         sender
-            .send(MessengerEvents::PeerConnected(pk, false))
+            .send(MessengerEvents::PeerConnected(pk_1, false))
             .await
             .unwrap();
 
@@ -1090,7 +1220,7 @@ mod tests {
 
         // Cover peer disconnected events.
         sender
-            .send(MessengerEvents::PeerDisconnected(pk))
+            .send(MessengerEvents::PeerDisconnected(pk_1))
             .await
             .unwrap();
         mock.expect_peer_disconnected().return_once(|_| ());
@@ -1098,7 +1228,7 @@ mod tests {
         // Cover incoming onion messages.
         let onion_message = onion_message();
         sender
-            .send(MessengerEvents::IncomingMessage(pk, onion_message))
+            .send(MessengerEvents::IncomingMessage(pk_1, onion_message))
             .await
             .unwrap();
         mock.expect_handle_onion_message().return_once(|_, _| ());
@@ -1111,7 +1241,7 @@ mod tests {
             .await
             .unwrap();
 
-        let consume_err = consume_messenger_events(mock, receiver, current_peers)
+        let consume_err = consume_messenger_events(mock, receiver, &mut sender_mock, current_peers)
             .await
             .expect_err("consume should error");
         matches!(consume_err, ConsumerError::PeerProducerExit);
@@ -1132,7 +1262,9 @@ mod tests {
             .unwrap();
         mock.expect_peer_connected().return_once(|_, _, _| Err(()));
 
-        let consume_err = consume_messenger_events(mock, receiver, current_peers)
+        let mut sender_mock = MockSendCustomMessenger::new();
+
+        let consume_err = consume_messenger_events(mock, receiver, &mut sender_mock, current_peers)
             .await
             .expect_err("consume should error");
         matches!(consume_err, ConsumerError::OnionMessengerFailure);
@@ -1144,13 +1276,17 @@ mod tests {
         // the sender manually has the effect of closing the channel.
         let (sender_done, receiver_done) = channel(1);
         drop(sender_done);
+        let mut sender_mock = MockSendCustomMessenger::new();
         let current_peers = &mut CurrentPeers::new(HashMap::new());
 
-        assert!(
-            consume_messenger_events(MockOnionHandler::new(), receiver_done, current_peers)
-                .await
-                .is_ok()
-        );
+        assert!(consume_messenger_events(
+            MockOnionHandler::new(),
+            receiver_done,
+            &mut sender_mock,
+            current_peers
+        )
+        .await
+        .is_ok());
     }
 
     #[tokio::test]
@@ -1297,5 +1433,21 @@ mod tests {
         assert!(produce_incoming_message_events(mock, sender, exit)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_produce_outgoing_message_events_exit() {
+        let (sender, _) = channel(1);
+        let (exit_sender, exit_receiver) = channel(1);
+        let interval = time::interval(MSG_POLL_INTERVAL);
+
+        // Let's test that produce_outgoing_message_events successfully exits when it receives the signal, rather than
+        // loop infinitely.
+        drop(exit_sender);
+        assert!(
+            produce_outgoing_message_events(sender, exit_receiver, interval)
+                .await
+                .is_ok()
+        );
     }
 }
