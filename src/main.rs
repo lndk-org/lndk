@@ -41,9 +41,8 @@ use tokio::select;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
-    lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::NodeInfoRequest,
-    lnrpc::PeerEvent, tonic::Code, tonic::Status, Client, ConnectError, LightningClient,
-    PeersClient,
+    lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::PeerEvent,
+    tonic::Code, tonic::Status, Client, ConnectError, LightningClient, PeersClient,
 };
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -105,7 +104,7 @@ async fn main() -> Result<(), ()> {
     let mut peer_support = HashMap::new();
     for peer in current_peers.into_inner().peers {
         let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
-        let onion_support = lookup_onion_support(&pubkey, client.lightning()).await;
+        let onion_support = features_support_onion_messages(&peer.features);
         peer_support.insert(pubkey, onion_support);
     }
 
@@ -122,6 +121,12 @@ async fn main() -> Result<(), ()> {
 
     let mut peers_client = client.lightning().clone();
     run_onion_messenger(peer_support, &mut peers_client, onion_messenger).await
+}
+
+// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
+fn features_support_onion_messages(features: &HashMap<u32, tonic_lnd::lnrpc::Feature>) -> bool {
+    features.contains_key(&ONION_MESSAGES_OPTIONAL)
+        || features.contains_key(&ONION_MESSAGES_REQUIRED)
 }
 
 // Responsible for initializing the onion messenger provided with the correct start state and managing onion message
@@ -235,31 +240,30 @@ where
     Ok(())
 }
 
-// lookup_onion_support performs a best-effort lookup in the node's view of the graph to determine whether it supports
-// onion messaging. If the node is not found, or we have not seen its announcement yet, a warning is logged and we
-// assume that onion messaging is not supported.
+/// lookup_onion_support performs a best-effort lookup in the node's list of current peers to determine whether it
+/// supports onion messaging. If the node is not found a warning is logged and we assume that onion messaging is not
+/// supported.
 async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::LightningClient) -> bool {
     match client
-        .get_node_info(NodeInfoRequest {
-            pub_key: pubkey.to_string(),
-            ..Default::default()
+        .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+            latest_error: false,
         })
         .await
     {
-        Ok(peer) => match peer.into_inner().node {
-            Some(node) => {
-                node.features.contains_key(&ONION_MESSAGES_OPTIONAL)
-                    || node.features.contains_key(&ONION_MESSAGES_REQUIRED)
+        Ok(peers) => {
+            for peer in peers.into_inner().peers {
+                if peer.pub_key != pubkey.to_string() {
+                    continue;
+                }
+
+                return features_support_onion_messages(&peer.features);
             }
-            None => {
-                warn!("Peer {pubkey} not found in graph on startup, assuming no onion support");
-                false
-            }
-        },
+
+            warn!("Peer {pubkey} not found in current set of peers, assuming no onion support");
+            false
+        }
         Err(e) => {
-            warn!(
-                "Could not lookup peer {pubkey} in graph: {e}, assuming no onion message support"
-            );
+            warn!("Could not lookup peers for {pubkey}: {e}, assuming no onion message support");
             false
         }
     }
