@@ -58,3 +58,6 @@ Once we have an `OnionMessenger` that can process messages on behalf of the LND 
 3. [SendCustomMessage](https://lightning.engineering/api-docs/api/lnd/lightning/send-custom-message#grpc): poll the `OnionMessenger` for `next_onion_message_for_peer` and deliver queued outbound onion messages to LND for sending. 
 
 ![Onion message processing](docs/arch-onionmessageflow.png)
+
+NOTE: It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev)
+to verify the trustworthiness of each of your dependencies, including this one.

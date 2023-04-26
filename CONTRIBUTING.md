@@ -19,6 +19,7 @@ General guidelines for code contribution:
 2. Refactor commits should be done in their own commits, separately from logical changes.
 3. Wherever possible, new code should be covered by tests.
 4. Bug fixes should start with a test demonstrating the bug, then add the fix and update the test to illustrate that the bug has been addressed.
+5. It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev) to verify the trustworthiness of any added dependencies, which should be kept to a minimum where possible.
 
 #### Process
 0. **Issue creation**: If no issue is open for the work you'd like to implement, please open one as a preliminary step so that other contributors can comment on the proposed approach and suitableness of the feature for the repo.
