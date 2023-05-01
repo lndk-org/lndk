@@ -147,7 +147,7 @@ where
     // startup online events in one go (before we boot up the consumer). The number of peers that we have is also
     // related to the number of events we can expect to process, so it's a sensible enough buffer size.
     let (sender, receiver) = channel(current_peers.len() + 1);
-    for (peer, onion_support) in current_peers {
+    for (peer, onion_support) in current_peers.clone() {
         sender
             .send(MessengerEvents::PeerConnected(peer, onion_support))
             .await
@@ -210,7 +210,8 @@ where
     // allow interior mutibility (see LndNodeSigner) so this function can't safely be passed off to another thread.
     // This function is expected to finish if any producing thread exits (because we're not longer receiving the
     // events we need).
-    let consume_result = consume_messenger_events(onion_messenger, receiver).await;
+    let peers = &mut CurrentPeers::new(current_peers);
+    let consume_result = consume_messenger_events(onion_messenger, receiver, peers).await;
     match consume_result {
         Ok(_) => info!("Consume messenger events exited"),
         Err(e) => error!("Consume messenger events exited: {e}"),
@@ -512,6 +513,7 @@ impl fmt::Display for MessengerEvents {
 async fn consume_messenger_events(
     onion_messenger: impl OnionMessageHandler,
     mut events: Receiver<MessengerEvents>,
+    current_peers: &mut CurrentPeers,
 ) -> Result<(), ConsumerError> {
     while let Some(onion_event) = events.recv().await {
         info!("Consume messenger events received: {onion_event}");
@@ -534,9 +536,19 @@ async fn consume_messenger_events(
                         },
                         false,
                     )
-                    .map_err(|_| ConsumerError::OnionMessengerFailure)?
+                    .map_err(|_| ConsumerError::OnionMessengerFailure)?;
+
+                // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
+                // local version up to date so we send outgoing OMs all of our peers.
+                current_peers.peer_connected(pubkey, onion_support);
             }
-            MessengerEvents::PeerDisconnected(pubkey) => onion_messenger.peer_disconnected(&pubkey),
+            MessengerEvents::PeerDisconnected(pubkey) => {
+                onion_messenger.peer_disconnected(&pubkey);
+
+                // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
+                // local version up to date so we send outgoing OMs to our correct peers.
+                current_peers.peer_disconnected(pubkey);
+            }
             MessengerEvents::IncomingMessage(pubkey, onion_message) => {
                 onion_messenger.handle_onion_message(&pubkey, &onion_message)
             }
@@ -547,6 +559,25 @@ async fn consume_messenger_events(
     }
 
     Ok(())
+}
+
+// CurrentPeers keeps up-to-date with all of the peers we're connected and disconnected to using a map.
+struct CurrentPeers {
+    map: HashMap<PublicKey, bool>,
+}
+
+impl CurrentPeers {
+    fn new(peers: HashMap<PublicKey, bool>) -> CurrentPeers {
+        CurrentPeers { map: peers }
+    }
+
+    fn peer_connected(&mut self, peer_key: PublicKey, onion_support: bool) {
+        self.map.insert(peer_key, onion_support);
+    }
+
+    fn peer_disconnected(&mut self, peer_key: PublicKey) {
+        self.map.remove(&peer_key);
+    }
 }
 
 struct LndNodeSigner<'a> {
@@ -1036,6 +1067,7 @@ mod tests {
 
         let pk = pubkey();
         let mut mock = MockOnionHandler::new();
+        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk, true)]));
 
         // Peer connected: onion messaging supported.
         sender
@@ -1080,7 +1112,7 @@ mod tests {
             .await
             .unwrap();
 
-        let consume_err = consume_messenger_events(mock, receiver)
+        let consume_err = consume_messenger_events(mock, receiver, current_peers)
             .await
             .expect_err("consume should error");
         matches!(consume_err, ConsumerError::PeerProducerExit);
@@ -1092,6 +1124,7 @@ mod tests {
 
         let pk = pubkey();
         let mut mock = MockOnionHandler::new();
+        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk, true)]));
 
         // Send a peer connected event, but mock out an error on the handler's connected function.
         sender
@@ -1100,7 +1133,7 @@ mod tests {
             .unwrap();
         mock.expect_peer_connected().return_once(|_, _, _| Err(()));
 
-        let consume_err = consume_messenger_events(mock, receiver)
+        let consume_err = consume_messenger_events(mock, receiver, current_peers)
             .await
             .expect_err("consume should error");
         matches!(consume_err, ConsumerError::OnionMessengerFailure);
@@ -1112,9 +1145,10 @@ mod tests {
         // the sender manually has the effect of closing the channel.
         let (sender_done, receiver_done) = channel(1);
         drop(sender_done);
+        let current_peers = &mut CurrentPeers::new(HashMap::new());
 
         assert!(
-            consume_messenger_events(MockOnionHandler::new(), receiver_done)
+            consume_messenger_events(MockOnionHandler::new(), receiver_done, current_peers)
                 .await
                 .is_ok()
         );
