@@ -159,7 +159,7 @@ where
     // Setup channels that we'll use to signal to spawned producers that an exit has occurred elsewhere so they should
     // exit, and a tokio task set to track all our spawned tasks.
     let (peers_exit_sender, peers_exit_receiver) = channel(1);
-    let (messages_exit_sender, messages_exit_receiver) = channel(1);
+    let (in_messages_exit_sender, in_messages_exit_receiver) = channel(1);
     let mut set = tokio::task::JoinSet::new();
 
     // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
@@ -199,7 +199,7 @@ where
             message_subscription,
         };
 
-        match produce_incoming_message_events(message_stream, sender, messages_exit_receiver).await
+        match produce_incoming_message_events(message_stream, sender, in_messages_exit_receiver).await
         {
             Ok(_) => debug!("Message events producer exited"),
             Err(e) => error!("Message events producer exited: {e}"),
@@ -219,7 +219,7 @@ where
     // Once the consumer has exit, we drop our exit signal channel's sender so that the receiving channels will close.
     // This signals to all producers that it's time to exit, so we can await their exit once we've done this.
     drop(peers_exit_sender);
-    drop(messages_exit_sender);
+    drop(in_messages_exit_sender);
 
     // Tasks will independently exit, so we can assert that they do so in any order.
     let mut task_err = false;
