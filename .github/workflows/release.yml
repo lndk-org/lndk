@@ -124,12 +124,43 @@ jobs:
           cat uploads.txt
           gh release upload ${{ github.ref_name }} $(cat uploads.txt)
           echo "uploaded!"
+      - uses: actions/upload-artifact@v3
+        with:
+          name: blob-artifacts
+          path: |
+            target/distrib/*.xz
+            target/distrib/*.zip
+
+  sign-release:
+    needs: upload-artifacts
+    runs-on: ubuntu-latest
+    env:
+      COSIGN_PRIVATE_KEY: ${{secrets.COSIGN_PRIVATE_KEY}}
+      COSIGN_PASSWORD: ${{secrets.COSIGN_PASSWORD}}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: blob-artifacts
+          path: blob-artifacts
+      - uses: sigstore/cosign-installer@main
+      - name: Generate and sign checksums.txt
+        working-directory: blob-artifacts
+        # This is a bit of a mediocre workaround until sigstore/protobuf-specs#48 and related functionality
+        # is implemented by Sigstore.
+        run: |
+          sha256sum $(ls *) > checksums.txt
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle cosign.bundle checksums.txt
+          echo "uploading..."
+          gh release upload ${{ github.ref_name }} checksums.txt cosign.bundle
+          echo "cosign.bundle and checksums.txt uploaded! 🔏"
 
   # Mark the Github Release™ as a non-draft now that everything has succeeded!
   publish-release:
     # Only run after all the other tasks, but it's ok if upload-artifacts was skipped
-    needs: [create-release, upload-artifacts]
-    if: ${{ always() && needs.create-release.result == 'success' && (needs.upload-artifacts.result == 'skipped' || needs.upload-artifacts.result == 'success') }}
+    needs: [create-release, upload-artifacts, sign-release]
+    if: ${{ always() && needs.create-release.result == 'success' && ((needs.upload-artifacts.result == 'skipped' && needs.sign-release.result == 'skipped') || (needs.upload-artifacts.result == 'success' && needs.sign-release.result == 'success')) }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
