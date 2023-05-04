@@ -587,7 +587,8 @@ async fn consume_messenger_events(
             }
             MessengerEvents::SendOutgoing => {
                 for peer in current_peers.map.keys() {
-                    while let Some(msg) = onion_messenger.next_onion_message_for_peer(*peer) {
+                    if let Some(msg) = onion_messenger.next_onion_message_for_peer(*peer) {
+                        info!("Sending outgoing onion message to {peer}.");
                         relay_outgoing_msg_event(peer, msg, message_sender).await;
                     }
                 }
@@ -1194,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_consume_messenger_events() {
-        let (sender, receiver) = channel(6);
+        let (sender, receiver) = channel(7);
 
         let pk_1 = pubkey();
         let pk_2 = pubkey();
@@ -1202,30 +1203,32 @@ mod tests {
         let mut sender_mock = MockSendCustomMessenger::new();
         let current_peers = &mut CurrentPeers::new(HashMap::from([(pk_1, true)]));
 
-        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
-        mock.expect_next_onion_message_for_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
-            .returning(|_| Some(onion_message()));
-
-        let result = mock.next_onion_message_for_peer(pk_1);
-        assert!(result.is_some());
-
-        mock.checkpoint();
-        mock.expect_next_onion_message_for_peer()
-            .returning(|_| None);
-
-        let result = mock.next_onion_message_for_peer(pk_2);
-        assert!(result.is_none());
-
         // Peer connected: onion messaging supported.
         sender
-            .send(MessengerEvents::PeerConnected(pk_1, true))
+            .send(MessengerEvents::PeerConnected(pk_2, true))
             .await
             .unwrap();
 
         mock.expect_peer_connected()
             .withf(|_: &PublicKey, init: &Init, _: &bool| init.features.supports_onion_messages())
             .return_once(|_, _, _| Ok(()));
+
+        // Add two polling events for custom messages.
+        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
+        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
+
+        // Set up our mock to return an onion message for pk_1, and no onion messages for pk_2.
+        mock.expect_next_onion_message_for_peer()
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .returning(|_| Some(onion_message()));
+
+        mock.expect_next_onion_message_for_peer()
+            .returning(|_| None);
+
+        sender_mock
+            .expect_send_custom_message()
+            .times(2)
+            .returning(|_| Ok(SendCustomMessageResponse {}));
 
         // Peer connected: onion messaging not supported.
         sender
