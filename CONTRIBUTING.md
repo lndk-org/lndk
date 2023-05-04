@@ -42,4 +42,4 @@ cargo clippy
 3. String formatting
     1. Logs: Capitalize and include a `.` terminating.
     2. Error String: Lower case, no `.` terminating.
-    3. Dispaly imps: Lower case, no `.` terminating.
+    3. Display imps: Lower case, no `.` terminating.
