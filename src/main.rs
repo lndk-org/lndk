@@ -849,9 +849,9 @@ async fn set_feature_bit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::secp256k1::PublicKey;
+    use bitcoin::secp256k1::rand::rngs::OsRng;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1};
     use bytes::BufMut;
-    use hex;
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
     use lightning::util::events::OnionMessageProvider;
@@ -1000,12 +1000,11 @@ mod tests {
         matches!(set_feature_err, SetOnionBitError::SetBitFail);
     }
 
+    // Generates a new pubkey for testing purposes.
     fn pubkey() -> PublicKey {
-        PublicKey::from_slice(
-            &hex::decode("02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619")
-                .unwrap()[..],
-        )
-        .unwrap()
+        let secp = Secp256k1::new();
+        let (_, pubkey) = secp.generate_keypair(&mut OsRng);
+        pubkey
     }
 
     // Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
