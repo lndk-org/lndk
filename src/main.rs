@@ -69,10 +69,10 @@ async fn main() -> Result<(), ()> {
         .into_inner();
 
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-    info!("Starting lndk for node: {pubkey}");
+    info!("Starting lndk for node: {pubkey}.");
 
     if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
-        info!("Attempting to set onion messaging feature bit ({ONION_MESSAGES_OPTIONAL})");
+        info!("Attempting to set onion messaging feature bit ({ONION_MESSAGES_OPTIONAL}).");
 
         let mut node_info_retriever = GetInfoClient {
             client: &mut client.lightning().clone(),
@@ -83,7 +83,7 @@ async fn main() -> Result<(), ()> {
         match set_feature_bit(&mut node_info_retriever, &mut announcement_updater).await {
             Ok(_) => {}
             Err(err) => {
-                error!("Error setting feature bit: {err}");
+                error!("Error setting feature bit: {err}.");
                 return Err(());
             }
         }
@@ -98,7 +98,7 @@ async fn main() -> Result<(), ()> {
         })
         .await
         .map_err(|e| {
-            error!("Could not lookup current peers: {e}");
+            error!("Could not lookup current peers: {e}.");
         })?;
 
     let mut peer_support = HashMap::new();
@@ -152,7 +152,7 @@ where
             .send(MessengerEvents::PeerConnected(peer, onion_support))
             .await
             .map_err(|e| {
-                error!("Notify peer connected: {e}");
+                error!("Notify peer connected: {e}.");
             })?
     }
 
@@ -181,8 +181,8 @@ where
         };
 
         match produce_peer_events(peer_stream, peers_sender, peers_exit_receiver).await {
-            Ok(_) => debug!("Peer events producer exited"),
-            Err(e) => error!("Peer events producer exited: {e}"),
+            Ok(_) => debug!("Peer events producer exited."),
+            Err(e) => error!("Peer events producer exited: {e}."),
         };
     });
 
@@ -201,8 +201,8 @@ where
 
         match produce_incoming_message_events(message_stream, sender, messages_exit_receiver).await
         {
-            Ok(_) => debug!("Message events producer exited"),
-            Err(e) => error!("Message events producer exited: {e}"),
+            Ok(_) => debug!("Message events producer exited."),
+            Err(e) => error!("Message events producer exited: {e}."),
         }
     });
 
@@ -212,8 +212,8 @@ where
     // events we need).
     let consume_result = consume_messenger_events(onion_messenger, receiver).await;
     match consume_result {
-        Ok(_) => info!("Consume messenger events exited"),
-        Err(e) => error!("Consume messenger events exited: {e}"),
+        Ok(_) => info!("Consume messenger events exited."),
+        Err(e) => error!("Consume messenger events exited: {e}."),
     }
 
     // Once the consumer has exit, we drop our exit signal channel's sender so that the receiving channels will close.
@@ -225,10 +225,10 @@ where
     let mut task_err = false;
     while let Some(res) = set.join_next().await {
         match res {
-            Ok(_) => info!("Producer exited"),
+            Ok(_) => info!("Producer exited."),
             Err(_) => {
                 task_err = true;
-                error!("Producer exited with an error");
+                error!("Producer exited with an error.");
             }
         };
     }
@@ -259,11 +259,11 @@ async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::Lightn
                 return features_support_onion_messages(&peer.features);
             }
 
-            warn!("Peer {pubkey} not found in current set of peers, assuming no onion support");
+            warn!("Peer {pubkey} not found in current set of peers, assuming no onion support.");
             false
         }
         Err(e) => {
-            warn!("Could not lookup peers for {pubkey}: {e}, assuming no onion message support");
+            warn!("Could not lookup peers for {pubkey}: {e}, assuming no onion message support.");
             false
         }
     }
@@ -331,7 +331,7 @@ async fn produce_peer_events(
             biased;
 
             _ = exit.recv() => {
-                info!("Peer events received signal to quit");
+                info!("Peer events received signal to quit.");
                 return Ok(())
             }
             peer_event = source.receive() => {
@@ -343,7 +343,7 @@ async fn produce_peer_events(
                             let event = MessengerEvents::PeerConnected(pubkey, onion_support);
                             let event_str = format!("{event:?}");
                             match events.send(event).await {
-                                Ok(_) => debug!("Peer events sent: {event_str}"),
+                                Ok(_) => debug!("Peer events sent: {event_str}."),
                                 Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
                             };
                         }
@@ -351,19 +351,19 @@ async fn produce_peer_events(
                             let event = MessengerEvents::PeerDisconnected(PublicKey::from_str(&peer_event.pub_key).unwrap());
                             let event_str = format!("{event:?}");
                             match events.send(event).await {
-                                Ok(_) => debug!("Peer events sent: {event_str}"),
+                                Ok(_) => debug!("Peer events sent: {event_str}."),
                                 Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
                             };
                         }
                     },
                     Err(s) => {
-                        info!("Peer events receive failed: {s}");
+                        info!("Peer events receive failed: {s}.");
 
                         let event = MessengerEvents::ProducerExit(ConsumerError::PeerProducerExit);
                         let event_str = format!("{event:?}");
                         match events.send(event).await {
-                            Ok(_) => debug!("Peer events sent: {event_str}"),
-                            Err(err) => error!("Peer events: send producer exit failed: {err}"),
+                            Ok(_) => debug!("Peer events sent: {event_str}."),
+                            Err(err) => error!("Peer events: send producer exit failed: {err}."),
                         }
                         return Err(ProducerError::StreamError(format!("{s}")));
                     }
@@ -412,14 +412,14 @@ async fn produce_incoming_message_events(
         biased;
 
         _ = exit.recv() => {
-            info!("Peer events received signal to quit");
+            info!("Peer events received signal to quit.");
             return Ok(())
         }
         onion_message = source.receive() => {
             match onion_message {
                 Ok(incoming_message) => {
                     if incoming_message.r#type != ONION_MESSAGE_TYPE {
-                        trace!("Ignoring custom message: {}", incoming_message.r#type);
+                        trace!("Ignoring custom message: {}.", incoming_message.r#type);
                         continue;
                     }
 
@@ -430,20 +430,20 @@ async fn produce_incoming_message_events(
                             let event = MessengerEvents::IncomingMessage(pubkey, onion_message);
                             let event_str = format!("{event:?}");
                             match events.send(event).await {
-                                Ok(_) => debug!("Incoming messages sent: {event_str}"),
+                                Ok(_) => debug!("Incoming messages sent: {event_str}."),
                                 Err(err) => return Err(ProducerError::SendError(format!("{err}"))),
                             };
                         },
-                        Err(e) => error!("Invalid onion message from: {pubkey}: {e}"),
+                        Err(e) => error!("Invalid onion message from: {pubkey}: {e}."),
                     };
                 },
                 Err(s) => {
-                    info!("Incoming message events receive failed: {s}");
+                    info!("Incoming message events receive failed: {s}.");
                     let event = MessengerEvents::ProducerExit(ConsumerError::IncomingMessageProducerExit);
                     let event_str = format!("{event:?}");
                     match events.send(event).await {
-                        Ok(_) => debug!("Incoming message events sent: {event_str}"),
-                        Err(err) => error!("Incoming message events: send producer exit failed: {err}"),
+                        Ok(_) => debug!("Incoming message events sent: {event_str}."),
+                        Err(err) => error!("Incoming message events: send producer exit failed: {err}."),
                     };
 
                     return Err(ProducerError::StreamError(format!("{s}")));
@@ -810,7 +810,7 @@ async fn set_feature_bit(
         return Err(SetOnionBitError::SetBitFail);
     }
 
-    info!("Successfully set onion messaging bit");
+    info!("Successfully set onion messaging bit.");
 
     Ok(())
 }
