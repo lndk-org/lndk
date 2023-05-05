@@ -588,10 +588,10 @@ async fn consume_messenger_events(
                 onion_messenger.handle_onion_message(&pubkey, &onion_message)
             }
             MessengerEvents::SendOutgoing => {
-                for peer in current_peers.map.keys() {
-                    if let Some(msg) = onion_messenger.next_onion_message_for_peer(*peer) {
+                for peer in current_peers.peers() {
+                    if let Some(msg) = onion_messenger.next_onion_message_for_peer(peer) {
                         info!("Sending outgoing onion message to {peer}.");
-                        relay_outgoing_msg_event(peer, msg, message_sender).await;
+                        relay_outgoing_msg_event(&peer, msg, message_sender).await;
                     };
                 }
             }
