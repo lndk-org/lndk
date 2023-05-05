@@ -1,3 +1,4 @@
+mod rate_limit;
 mod internal {
     #![allow(clippy::enum_variant_names)]
     #![allow(clippy::unnecessary_lazy_evaluations)]
@@ -11,6 +12,7 @@ mod internal {
 #[macro_use]
 extern crate configure_me;
 
+use crate::rate_limit::CurrentPeers;
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
@@ -600,25 +602,6 @@ async fn consume_messenger_events(
     }
 
     Ok(())
-}
-
-// CurrentPeers keeps up-to-date with all of the peers we're connected and disconnected to using a map.
-struct CurrentPeers {
-    map: HashMap<PublicKey, bool>,
-}
-
-impl CurrentPeers {
-    fn new(peers: HashMap<PublicKey, bool>) -> CurrentPeers {
-        CurrentPeers { map: peers }
-    }
-
-    fn peer_connected(&mut self, peer_key: PublicKey, onion_support: bool) {
-        self.map.insert(peer_key, onion_support);
-    }
-
-    fn peer_disconnected(&mut self, peer_key: PublicKey) {
-        self.map.remove(&peer_key);
-    }
 }
 
 #[async_trait]
