@@ -68,5 +68,7 @@ In a more concrete example:
 
 - Use any of the commands with the --help option for more information about each argument.
 
+## Security
+
 NOTE: It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev)
 to verify the trustworthiness of each of your dependencies, including this one.
