@@ -11,8 +11,8 @@ impl CurrentPeers {
         CurrentPeers { peer_map: peers }
     }
 
-    pub(crate) fn peer_connected(&mut self, peer_key: PublicKey, onion_support: bool) {
-        self.peer_map.insert(peer_key, onion_support);
+    pub(crate) fn peer_connected(&mut self, peer_key: PublicKey) {
+        self.peer_map.insert(peer_key, true);
     }
 
     pub(crate) fn peer_disconnected(&mut self, peer_key: PublicKey) {
