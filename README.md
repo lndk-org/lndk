@@ -6,15 +6,46 @@ An experimental attempt at using [LDK](https://github.com/lightningdevkit/rust-l
 
 ## Setting up LNDK
 
-To run `LNDK`, `LND` is assumed to be running. For directions on how to do this, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
+#### Compiling LND
 
-When compiling `LND`, make sure that the peersrpc and signerrpc services are enabled, like this:
+To run `LNDK`, `LND` is assumed to be running. You'll need to make some adjustments when compiling and running `LND` to make it compatible with `LNDK`.
+
+First, you'll need to run a particular [branch](https://github.com/lightningnetwork/lnd/tree/v0.16.2-patch-customfeatures) of `LND` to allow the advertising of onion_message feature bits. To do so, follow these steps:
+
+```
+git clone https://github.com/lightningnetwork/lnd
+cd lnd
+git checkout v0.16.2-patch-customfeatures
+```
+
+While on this branch, compile `LND`. Make sure that the peersrpc and signerrpc services and dev tag are enabled, like this:
 
 `make install --tags="peersrpc signerrpc dev"`
 
-`LND` must also be run with `--protocol.custom-message=513` to allow it to report onion messages to `LNDK`, which requires LND version [v0.16.0-beta)](https://github.com/lightningnetwork/lnd/releases/tag/v0.16.0-beta).
+Note that this guide assumes some familiarity with setting up `LND`. If you're looking to get up to speed, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
 
-In order to successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
+#### Running LND
+
+Once you're ready to run `LND`, the binary must be run with `--protocol.custom-message=513` to allow it to report onion messages to `LNDK` as well as `--protocol.custom-nodeann=39` `--protocol.custom-init=39` for advertising the onion message feature bits.
+
+There are two ways you can do this:
+
+1) Pass these options directly to `LND` when running it:
+
+`lnd --protocol.custom-message=513 --protocol.custom-nodeann=39 --protocol.custom-init=39`
+
+2) Adding these to the config file `lnd.conf`:
+
+```
+[protocol]
+protocol.custom-message=513
+protocol.custom-nodeann=39
+protocol.custom-init=39
+```
+
+#### Running LNDK
+
+In order for `LNDK` successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
 
 - `cargo run -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
 
