@@ -575,7 +575,7 @@ async fn consume_messenger_events(
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
                 // local version up to date so we send outgoing OMs all of our peers.
-                current_peers.peer_connected(pubkey, onion_support);
+                current_peers.peer_connected(pubkey);
             }
             MessengerEvents::PeerDisconnected(pubkey) => {
                 onion_messenger.peer_disconnected(&pubkey);
