@@ -12,7 +12,7 @@ mod internal {
 #[macro_use]
 extern crate configure_me;
 
-use crate::rate_limit::TokenLimiter;
+use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
@@ -545,7 +545,7 @@ async fn consume_messenger_events(
     onion_messenger: impl OnionMessageHandler,
     mut events: Receiver<MessengerEvents>,
     message_sender: &mut impl SendCustomMessage,
-    rate_limiter: &mut TokenLimiter,
+    rate_limiter: &mut impl RateLimiter,
 ) -> Result<(), ConsumerError> {
     while let Some(onion_event) = events.recv().await {
         match onion_event {
