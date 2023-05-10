@@ -46,24 +46,31 @@ protocol.custom-init=39
 
 #### Running LNDK
 
-In order for `LNDK` successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. These values can be passed in via the command line when running the `LNDK` program, like this:
+Now we need to set up LNDK. To start:
 
-- `cargo run -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
+```
+git clone https://github.com/carlaKC/lndk
+cd lndk
+```
+In order for `LNDK` successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. There are two ways to do this:
 
+1) These values can be passed in via the command line when running the `LNDK` program, like this:
 
-In a more concrete example:
+`cargo run -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
+
+Or in a more concrete example:
 
 `cargo run -- --address=https://localhost:10009 --cert=/home/<USERNAME>/.lnd/tls.cert --macaroon=/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
 
 **Remember** that the grpc address must start with https:// for the program to work.
 
-- Alternatively, you can use a configuration file to add the required arguments.
+2) Alternatively, you can use a configuration file to add the required arguments.
 
-* In the lndk directory, create fle named `lndk.conf`.
-* Add the following lines to the file 
-  * `address="https://localhost:10009"` 
-  * `cert="/home/<USERNAME>/.lnd/tls.cert"`
-  * `macaroon="/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon"`
+* In the lndk directory, create file named `lndk.conf`.
+* Add the following lines to the file:
+  * `address="<ADDRESS"`
+  * `cert="<TLSPATH>"`
+  * `macaroon="<MACAROONPATH>"`
 * Run `cargo run -- --conf lndk.conf`
 
 - Use any of the commands with the --help option for more information about each argument.
