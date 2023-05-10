@@ -955,9 +955,11 @@ async fn set_feature_bit(
 
 #[cfg(test)]
 mod tests {
+    mod test_utils;
+
     use super::*;
-    use bitcoin::secp256k1::rand::rngs::OsRng;
-    use bitcoin::secp256k1::{PublicKey, Secp256k1};
+    use crate::tests::test_utils::pubkey;
+    use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
@@ -1107,19 +1109,12 @@ mod tests {
         matches!(set_feature_err, SetOnionBitError::SetBitFail);
     }
 
-    // Generates a new pubkey for testing purposes.
-    fn pubkey() -> PublicKey {
-        let secp = Secp256k1::new();
-        let (_, pubkey) = secp.generate_keypair(&mut OsRng);
-        pubkey
-    }
-
     // Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
     // messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
     // are not public).
     fn onion_message() -> OnionMessage {
         let mut w = vec![];
-        let pubkey_bytes = pubkey().serialize();
+        let pubkey_bytes = pubkey(0).serialize();
 
         // Blinding point for the onion message.
         w.put_slice(&pubkey_bytes);
@@ -1180,8 +1175,8 @@ mod tests {
     async fn test_consume_messenger_events() {
         let (sender, receiver) = channel(7);
 
-        let pk_1 = pubkey();
-        let pk_2 = pubkey();
+        let pk_1 = pubkey(1);
+        let pk_2 = pubkey(2);
         let mut mock = MockOnionHandler::new();
         let mut sender_mock = MockSendCustomMessenger::new();
         let current_peers = &mut CurrentPeers::new(HashMap::from([(pk_1, true)]));
@@ -1256,7 +1251,7 @@ mod tests {
     async fn test_consumer_exit_onion_messenger_failure() {
         let (sender, receiver) = channel(1);
 
-        let pk = pubkey();
+        let pk = pubkey(0);
         let mut mock = MockOnionHandler::new();
         let current_peers = &mut CurrentPeers::new(HashMap::from([(pk, true)]));
 
@@ -1304,7 +1299,7 @@ mod tests {
         // Peer connects and we successfully lookup its support for onion messages.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOnline),
             })
         });
@@ -1313,7 +1308,7 @@ mod tests {
         // Peer connects with no onion support.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOnline),
             })
         });
@@ -1322,7 +1317,7 @@ mod tests {
         // Peer disconnects.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOffline),
             })
         });
@@ -1388,7 +1383,7 @@ mod tests {
         // Send a custom message that is not relevant to us.
         mock.expect_receive().times(1).returning(|| {
             Ok(CustomMessage {
-                peer: pubkey().serialize().to_vec(),
+                peer: pubkey(0).serialize().to_vec(),
                 r#type: 3,
                 data: vec![1, 2, 3],
             })
@@ -1400,7 +1395,7 @@ mod tests {
             onion_message().write(&mut w).unwrap();
 
             Ok(CustomMessage {
-                peer: pubkey().serialize().to_vec(),
+                peer: pubkey(0).serialize().to_vec(),
                 r#type: ONION_MESSAGE_TYPE,
                 data: w,
             })
