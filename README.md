@@ -1,9 +1,9 @@
 # LNDK
 
 An experimental attempt at using [LDK](https://github.com/lightningdevkit/rust-lightning) to implement [bolt 12](https://github.com/lightning/bolts/pull/798) features for [LND](https://github.com/lightningnetwork/lnd). 
-* LNDK's [Architecture](https://github.com/carlaKC/lndk/blob/master/ARCH.md)
 * [Contributor guidelines](https://github.com/carlaKC/lndk/blob/master/CONTRIBUTING.md)
 * [Code of Conduct](https://github.com/carlaKC/lndk/blob/master/code_of_conduct.md)
+* [Architecture](https://github.com/carlaKC/lndk/blob/master/ARCH.md)
 
 ## Setting up LNDK
 
