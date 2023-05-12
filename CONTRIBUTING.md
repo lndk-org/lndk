@@ -20,6 +20,7 @@ General guidelines for code contribution:
 3. Wherever possible, new code should be covered by tests.
 4. Bug fixes should start with a test demonstrating the bug, then add the fix and update the test to illustrate that the bug has been addressed.
 5. It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev) to verify the trustworthiness of any added dependencies, which should be kept to a minimum where possible.
+6. Test changes on regtest where possible. See [Github Discussions](https://github.com/carlaKC/lndk/discussions) for guides on setting up local development environments (and other meta topics).
 
 #### Process
 0. **Issue creation**: If no issue is open for the work you'd like to implement, please open one as a preliminary step so that other contributors can comment on the proposed approach and suitableness of the feature for the repo.
@@ -43,3 +44,4 @@ cargo clippy
     1. Logs: Capitalize and include a `.` terminating.
     2. Error String: Lower case, no `.` terminating.
     3. Display imps: Lower case, no `.` terminating.
+
