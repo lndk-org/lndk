@@ -3,7 +3,7 @@ There are three components relevant to our architecture:
 
 1. [LDK](https://github.com/lightningdevkit/rust-lightning): imported as a dependency to provide onion message processing and forwarding capabilities.
 2. [LND](https://github.com/lightningnetwork/lnd): the grpc API that is exposed by the target LND node built with the appropriate rpc subservers.
-3. [LNDK](https://github.com/carlaKC/lndk): a thin rust shim that connects to LND's API (via grpc), acting as a shim that connects LND's APIs to LDK's functionality and providing input/output to the LND node.
+3. [LNDK](https://github.com/lndk-org/lndk): a thin rust shim that connects to LND's API (via grpc), acting as a shim that connects LND's APIs to LDK's functionality and providing input/output to the LND node.
 
 The use of LND's flexible API and LDK's modular lightning library allows us to re-use the bolt 12 implementation in LDK. LNDK itself is intended to act as a simple shim that facilitates communication between LND and the LDK library - wrapping API calls in trait implementations for LDK, converting types and passing messages between the LDK state machine and LND's APIs.
 
