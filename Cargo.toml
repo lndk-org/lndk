@@ -2,7 +2,7 @@
 name = "lndk"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/carlaKC/lndk"
+repository = "https://github.com/lndk-org/lndk"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [package.metadata.configure_me]
