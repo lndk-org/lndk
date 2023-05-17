@@ -29,10 +29,16 @@ use tonic_lnd::{
     lnrpc::SendCustomMessageResponse, tonic::Status, LightningClient,
 };
 
+/// ONION_MESSAGE_TYPE is the message type number used in BOLT1 message types for onion messages.
 const ONION_MESSAGE_TYPE: u32 = 513;
+
+/// MSG_POLL_INTERVAL is the interval at which we poll for outgoing onion messages.
 const MSG_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// DEFAULT_CALL_COUNT is the default number of calls each peer gets per rate limited period.
 const DEFAULT_CALL_COUNT: u8 = 10;
+
+/// DEFAULT_CALL_FREQUENCY is the default period over which peers are rate limited.
 const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait implementations for LDK’s
@@ -78,8 +84,17 @@ impl Logger for MessengerUtilities {
     }
 }
 
-// Responsible for initializing the onion messenger provided with the correct start state and managing onion message
-// event producers and consumers.
+/// run_onion_messenger is the main event loop for connecting an OnionMessenger to LND's various APIs to handle
+/// onion messages externally to LND. It follows a producer / consumer pattern, with many producers
+/// creating MessengerEvents that are handled by a single consumer that drives the OnionMessenger accordingly. This
+/// function will block until consumer errors or one of the producers exits.
+///
+/// Producers:
+/// 1. Peer Events: Sourced from LND's PeerEventSubscription API, produces peer online and offline events.
+/// 2. Incoming Messages: Sourced from LND's SubscribeCustomMessages API, produces incoming onion message events.
+/// 3. Outgoing Poll: Using a simple ticker, produces polling events to check for outgoing onion messages.
+///
+/// The main consumer processes one MessengerEvent at a time, applying basic rate limiting to each peer to prevent spam.
 pub(crate) async fn run_onion_messenger<ES: Deref, NS: Deref, L: Deref, CMH: Deref>(
     current_peers: HashMap<PublicKey, bool>,
     ln_client: &mut tonic_lnd::LightningClient,
@@ -249,8 +264,11 @@ async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::Lightn
 }
 
 #[derive(Debug)]
+/// ProducerError represents the exit of a producing loop.
 enum ProducerError {
+    /// SendError indicates that a producer could not send a messenger event, likely due to consumer shutdown.
     SendError(String),
+    /// StreamError indicates that LND's stream has terminated, either due to error or shutdown of the underlying node.
     StreamError(String),
 }
 
@@ -266,6 +284,7 @@ impl fmt::Display for ProducerError {
 }
 
 #[async_trait]
+/// PeerEventProducer provides a layer of abstraction over LND's peer events subscription.
 trait PeerEventProducer {
     async fn receive(&mut self) -> Result<PeerEvent, Status>;
     async fn onion_support(&mut self, pubkey: &PublicKey) -> bool;
@@ -290,13 +309,13 @@ impl PeerEventProducer for PeerStream {
     }
 }
 
-// Consumes a stream of peer online/offline events from the PeerEventProducer until the stream exits (by sending an
-// error) or the producer receives the signal to exit (via close of the exit channel).
-//
-// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
-// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
-// that the consumer has already exited (the receiving end of the channel has hung up), and we can't send any more
-// events anyway.
+/// Consumes a stream of peer online/offline events from the PeerEventProducer until the stream exits (by sending an
+/// error) or the producer receives the signal to exit (via close of the exit channel).
+///
+/// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
+/// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
+/// that the consumer has already exited (the receiving end of the channel has hung up), and we can't send any more
+/// events anyway.
 async fn produce_peer_events(
     mut source: impl PeerEventProducer,
     events: Sender<MessengerEvents>,
@@ -353,6 +372,8 @@ async fn produce_peer_events(
 }
 
 #[async_trait]
+/// IncomingMessageProducer prodices a layer of abstraction over LND's custom messaging subscription for incoming
+/// messages.
 trait IncomingMessageProducer {
     async fn receive(&mut self) -> Result<CustomMessage, Status>;
 }
@@ -433,14 +454,15 @@ async fn produce_incoming_message_events(
 }
 
 #[derive(Debug, Copy, Clone)]
+/// ConsumerError represents exit from the main consumer loop.
 enum ConsumerError {
-    // Internal onion messenger implementation has experienced an error.
+    /// Internal onion messenger implementation has experienced an error.
     OnionMessengerFailure,
 
-    // The producer responsible for peer connection events has exited.
+    /// The producer responsible for peer connection events has exited.
     PeerProducerExit,
 
-    // The producer responsible for incoming messages has exited.
+    /// The producer responsible for incoming messages has exited.
     IncomingMessageProducerExit,
 }
 
@@ -460,7 +482,7 @@ impl fmt::Display for ConsumerError {
     }
 }
 
-// MessengerEvents represents all of the events that are relevant to onion messages.
+/// MessengerEvents represents all of the events that are relevant to onion messages.
 #[derive(Debug, Clone)]
 enum MessengerEvents {
     PeerConnected(PublicKey, bool),
@@ -491,7 +513,8 @@ impl fmt::Display for MessengerEvents {
     }
 }
 
-// consume_messenger_events receives a series of events and delivers them to the onion messenger provided.
+/// consume_messenger_events receives a series of onion messaging related events and delivers them to the
+/// OnionMessenger provided, using the RateLimiter to limit resources consumed by each peer.
 async fn consume_messenger_events(
     onion_messenger: impl OnionMessageHandler,
     mut events: Receiver<MessengerEvents>,
@@ -562,6 +585,7 @@ async fn consume_messenger_events(
 }
 
 #[async_trait]
+/// SendCustomMessage provides a level of abstraction over LND's send custom message API.
 trait SendCustomMessage {
     async fn send_custom_message(
         &mut self,
@@ -586,7 +610,12 @@ impl SendCustomMessage for CustomMessenger {
     }
 }
 
-// produce_outgoing_message_events is reponsible for producing outgoing message events at a regular interval.
+/// produce_outgoing_message_events is produce for producing outgoing message events at a regular interval.
+///
+/// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
+/// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
+/// that the consumer has already exited (the receiving end of the channel has hung up), and we can't send any more
+/// events anyway.
 async fn produce_outgoing_message_events(
     events: Sender<MessengerEvents>,
     mut exit: Receiver<()>,
@@ -614,8 +643,8 @@ async fn produce_outgoing_message_events(
     }
 }
 
-// relay_outgoing_msg_event is responsible for passing along new outgoing messages from peers. If a new onion message
-// turns up, it will pass it along to lnd.
+/// relay_outgoing_msg_event is responsible for passing along new outgoing messages from peers. If a new onion message
+/// turns up, it will pass it along to lnd.
 async fn relay_outgoing_msg_event(
     peer: &PublicKey,
     msg: OnionMessage,
@@ -659,9 +688,9 @@ mod tests {
     use std::io::Cursor;
     use tokio::sync::mpsc::channel;
 
-    // Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
-    // messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
-    // are not public).
+    /// Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
+    /// messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
+    /// are not public).
     fn onion_message() -> OnionMessage {
         let mut w = vec![];
         let pubkey_bytes = pubkey(0).serialize();
