@@ -6,10 +6,12 @@ use tonic_lnd::{Client, ConnectError};
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
+/// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
 pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
     block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
 }
 
+/// LndCfg specifies the configuration required to connect to LND's grpc client.
 pub(crate) struct LndCfg {
     address: String,
     cert: PathBuf,
@@ -26,7 +28,7 @@ impl LndCfg {
     }
 }
 
-// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
+/// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
 pub(crate) fn features_support_onion_messages(
     features: &HashMap<u32, tonic_lnd::lnrpc::Feature>,
 ) -> bool {
