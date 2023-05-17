@@ -1,5 +1,6 @@
 mod clock;
 mod lnd;
+mod onion_messenger;
 mod rate_limit;
 mod internal {
     #![allow(clippy::enum_variant_names)]
@@ -18,6 +19,7 @@ use crate::clock::TokioClock;
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, LndCfg, LndNodeSigner, ONION_MESSAGES_OPTIONAL,
 };
+use crate::onion_messenger::MessengerUtilities;
 use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
 use bitcoin::secp256k1::PublicKey;
@@ -28,12 +30,9 @@ use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
-use lightning::util::logger::{Level, Logger, Record};
+use lightning::util::logger::Logger;
 use lightning::util::ser::{Readable, Writeable};
 use log::{debug, error, info, trace, warn};
-use rand_chacha::ChaCha20Rng;
-use rand_core::{RngCore, SeedableRng};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -677,44 +676,6 @@ async fn relay_outgoing_msg_event(
     match ln_client.send_custom_message(req).await {
         Ok(_) => debug!("Sent outgoing onion message {msg:?} to {peer}."),
         Err(e) => error!("Error sending custom message {e} to {peer}."),
-    }
-}
-
-// MessengerUtilities implements some utilites required for onion messenging.
-struct MessengerUtilities {
-    entropy_source: RefCell<ChaCha20Rng>,
-}
-
-impl MessengerUtilities {
-    fn new() -> Self {
-        MessengerUtilities {
-            entropy_source: RefCell::new(ChaCha20Rng::from_entropy()),
-        }
-    }
-}
-
-impl EntropySource for MessengerUtilities {
-    // TODO: surface LDK's EntropySource and use instead.
-    fn get_secure_random_bytes(&self) -> [u8; 32] {
-        let mut chacha_bytes: [u8; 32] = [0; 32];
-        self.entropy_source
-            .borrow_mut()
-            .fill_bytes(&mut chacha_bytes);
-        chacha_bytes
-    }
-}
-
-impl Logger for MessengerUtilities {
-    fn log(&self, record: &Record) {
-        let args_str = record.args.to_string();
-        match record.level {
-            Level::Gossip => {}
-            Level::Trace => trace!("{}", args_str),
-            Level::Debug => debug!("{}", args_str),
-            Level::Info => info!("{}", args_str),
-            Level::Warn => warn!("{}", args_str),
-            Level::Error => error!("{}", args_str),
-        }
     }
 }
 
