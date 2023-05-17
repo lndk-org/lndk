@@ -1,4 +1,5 @@
 mod clock;
+mod lnd;
 mod rate_limit;
 mod internal {
     #![allow(clippy::enum_variant_names)]
@@ -14,12 +15,16 @@ mod internal {
 extern crate configure_me;
 
 use crate::clock::TokioClock;
+use crate::lnd::{
+    features_support_onion_messages, get_lnd_client, LndCfg, ONION_MESSAGES_OPTIONAL,
+};
 use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
+use core::ops::Deref;
 use futures::executor::block_on;
 use internal::*;
 use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
@@ -38,19 +43,15 @@ use std::error::Error;
 use std::fmt;
 use std::io::Cursor;
 use std::marker::Copy;
-use std::ops::Deref;
-use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{select, time, time::Duration, time::Interval};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
     lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
-    lnrpc::SendCustomMessageResponse, tonic::Status, Client, ConnectError, LightningClient,
+    lnrpc::SendCustomMessageResponse, tonic::Status, LightningClient,
 };
 
-const ONION_MESSAGES_REQUIRED: u32 = 38;
-const ONION_MESSAGES_OPTIONAL: u32 = 39;
 const ONION_MESSAGE_TYPE: u32 = 513;
 const MSG_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -115,12 +116,6 @@ async fn main() -> Result<(), ()> {
 
     let mut peers_client = client.lightning().clone();
     run_onion_messenger(peer_support, &mut peers_client, onion_messenger).await
-}
-
-// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
-fn features_support_onion_messages(features: &HashMap<u32, tonic_lnd::lnrpc::Feature>) -> bool {
-    features.contains_key(&ONION_MESSAGES_OPTIONAL)
-        || features.contains_key(&ONION_MESSAGES_REQUIRED)
 }
 
 // Responsible for initializing the onion messenger provided with the correct start state and managing onion message
@@ -812,26 +807,6 @@ impl Logger for MessengerUtilities {
             Level::Info => info!("{}", args_str),
             Level::Warn => warn!("{}", args_str),
             Level::Error => error!("{}", args_str),
-        }
-    }
-}
-
-fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
-    block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
-}
-
-struct LndCfg {
-    address: String,
-    cert: PathBuf,
-    macaroon: PathBuf,
-}
-
-impl LndCfg {
-    fn new(address: String, cert: PathBuf, macaroon: PathBuf) -> LndCfg {
-        LndCfg {
-            address,
-            cert,
-            macaroon,
         }
     }
 }
