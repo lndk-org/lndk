@@ -16,20 +16,16 @@ extern crate configure_me;
 
 use crate::clock::TokioClock;
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, LndCfg, ONION_MESSAGES_OPTIONAL,
+    features_support_onion_messages, get_lnd_client, LndCfg, LndNodeSigner, ONION_MESSAGES_OPTIONAL,
 };
 use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
-use bitcoin::bech32::u5;
-use bitcoin::secp256k1::ecdh::SharedSecret;
-use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
-use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
+use bitcoin::secp256k1::PublicKey;
 use core::ops::Deref;
-use futures::executor::block_on;
 use internal::*;
-use lightning::chain::keysinterface::{EntropySource, KeyMaterial, NodeSigner, Recipient};
+use lightning::chain::keysinterface::{EntropySource, NodeSigner};
 use lightning::ln::features::InitFeatures;
-use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler, UnsignedGossipMessage};
+use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
 use lightning::util::logger::{Level, Logger, Record};
@@ -681,95 +677,6 @@ async fn relay_outgoing_msg_event(
     match ln_client.send_custom_message(req).await {
         Ok(_) => debug!("Sent outgoing onion message {msg:?} to {peer}."),
         Err(e) => error!("Error sending custom message {e} to {peer}."),
-    }
-}
-
-struct LndNodeSigner<'a> {
-    pubkey: PublicKey,
-    secp_ctx: Secp256k1<secp256k1::All>,
-    signer: RefCell<&'a mut tonic_lnd::SignerClient>,
-}
-
-impl<'a> LndNodeSigner<'a> {
-    fn new(pubkey: PublicKey, signer: &'a mut tonic_lnd::SignerClient) -> Self {
-        LndNodeSigner {
-            pubkey,
-            secp_ctx: Secp256k1::new(),
-            signer: RefCell::new(signer),
-        }
-    }
-}
-
-impl<'a> NodeSigner for LndNodeSigner<'a> {
-    /// Get node id based on the provided [`Recipient`].
-    ///
-    /// This method must return the same value each time it is called with a given [`Recipient`]
-    /// parameter.
-    ///
-    /// Errors if the [`Recipient`] variant is not supported by the implementation.
-    fn get_node_id(&self, recipient: Recipient) -> Result<PublicKey, ()> {
-        match recipient {
-            Recipient::Node => Ok(self.pubkey),
-            Recipient::PhantomNode => Err(()),
-        }
-    }
-
-    /// Gets the ECDH shared secret of our node secret and `other_key`, multiplying by `tweak` if
-    /// one is provided. Note that this tweak can be applied to `other_key` instead of our node
-    /// secret, though this is less efficient.
-    ///
-    /// Errors if the [`Recipient`] variant is not supported by the implementation.
-    fn ecdh(
-        &self,
-        recipient: Recipient,
-        other_key: &PublicKey,
-        tweak: Option<&Scalar>,
-    ) -> Result<SharedSecret, ()> {
-        match recipient {
-            Recipient::Node => {}
-            Recipient::PhantomNode => return Err(()),
-        }
-
-        // Clone other_key so that we can tweak it (if a tweak is required). We choose to tweak the
-        // `other_key` because LND's API accept a tweak parameter (so we can't tweak our secret).
-        let tweaked_key = if let Some(tweak) = tweak {
-            other_key.mul_tweak(&self.secp_ctx, tweak).map_err(|_| ())?
-        } else {
-            *other_key
-        };
-
-        let shared_secret = match block_on(self.signer.borrow_mut().derive_shared_key(
-            tonic_lnd::signrpc::SharedKeyRequest {
-                ephemeral_pubkey: tweaked_key.serialize().into_iter().collect::<Vec<u8>>(),
-                key_desc: None,
-                ..Default::default()
-            },
-        )) {
-            Ok(shared_key_resp) => shared_key_resp.into_inner().shared_key,
-            Err(_) => return Err(()),
-        };
-
-        match SharedSecret::from_slice(&shared_secret) {
-            Ok(secret) => Ok(secret),
-            Err(_) => Err(()),
-        }
-    }
-
-    fn get_inbound_payment_key_material(&self) -> KeyMaterial {
-        unimplemented!("not required for onion messaging");
-    }
-
-    fn sign_invoice(
-        &self,
-        _hrp_bytes: &[u8],
-        _invoice_data: &[u5],
-        _recipient: Recipient,
-    ) -> Result<RecoverableSignature, ()> {
-        unimplemented!("not required for onion messaging");
-    }
-
-    fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
-        unimplemented!("not required for onion messaging");
     }
 }
 
