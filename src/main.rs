@@ -45,9 +45,8 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{select, time, time::Duration, time::Interval};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
-    lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::GetInfoResponse, lnrpc::PeerEvent,
-    lnrpc::SendCustomMessageRequest, lnrpc::SendCustomMessageResponse, tonic::Code, tonic::Status,
-    Client, ConnectError, LightningClient, PeersClient,
+    lnrpc::CustomMessage, lnrpc::GetInfoRequest, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
+    lnrpc::SendCustomMessageResponse, tonic::Status, Client, ConnectError, LightningClient,
 };
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -79,22 +78,9 @@ async fn main() -> Result<(), ()> {
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}.");
 
-    if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
-        info!("Attempting to set onion messaging feature bit ({ONION_MESSAGES_OPTIONAL}).");
-
-        let mut node_info_retriever = GetInfoClient {
-            client: &mut client.lightning().clone(),
-        };
-        let mut announcement_updater = UpdateNodeAnnClient {
-            peers_client: client.peers(),
-        };
-        match set_feature_bit(&mut node_info_retriever, &mut announcement_updater).await {
-            Ok(_) => {}
-            Err(err) => {
-                error!("Error setting feature bit: {err}.");
-                return Err(());
-            }
-        }
+    if !features_support_onion_messages(&info.features) {
+        error!("LND must support onion messaging to run LNDK.");
+        return Err(());
     }
 
     // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
@@ -850,125 +836,6 @@ impl LndCfg {
     }
 }
 
-#[derive(Debug)]
-enum SetOnionBitError {
-    UnimplementedPeersService,
-    SetBitFail,
-    UpdateAnnouncementErr(Status),
-    GetInfoErr(Status),
-}
-
-impl Error for SetOnionBitError {}
-
-impl fmt::Display for SetOnionBitError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            SetOnionBitError::UnimplementedPeersService => write!(
-                f,
-                "peer service is unimplemented, remember to
-                enable the peerrpc services when building LND with make tags='peerrpc signrpc'"
-            ),
-            SetOnionBitError::SetBitFail => {
-                write!(f, "onion messaging feature bit failed to be set")
-            }
-            SetOnionBitError::UpdateAnnouncementErr(err) => {
-                write!(f, "error setting update announcement: {err}")
-            }
-            SetOnionBitError::GetInfoErr(err) => write!(f, "get_info error: {err}"),
-        }
-    }
-}
-
-#[async_trait]
-trait NodeInfoRetriever {
-    async fn get_info(
-        &mut self,
-        request: GetInfoRequest,
-    ) -> Result<GetInfoResponse, SetOnionBitError>;
-}
-
-struct GetInfoClient<'a> {
-    client: &'a mut LightningClient,
-}
-
-#[async_trait]
-impl<'a> NodeInfoRetriever for GetInfoClient<'a> {
-    async fn get_info(
-        &mut self,
-        request: GetInfoRequest,
-    ) -> Result<GetInfoResponse, SetOnionBitError> {
-        match self.client.get_info(request).await {
-            Ok(resp) => Ok(resp.into_inner()),
-            Err(status) => Err(SetOnionBitError::GetInfoErr(status)),
-        }
-    }
-}
-
-/// UpdateNodeAnnouncement defines the peer functionality needed to set the onion
-/// messaging feature bit.
-#[async_trait]
-trait UpdateNodeAnnouncement {
-    async fn update_node_announcement(
-        &mut self,
-        request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
-    ) -> Result<(), SetOnionBitError>;
-}
-
-struct UpdateNodeAnnClient<'a> {
-    peers_client: &'a mut PeersClient,
-}
-
-#[async_trait]
-impl<'a> UpdateNodeAnnouncement for UpdateNodeAnnClient<'a> {
-    async fn update_node_announcement(
-        &mut self,
-        request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
-    ) -> Result<(), SetOnionBitError> {
-        match self.peers_client.update_node_announcement(request).await {
-            Ok(_) => Ok(()),
-            Err(status) => {
-                if status.code() == Code::Unimplemented {
-                    return Err(SetOnionBitError::UnimplementedPeersService);
-                }
-
-                return Err(SetOnionBitError::UpdateAnnouncementErr(status));
-            }
-        }
-    }
-}
-
-/// Sets the onion messaging feature bit (described in this PR:
-/// https://github.com/lightning/bolts/pull/759/), to signal that we support
-/// onion messaging. This needs to be done every time LND starts up, because LND
-/// does not currently persist the custom feature bits that are set via the RPC.
-async fn set_feature_bit(
-    client: &mut impl NodeInfoRetriever,
-    peers_client: &mut impl UpdateNodeAnnouncement,
-) -> Result<(), SetOnionBitError> {
-    let feature_updates = vec![tonic_lnd::peersrpc::UpdateFeatureAction {
-        action: i32::from(tonic_lnd::peersrpc::UpdateAction::Add),
-        feature_bit: ONION_MESSAGES_OPTIONAL as i32,
-    }];
-
-    peers_client
-        .update_node_announcement(tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest {
-            feature_updates,
-            ..Default::default()
-        })
-        .await?;
-
-    // Call get_info again to check the bit was actually set.
-    let info = client.get_info(GetInfoRequest {}).await?;
-
-    if !info.features.contains_key(&ONION_MESSAGES_OPTIONAL) {
-        return Err(SetOnionBitError::SetBitFail);
-    }
-
-    info!("Successfully set onion messaging bit.");
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     pub mod test_utils;
@@ -983,147 +850,8 @@ mod tests {
     use lightning::util::ser::Readable;
     use lightning::util::ser::Writeable;
     use mockall::mock;
-    use std::collections::HashMap;
     use std::io::Cursor;
     use tokio::sync::mpsc::channel;
-
-    mock! {
-        InfoRetriever{}
-
-        #[async_trait]
-        impl NodeInfoRetriever for InfoRetriever{
-            async fn get_info(
-                &mut self, request: tonic_lnd::lnrpc::GetInfoRequest,
-            ) -> Result<tonic_lnd::lnrpc::GetInfoResponse, SetOnionBitError>;
-        }
-    }
-
-    mock! {
-        NodeAnnouncementUpdater{}
-
-        #[async_trait]
-        impl UpdateNodeAnnouncement for NodeAnnouncementUpdater{
-            async fn update_node_announcement(
-                &mut self, request: tonic_lnd::peersrpc::NodeAnnouncementUpdateRequest,
-            ) -> Result<(), SetOnionBitError>;
-        }
-    }
-
-    #[tokio::test]
-    async fn test_set_feature_bit_success() {
-        let mut client_mock = MockInfoRetriever::new();
-        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
-
-        // Let's first test that when the peer & main clients return the values
-        // we need, set_feature_bit works ok.
-        peers_client_mock
-            .expect_update_node_announcement()
-            .returning(|_| Ok(()));
-
-        client_mock.expect_get_info().returning(|_| {
-            Ok(GetInfoResponse {
-                features: HashMap::from([(
-                    ONION_MESSAGES_OPTIONAL,
-                    tonic_lnd::lnrpc::Feature {
-                        name: String::from("onion_message"),
-                        is_known: true,
-                        is_required: false,
-                    },
-                )]),
-                ..Default::default()
-            })
-        });
-
-        let set_feature_bit = set_feature_bit(&mut client_mock, &mut peers_client_mock).await;
-
-        matches!(set_feature_bit, Ok(()));
-    }
-
-    #[tokio::test]
-    async fn test_update_node_announcement_failure() {
-        let mut client_mock = MockInfoRetriever::new();
-        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
-
-        peers_client_mock
-            .expect_update_node_announcement()
-            .returning(|_| {
-                Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
-                    Code::Unavailable,
-                    "",
-                )))
-            });
-
-        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
-            .await
-            .expect_err("set_feature_bit should error");
-
-        // If the peers client returns a Status error, set_feature_bit should
-        // return that error.
-        matches!(set_feature_err, SetOnionBitError::UpdateAnnouncementErr(_));
-
-        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
-        peers_client_mock
-            .expect_update_node_announcement()
-            .returning(|_| {
-                Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
-                    Code::Unimplemented,
-                    "",
-                )))
-            });
-
-        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
-            .await
-            .expect_err("set_feature_bit should error with unavailable");
-
-        // If the peers client returns Code::Unimplemented, we should get
-        // the correct error message.
-        matches!(set_feature_err, SetOnionBitError::UnimplementedPeersService);
-    }
-
-    #[tokio::test]
-    async fn test_check_if_onion_message_set_failure() {
-        let mut client_mock = MockInfoRetriever::new();
-        let mut peers_client_mock = MockNodeAnnouncementUpdater::new();
-
-        peers_client_mock
-            .expect_update_node_announcement()
-            .returning(|_| Ok(()));
-
-        client_mock.expect_get_info().returning(|_| {
-            Err(SetOnionBitError::UpdateAnnouncementErr(Status::new(
-                Code::Unavailable,
-                "",
-            )))
-        });
-
-        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
-            .await
-            .expect_err("set_feature_bit should error with unavailable");
-
-        matches!(set_feature_err, SetOnionBitError::UpdateAnnouncementErr(_));
-
-        // If get_info returns a response with the wrong feature bit set,
-        // set_feature_bit should throw another error.
-        client_mock.expect_get_info().returning(|_| {
-            Ok(GetInfoResponse {
-                features: HashMap::from([(
-                    8,
-                    tonic_lnd::lnrpc::Feature {
-                        name: String::from("testing"),
-                        is_known: true,
-                        is_required: false,
-                    },
-                )]),
-                ..Default::default()
-            })
-        });
-
-        let set_feature_err = set_feature_bit(&mut client_mock, &mut peers_client_mock)
-            .await
-            .expect_err("set_feature_bit should error");
-
-        matches!(set_feature_err, SetOnionBitError::SetBitFail);
-    }
 
     // Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
     // messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
