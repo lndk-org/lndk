@@ -5,7 +5,12 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
 
-// MessengerUtilities implements some utilites required for onion messenging.
+/// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait implementations for LDK’s 
+/// OnionMessenger.
+///
+/// A refcell is used for entropy_source to provide interior mutibility for ChaCha20Rng. We need a mutable reference 
+/// to be able to use the chacha library’s fill_bytes method, but the EntropySource interface in LDK is for an 
+/// immutable reference.
 pub(crate) struct MessengerUtilities {
     entropy_source: RefCell<ChaCha20Rng>,
 }
