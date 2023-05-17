@@ -43,6 +43,7 @@ pub(crate) fn features_support_onion_messages(
         || features.contains_key(&ONION_MESSAGES_REQUIRED)
 }
 
+/// LndNodeSigner provides signing operations using LND's signer subserver.
 pub(crate) struct LndNodeSigner<'a> {
     pubkey: PublicKey,
     secp_ctx: Secp256k1<secp256k1::All>,
