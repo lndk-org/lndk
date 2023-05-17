@@ -57,7 +57,7 @@ protocol.custom-init=39
 Now we need to set up LNDK. To start:
 
 ```
-git clone https://github.com/carlaKC/lndk
+git clone https://github.com/lndk-org/lndk
 cd lndk
 ```
 In order for `LNDK` successfully connect to `LND`, we need to pass in the grpc address and authentication credentials. There are two ways to do this:
