@@ -21,6 +21,7 @@ General guidelines for code contribution:
 4. Bug fixes should start with a test demonstrating the bug, then add the fix and update the test to illustrate that the bug has been addressed.
 5. It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev) to verify the trustworthiness of any added dependencies, which should be kept to a minimum where possible.
 6. Test changes on regtest where possible. See [Github Discussions](https://github.com/lndk-org/lndk/discussions) for guides on setting up local development environments (and other meta topics).
+7. If the code introduces any new lnd grpc calls, remember to update the [bakemacaroon command](https://github.com/lndk-org/lndk/blob/master/README.md#custom-macaroon) in the README docs to keep it up to date.
 
 #### Process
 0. **Issue creation**: If no issue is open for the work you'd like to implement, please open one as a preliminary step so that other contributors can comment on the proposed approach and suitableness of the feature for the repo.

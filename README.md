@@ -83,6 +83,14 @@ Or in a more concrete example:
 
 - Use any of the commands with the --help option for more information about each argument.
 
+#### Custom macaroon
+
+Rather than use the admin.macaroon with unrestricted permission to an `LND` node, we can bake a macaroon using lncli with much more specific permissions for better security. With this command, generate a macaroon which will give `LNDK` only the specific grpc endpoints it's designed to hit:
+
+```
+lncli --save_to=<FILEPATH>/lndk.macaroon uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/SubscribePeerEvents uri:/lnrpc.Lightning/SendCustomMessage uri:/lnrpc.Lightning/SubscribeCustomMessages uri:/peersrpc.Peers/UpdateNodeAnnouncement uri:/signrpc.Signer/DeriveSharedKey
+```
+
 ## Security
 
 NOTE: It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev)
