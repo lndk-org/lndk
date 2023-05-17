@@ -1,3 +1,5 @@
+mod clock;
+mod rate_limit;
 mod internal {
     #![allow(clippy::enum_variant_names)]
     #![allow(clippy::unnecessary_lazy_evaluations)]
@@ -11,6 +13,8 @@ mod internal {
 #[macro_use]
 extern crate configure_me;
 
+use crate::clock::TokioClock;
+use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::secp256k1::ecdh::SharedSecret;
@@ -50,6 +54,9 @@ const ONION_MESSAGES_REQUIRED: u32 = 38;
 const ONION_MESSAGES_OPTIONAL: u32 = 39;
 const ONION_MESSAGE_TYPE: u32 = 513;
 const MSG_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+const DEFAULT_CALL_COUNT: u8 = 10;
+const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -229,12 +236,18 @@ where
     // allow interior mutibility (see LndNodeSigner) so this function can't safely be passed off to another thread.
     // This function is expected to finish if any producing thread exits (because we're not longer receiving the
     // events we need).
-    let peers = &mut CurrentPeers::new(current_peers);
+    let rate_limiter = &mut TokenLimiter::new(
+        current_peers.keys().copied(),
+        DEFAULT_CALL_COUNT,
+        DEFAULT_CALL_FREQUENCY,
+        TokioClock::new(),
+    );
     let mut message_sender = CustomMessenger {
         client: ln_client.clone(),
     };
     let consume_result =
-        consume_messenger_events(onion_messenger, receiver, &mut message_sender, peers).await;
+        consume_messenger_events(onion_messenger, receiver, &mut message_sender, rate_limiter)
+            .await;
     match consume_result {
         Ok(_) => info!("Consume messenger events exited."),
         Err(e) => error!("Consume messenger events exited: {e}."),
@@ -542,7 +555,7 @@ async fn consume_messenger_events(
     onion_messenger: impl OnionMessageHandler,
     mut events: Receiver<MessengerEvents>,
     message_sender: &mut impl SendCustomMessage,
-    current_peers: &mut CurrentPeers,
+    rate_limiter: &mut impl RateLimiter,
 ) -> Result<(), ConsumerError> {
     while let Some(onion_event) = events.recv().await {
         match onion_event {
@@ -573,22 +586,28 @@ async fn consume_messenger_events(
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
                 // local version up to date so we send outgoing OMs all of our peers.
-                current_peers.peer_connected(pubkey, onion_support);
+                rate_limiter.peer_connected(pubkey);
             }
             MessengerEvents::PeerDisconnected(pubkey) => {
                 onion_messenger.peer_disconnected(&pubkey);
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
                 // local version up to date so we send outgoing OMs to our correct peers.
-                current_peers.peer_disconnected(pubkey);
+                rate_limiter.peer_disconnected(pubkey);
             }
             MessengerEvents::IncomingMessage(pubkey, onion_message) => {
+                if !rate_limiter.query_peer(pubkey) {
+                    info!("Peer: {pubkey} hit rate limit, dropping incoming onion message");
+                    continue;
+                }
+
                 onion_messenger.handle_onion_message(&pubkey, &onion_message)
             }
             MessengerEvents::SendOutgoing => {
-                for peer in current_peers.map.keys() {
-                    while let Some(msg) = onion_messenger.next_onion_message_for_peer(*peer) {
-                        relay_outgoing_msg_event(peer, msg, message_sender).await;
+                for peer in rate_limiter.peers() {
+                    if let Some(msg) = onion_messenger.next_onion_message_for_peer(peer) {
+                        info!("Sending outgoing onion message to {peer}.");
+                        relay_outgoing_msg_event(&peer, msg, message_sender).await;
                     }
                 }
             }
@@ -599,25 +618,6 @@ async fn consume_messenger_events(
     }
 
     Ok(())
-}
-
-// CurrentPeers keeps up-to-date with all of the peers we're connected and disconnected to using a map.
-struct CurrentPeers {
-    map: HashMap<PublicKey, bool>,
-}
-
-impl CurrentPeers {
-    fn new(peers: HashMap<PublicKey, bool>) -> CurrentPeers {
-        CurrentPeers { map: peers }
-    }
-
-    fn peer_connected(&mut self, peer_key: PublicKey, onion_support: bool) {
-        self.map.insert(peer_key, onion_support);
-    }
-
-    fn peer_disconnected(&mut self, peer_key: PublicKey) {
-        self.map.remove(&peer_key);
-    }
 }
 
 #[async_trait]
@@ -971,9 +971,11 @@ async fn set_feature_bit(
 
 #[cfg(test)]
 mod tests {
+    pub mod test_utils;
+
     use super::*;
-    use bitcoin::secp256k1::rand::rngs::OsRng;
-    use bitcoin::secp256k1::{PublicKey, Secp256k1};
+    use crate::tests::test_utils::pubkey;
+    use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
@@ -1123,19 +1125,12 @@ mod tests {
         matches!(set_feature_err, SetOnionBitError::SetBitFail);
     }
 
-    // Generates a new pubkey for testing purposes.
-    fn pubkey() -> PublicKey {
-        let secp = Secp256k1::new();
-        let (_, pubkey) = secp.generate_keypair(&mut OsRng);
-        pubkey
-    }
-
     // Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
     // messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
     // are not public).
     fn onion_message() -> OnionMessage {
         let mut w = vec![];
-        let pubkey_bytes = pubkey().serialize();
+        let pubkey_bytes = pubkey(0).serialize();
 
         // Blinding point for the onion message.
         w.put_slice(&pubkey_bytes);
@@ -1192,40 +1187,62 @@ mod tests {
          }
     }
 
+    mock! {
+        RateLimiter{}
+
+        impl RateLimiter for RateLimiter{
+            fn peer_connected(&mut self, peer_key: PublicKey);
+            fn peer_disconnected(&mut self, peer_key: PublicKey);
+            fn peers(&self) -> Vec<PublicKey>;
+            fn query_peer(&mut self, peer_key: PublicKey) -> bool;
+        }
+    }
+
     #[tokio::test]
     async fn test_consume_messenger_events() {
-        let (sender, receiver) = channel(6);
+        let (sender, receiver) = channel(8);
 
-        let pk_1 = pubkey();
-        let pk_2 = pubkey();
+        let pk_1 = pubkey(1);
+        let pk_2 = pubkey(2);
         let mut mock = MockOnionHandler::new();
         let mut sender_mock = MockSendCustomMessenger::new();
-        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk_1, true)]));
+        let mut rate_limiter = MockRateLimiter::new();
 
-        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
-        mock.expect_next_onion_message_for_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
-            .returning(|_| Some(onion_message()));
-
-        let result = mock.next_onion_message_for_peer(pk_1);
-        assert!(result.is_some());
-
-        mock.checkpoint();
-        mock.expect_next_onion_message_for_peer()
-            .returning(|_| None);
-
-        let result = mock.next_onion_message_for_peer(pk_2);
-        assert!(result.is_none());
+        // Setup rate limiter to no-op on peer connected / disconnected calls (we have proper assertions for the onion
+        // messenger's calls anyway).
+        rate_limiter.expect_peer_connected().returning(|_| {});
+        rate_limiter.expect_peer_disconnected().returning(|_| {});
 
         // Peer connected: onion messaging supported.
         sender
-            .send(MessengerEvents::PeerConnected(pk_1, true))
+            .send(MessengerEvents::PeerConnected(pk_2, true))
             .await
             .unwrap();
 
         mock.expect_peer_connected()
             .withf(|_: &PublicKey, init: &Init, _: &bool| init.features.supports_onion_messages())
             .return_once(|_, _, _| Ok(()));
+
+        // Add two polling events for custom messages.
+        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
+        sender.send(MessengerEvents::SendOutgoing).await.unwrap();
+
+        rate_limiter
+            .expect_peers()
+            .returning(move || vec![pk_1.clone(), pk_2.clone()]);
+
+        // Set up our mock to return an onion message for pk_1, and no onion messages for pk_2.
+        mock.expect_next_onion_message_for_peer()
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .returning(|_| Some(onion_message()));
+
+        mock.expect_next_onion_message_for_peer()
+            .returning(|_| None);
+
+        sender_mock
+            .expect_send_custom_message()
+            .times(2)
+            .returning(|_| Ok(SendCustomMessageResponse {}));
 
         // Peer connected: onion messaging not supported.
         sender
@@ -1244,13 +1261,31 @@ mod tests {
             .unwrap();
         mock.expect_peer_disconnected().return_once(|_| ());
 
-        // Cover incoming onion messages.
+        // Cover incoming onion messages - rate limiter allows incoming.
         let onion_message = onion_message();
         sender
-            .send(MessengerEvents::IncomingMessage(pk_1, onion_message))
+            .send(MessengerEvents::IncomingMessage(
+                pk_1,
+                onion_message.clone(),
+            ))
             .await
             .unwrap();
+
+        rate_limiter
+            .expect_query_peer()
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .returning(|_| true);
         mock.expect_handle_onion_message().return_once(|_, _| ());
+
+        // Cover incoming onion messages - rate limiter disallows incoming.
+        sender
+            .send(MessengerEvents::IncomingMessage(pk_2, onion_message))
+            .await
+            .unwrap();
+        rate_limiter
+            .expect_query_peer()
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_2.clone())
+            .returning(|_| false);
 
         // Finally, send a producer exit event to test exit.
         sender
@@ -1260,9 +1295,10 @@ mod tests {
             .await
             .unwrap();
 
-        let consume_err = consume_messenger_events(mock, receiver, &mut sender_mock, current_peers)
-            .await
-            .expect_err("consume should error");
+        let consume_err =
+            consume_messenger_events(mock, receiver, &mut sender_mock, &mut rate_limiter)
+                .await
+                .expect_err("consume should error");
         matches!(consume_err, ConsumerError::PeerProducerExit);
     }
 
@@ -1270,9 +1306,9 @@ mod tests {
     async fn test_consumer_exit_onion_messenger_failure() {
         let (sender, receiver) = channel(1);
 
-        let pk = pubkey();
+        let pk = pubkey(0);
         let mut mock = MockOnionHandler::new();
-        let current_peers = &mut CurrentPeers::new(HashMap::from([(pk, true)]));
+        let mut rate_limiter = MockRateLimiter::new();
 
         // Send a peer connected event, but mock out an error on the handler's connected function.
         sender
@@ -1283,9 +1319,10 @@ mod tests {
 
         let mut sender_mock = MockSendCustomMessenger::new();
 
-        let consume_err = consume_messenger_events(mock, receiver, &mut sender_mock, current_peers)
-            .await
-            .expect_err("consume should error");
+        let consume_err =
+            consume_messenger_events(mock, receiver, &mut sender_mock, &mut rate_limiter)
+                .await
+                .expect_err("consume should error");
         matches!(consume_err, ConsumerError::OnionMessengerFailure);
     }
 
@@ -1296,13 +1333,13 @@ mod tests {
         let (sender_done, receiver_done) = channel(1);
         drop(sender_done);
         let mut sender_mock = MockSendCustomMessenger::new();
-        let current_peers = &mut CurrentPeers::new(HashMap::new());
+        let mut rate_limiter = MockRateLimiter::new();
 
         assert!(consume_messenger_events(
             MockOnionHandler::new(),
             receiver_done,
             &mut sender_mock,
-            current_peers
+            &mut rate_limiter,
         )
         .await
         .is_ok());
@@ -1318,7 +1355,7 @@ mod tests {
         // Peer connects and we successfully lookup its support for onion messages.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOnline),
             })
         });
@@ -1327,7 +1364,7 @@ mod tests {
         // Peer connects with no onion support.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOnline),
             })
         });
@@ -1336,7 +1373,7 @@ mod tests {
         // Peer disconnects.
         mock.expect_receive().times(1).returning(|| {
             Ok(PeerEvent {
-                pub_key: pubkey().to_string(),
+                pub_key: pubkey(0).to_string(),
                 r#type: i32::from(PeerOffline),
             })
         });
@@ -1402,7 +1439,7 @@ mod tests {
         // Send a custom message that is not relevant to us.
         mock.expect_receive().times(1).returning(|| {
             Ok(CustomMessage {
-                peer: pubkey().serialize().to_vec(),
+                peer: pubkey(0).serialize().to_vec(),
                 r#type: 3,
                 data: vec![1, 2, 3],
             })
@@ -1414,7 +1451,7 @@ mod tests {
             onion_message().write(&mut w).unwrap();
 
             Ok(CustomMessage {
-                peer: pubkey().serialize().to_vec(),
+                peer: pubkey(0).serialize().to_vec(),
                 r#type: ONION_MESSAGE_TYPE,
                 data: w,
             })
