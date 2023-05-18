@@ -58,17 +58,19 @@ cosign verify-blob --key cosign.pub --bundle cosign.bundle checksums.txt
 
 ### On day of new release
 
+Make sure that [git-cliff](https://github.com/orhun/git-cliff) is installed, it will be used to generate a changelog.
+
 We'll be using `cargo-release` to simplify the process.
-A single command is run for a new release tagged `v0.0.1` for example:
+A single command is run on master for a new release tagged `v0.0.1` for example:
 
 ```shell
-cargo release --no-publish --execute --tag 0.0.11
+cargo release --no-publish --execute --tag 0.0.11 --remote-push upstream
 ```
 
 NOTE: The `v` prefix is excluded in the command about, but the git tag will include it.
 
 The command above does quite a lot for us. It generates the changelog with `git-cliff`,
-bumps the project's version number, commits thos changes and atomically pushes the changes
+bumps the project's version number, commits the changes and atomically pushes the changes
 and tag.
 
 [sigstore]: https://docs.sigstore.dev/
