@@ -1,5 +1,6 @@
 mod clock;
 mod lnd;
+mod lnd_compatibility;
 mod onion_messenger;
 mod rate_limit;
 mod internal {
@@ -16,16 +17,17 @@ mod internal {
 extern crate configure_me;
 
 use crate::lnd::{features_support_onion_messages, get_lnd_client, LndCfg, LndNodeSigner};
-
 use crate::onion_messenger::{run_onion_messenger, MessengerUtilities};
 use bitcoin::secp256k1::PublicKey;
 use internal::*;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::onion_message::OnionMessenger;
+use lnd_compatibility::VersionInfo;
 use log::{error, info};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::verrpc::VersionRequest;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -51,6 +53,28 @@ async fn main() -> Result<(), ()> {
     if !features_support_onion_messages(&info.features) {
         error!("LND must support onion messaging to run LNDK.");
         return Err(());
+    }
+
+    let version_info = client
+        .versioner()
+        .get_version(VersionRequest {})
+        .await
+        .expect("failed to get version")
+        .into_inner();
+
+    let version_args = VersionInfo {
+        version: version_info.version,
+        app_minor: version_info.app_minor,
+        app_patch: version_info.app_patch,
+        build_tags: version_info.build_tags,
+    };
+
+    let startup_checks: Result<i32, String> =
+        lnd_compatibility::Compatibility::check_compatibility(version_args).await;
+
+    match startup_checks {
+        Ok(_) => info!("Running version of LND is compatible with LNDK"),
+        Err(error) => error!("{error}"),
     }
 
     // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
