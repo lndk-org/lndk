@@ -1,8 +1,13 @@
 use bitcoincore_rpc::{bitcoin::Network, json, RpcApi};
 use bitcoind::{BitcoinD, Conf, ConnectParams};
+use electrsd::ElectrsD;
 use flate2::read::GzDecoder;
+use ldk_node::bitcoin::Network as LdkNetwork;
+use ldk_node::io::SqliteStore;
+use ldk_node::{Builder as LdkBuilder, NetAddress, Node};
 use std::env;
 use std::process::{Child, Command, Stdio};
+use std::str::FromStr;
 use std::thread;
 use tar::Archive;
 use tempfile::{tempdir, Builder, TempDir};
@@ -11,16 +16,37 @@ use tonic_lnd::Client;
 
 const LND_VERSION: &str = "0.16.2";
 
-// setup_test_infrastructure spins up all of the infrastructure we need to test LNDK, including a bitcoind node and a
-// LND node. LNDK can then use this test environment to run.
-pub async fn setup_test_infrastructure() -> (BitcoinD, LndNode, TempDir) {
+// setup_test_infrastructure spins up all of the infrastructure we need to test LNDK, including a bitcoind node, an LND
+// node, an electrsd instance (required for now for LDK to run), and a LDK node. LNDK can then use this test
+// environment to run.
+pub async fn setup_test_infrastructure() -> (
+    BitcoinD,
+    LndNode,
+    TempDir,
+    ElectrsD,
+    Node<SqliteStore>,
+    TempDir,
+) {
     let (bitcoind, bitcoind_dir) = setup_bitcoind().await;
     let lnd_exe_dir = download_lnd().await;
 
     let mut lnd_node = LndNode::new(bitcoind.params.clone(), lnd_exe_dir);
     lnd_node.setup_client().await;
 
-    return (bitcoind, lnd_node, bitcoind_dir);
+    // We also need to set up electrs, because that's the way ldk-node (currently) communicates with bitcoind to get
+    // bitcoin blocks and transactions.
+    let electrsd = setup_electrs().await;
+    let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
+    let (ldk_node, ldk_dir) = setup_ldk(esplora_url).await;
+
+    return (
+        bitcoind,
+        lnd_node,
+        bitcoind_dir,
+        electrsd,
+        ldk_node,
+        ldk_dir,
+    );
 }
 
 pub async fn setup_bitcoind() -> (BitcoinD, TempDir) {
@@ -45,6 +71,48 @@ pub async fn setup_bitcoind() -> (BitcoinD, TempDir) {
     bitcoind.client.generate_to_address(101, &address).unwrap();
 
     (bitcoind, bitcoind_dir)
+}
+
+// setup_electrs sets up the electrs instance required (for the time being) for us to connect to an LDK node.
+pub async fn setup_electrs() -> ElectrsD {
+    let bitcoind_exe = env::var("BITCOIND_EXE")
+        .ok()
+        .or_else(|| electrsd::bitcoind::downloaded_exe_path().ok())
+        .expect(
+            "you need to provide an env var BITCOIND_EXE or specify a bitcoind version feature",
+        );
+    let bitcoind_dir = tempdir().unwrap();
+    let bitcoind_dir_path = bitcoind_dir.path().clone().to_path_buf();
+    let mut bitcoind_conf = electrsd::bitcoind::Conf::default();
+    let port = bitcoind::get_available_port().unwrap();
+    let zmq_block_port = bitcoind::get_available_port().unwrap();
+    let zmq_tx_port = bitcoind::get_available_port().unwrap();
+    let port_str = format!("-port={}", port);
+    let bind_str = format!("-bind=127.0.0.1:{}=onion", port);
+    let zmq_block_str = format!("-zmqpubrawblock=tcp://127.0.0.1:{}", zmq_block_port);
+    let zmq_tx_str = format!("-zmqpubrawtx=tcp://127.0.0.1:{}", zmq_tx_port);
+    bitcoind_conf.tmpdir = Some(bitcoind_dir_path);
+    bitcoind_conf.p2p = electrsd::bitcoind::P2P::Yes;
+    bitcoind_conf.args = vec![
+        "-server",
+        "-regtest",
+        &port_str,
+        &bind_str,
+        &zmq_block_str,
+        &zmq_tx_str,
+    ];
+    let bitcoind = electrsd::bitcoind::BitcoinD::with_conf(bitcoind_exe, &bitcoind_conf).unwrap();
+
+    let electrs_exe =
+        electrsd::downloaded_exe_path().expect("electrs version feature must be enabled");
+    let mut electrsd_conf = electrsd::Conf::default();
+    let electrsd_dir = tempdir().unwrap();
+    let electrsd_dir_path = electrsd_dir.path().clone().to_path_buf();
+    electrsd_conf.tmpdir = Some(electrsd_dir_path);
+    electrsd_conf.http_enabled = true;
+    electrsd_conf.network = "regtest";
+
+    ElectrsD::with_conf(electrs_exe, &bitcoind, &electrsd_conf).unwrap()
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -190,4 +258,22 @@ impl LndNode {
             }
         }
     }
+}
+
+// setup_ldk sets up an ldk node.
+async fn setup_ldk(esplora_url: String) -> (Node<SqliteStore>, TempDir) {
+    let mut builder = LdkBuilder::new();
+    builder.set_network(LdkNetwork::Regtest);
+    builder.set_esplora_server(esplora_url);
+
+    let ldk_dir = tempdir().unwrap();
+    let ldk_dir_path = ldk_dir.path().to_str().unwrap().to_string();
+    builder.set_storage_dir_path(ldk_dir_path);
+
+    let open_port = bitcoind::get_available_port().unwrap();
+    let listening_addr = NetAddress::from_str(&format!("127.0.0.1:{open_port}")).unwrap();
+    builder.set_listening_address(listening_addr);
+
+    let node = builder.build();
+    (node.unwrap(), ldk_dir)
 }
