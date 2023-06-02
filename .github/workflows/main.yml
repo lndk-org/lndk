@@ -24,7 +24,7 @@ jobs:
         name: cargo test
         with:
           command: test
-          args: --all-targets --benches
+          args: --all-targets --benches -- --test-threads=1
       - uses: actions-rs/cargo@v1
         name: cargo fmt
         with:
