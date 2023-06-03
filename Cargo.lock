@@ -1224,6 +1224,7 @@ dependencies = [
  "bitcoin 0.29.2",
  "bitcoind 0.30.0",
  "bytes",
+ "chrono",
  "configure_me",
  "configure_me_codegen",
  "core-rpc",

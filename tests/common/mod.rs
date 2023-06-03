@@ -1,11 +1,13 @@
 use bitcoincore_rpc::{bitcoin::Network, json, RpcApi};
 use bitcoind::{BitcoinD, Conf, ConnectParams};
+use chrono::Utc;
 use electrsd::ElectrsD;
 use flate2::read::GzDecoder;
 use ldk_node::bitcoin::Network as LdkNetwork;
 use ldk_node::io::SqliteStore;
 use ldk_node::{Builder as LdkBuilder, NetAddress, Node};
 use std::env;
+use std::fs::File;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::thread;
@@ -16,10 +18,16 @@ use tonic_lnd::Client;
 
 const LND_VERSION: &str = "0.16.2";
 
-// setup_test_infrastructure spins up all of the infrastructure we need to test LNDK, including a bitcoind node, an LND
-// node, an electrsd instance (required for now for LDK to run), and a LDK node. LNDK can then use this test
-// environment to run.
-pub async fn setup_test_infrastructure() -> (
+// setup_test_infrastructure spins up all of the infrastructure we need to test LNDK, including a bitcoind node and two
+// LND nodes. LNDK can then use this test environment to run.
+//
+// Notes for developers looking for associated logs:
+// - Logs for LND and LDK for the integration tests live in /tmp (or whatever the temporary directory is in the
+// corresponding OS).
+// - The "test_name" parameter is required to distinguish the logs coming from different integration tests.
+pub async fn setup_test_infrastructure(
+    test_name: String,
+) -> (
     BitcoinD,
     LndNode,
     TempDir,
@@ -30,7 +38,7 @@ pub async fn setup_test_infrastructure() -> (
     let (bitcoind, bitcoind_dir) = setup_bitcoind().await;
     let lnd_exe_dir = download_lnd().await;
 
-    let mut lnd_node = LndNode::new(bitcoind.params.clone(), lnd_exe_dir);
+    let mut lnd_node = LndNode::new(bitcoind.params.clone(), lnd_exe_dir, test_name);
     lnd_node.setup_client().await;
 
     // We also need to set up electrs, because that's the way ldk-node (currently) communicates with bitcoind to get
@@ -165,19 +173,32 @@ pub struct LndNode {
 }
 
 impl LndNode {
-    fn new(bitcoind_connect_params: ConnectParams, lnd_exe_dir: TempDir) -> LndNode {
+    fn new(
+        bitcoind_connect_params: ConnectParams,
+        lnd_exe_dir: TempDir,
+        test_name: String,
+    ) -> LndNode {
         env::set_current_dir(lnd_exe_dir.path().join("lnd-linux-amd64-v0.16.2-beta"))
             .expect("couldn't set current directory");
 
         let lnd_dir_binding = Builder::new().prefix("lnd").tempdir().unwrap();
         let lnd_dir = lnd_dir_binding.path();
 
-        let cert_path = lnd_dir.join("tls.cert").to_str().unwrap().to_string();
+        let now_timestamp = Utc::now();
+        let timestamp = now_timestamp.format("%d-%m-%Y-%H-%M");
+        let lnd_log_dir = env::temp_dir().join(format!("lnd_logs"));
+        let log_dir_path_buf = lnd_log_dir.join(format!("lnd-logs-{test_name}-{timestamp}"));
+        let log_dir = log_dir_path_buf.as_path();
+        let data_dir = lnd_dir.join("data").to_str().unwrap().to_string();
+        let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
+        let key_path = lnd_dir.to_str().unwrap().to_string() + "/tls.key";
+        let config_path = lnd_dir.to_str().unwrap().to_string() + "/lnd.conf";
         let macaroon_path = lnd_dir
             .join("data/chain/bitcoin/regtest/admin.macaroon")
             .to_str()
             .unwrap()
             .to_string();
+        let _file = File::create(config_path.clone()).unwrap();
 
         // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd node, they won't
         // clash.
@@ -191,7 +212,11 @@ impl LndNode {
             format!("--bitcoin.active"),
             format!("--bitcoin.node=bitcoind"),
             format!("--bitcoin.regtest"),
-            format!("--lnddir={}", lnd_dir.display()),
+            format!("--datadir={}", data_dir),
+            format!("--tlscertpath={}", cert_path),
+            format!("--tlskeypath={}", key_path),
+            format!("--configfile={}", config_path),
+            format!("--logdir={}", log_dir.display()),
             format!(
                 "--bitcoind.rpccookie={}",
                 bitcoind_connect_params.cookie_file.display()

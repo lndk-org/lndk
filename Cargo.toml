@@ -27,6 +27,7 @@ bytes = "1.4.0"
 [dev-dependencies]
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
 bitcoind = { version = "0.30.0", features = [ "22_0" ] }
+chrono = { version = "0.4.26" }
 electrsd = { version = "0.22.0", features = ["legacy", "esplora_a33e97e1", "bitcoind_23_0"] }
 flate2 = "1.0.25"
 ldk-node = "0.1.0"
