@@ -25,6 +25,18 @@ jobs:
         with:
           command: test
           args: --all-targets --benches -- --test-threads=1
+      - name: Archive lnd logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: lnd-logs
+          path: |
+            /tmp/lnd_logs
+      - name: Archive ldk logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: ldk-logs
+          path: |
+            /tmp/ldk_logs
       - uses: actions-rs/cargo@v1
         name: cargo fmt
         with:
