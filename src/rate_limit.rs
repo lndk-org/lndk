@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::marker::Copy;
 use tokio::time::{Duration, Instant};
 
-/// PeerRecord holds information about a peer that we are (or have been) connected to to.
+/// PeerRecord holds information about a peer that we are (or have been) connected to.
 #[derive(Copy, Clone)]
 struct PeerRecord {
     online: bool,
@@ -37,7 +37,7 @@ pub(crate) trait RateLimiter {
 /// Tracking and updating of call counts is lazily implemented. Each time we get an incoming hit, TokenLimiter will
 /// check whether it's reached a new "period" and update each peer's allocation accordingly.
 ///
-/// When a peer disconnects it it still tracked by the TokenLimiter until the next period elapses. This prevents peers
+/// When a peer disconnects it is still tracked by the TokenLimiter until the next period elapses. This prevents peers
 /// from disconnecting and reconnecting to cheat our rate limiting. Once a single period has elapsed after disconnect,
 /// we can safely remove the peer because there's nothing left to game (they would have gotten a fresh allocation
 /// anyway).

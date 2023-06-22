@@ -44,7 +44,7 @@ const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait implementations for LDK’s
 /// OnionMessenger.
 ///
-/// A refcell is used for entropy_source to provide interior mutibility for ChaCha20Rng. We need a mutable reference
+/// A refcell is used for entropy_source to provide interior mutability for ChaCha20Rng. We need a mutable reference
 /// to be able to use the chacha library’s fill_bytes method, but the EntropySource interface in LDK is for an
 /// immutable reference.
 pub(crate) struct MessengerUtilities {
@@ -189,8 +189,8 @@ where
     });
 
     // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
-    // allow interior mutibility (see LndNodeSigner) so this function can't safely be passed off to another thread.
-    // This function is expected to finish if any producing thread exits (because we're not longer receiving the
+    // allow interior mutability (see LndNodeSigner) so this function can't safely be passed off to another thread.
+    // This function is expected to finish if any producing thread exits (because we're no longer receiving the
     // events we need).
     let rate_limiter = &mut TokenLimiter::new(
         current_peers.keys().copied(),
