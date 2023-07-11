@@ -38,14 +38,14 @@ pub async fn setup_test_infrastructure(
     let (bitcoind, bitcoind_dir) = setup_bitcoind().await;
     let lnd_exe_dir = download_lnd().await;
 
-    let mut lnd_node = LndNode::new(bitcoind.params.clone(), lnd_exe_dir, test_name);
+    let mut lnd_node = LndNode::new(bitcoind.params.clone(), lnd_exe_dir, test_name.clone());
     lnd_node.setup_client().await;
 
     // We also need to set up electrs, because that's the way ldk-node (currently) communicates with bitcoind to get
     // bitcoin blocks and transactions.
     let electrsd = setup_electrs().await;
     let esplora_url = format!("http://{}", electrsd.esplora_url.as_ref().unwrap());
-    let (ldk_node, ldk_dir) = setup_ldk(esplora_url).await;
+    let (ldk_node, ldk_dir) = setup_ldk(esplora_url, test_name).await;
 
     return (
         bitcoind,
@@ -286,14 +286,25 @@ impl LndNode {
 }
 
 // setup_ldk sets up an ldk node.
-async fn setup_ldk(esplora_url: String) -> (Node<SqliteStore>, TempDir) {
+async fn setup_ldk(esplora_url: String, test_name: String) -> (Node<SqliteStore>, TempDir) {
     let mut builder = LdkBuilder::new();
     builder.set_network(LdkNetwork::Regtest);
     builder.set_esplora_server(esplora_url);
 
     let ldk_dir = tempdir().unwrap();
     let ldk_dir_path = ldk_dir.path().to_str().unwrap().to_string();
+
+    let now_timestamp = Utc::now();
+    let timestamp = now_timestamp.format("%d-%m-%Y-%H-%M");
+    let ldk_log_dir = env::temp_dir().join(format!("ldk_logs"));
+    let ldk_log_dir_path = ldk_log_dir
+        .join(format!("ldk-logs-{test_name}-{timestamp}"))
+        .into_os_string()
+        .into_string()
+        .unwrap();
+
     builder.set_storage_dir_path(ldk_dir_path);
+    builder.set_log_dir_path(ldk_log_dir_path);
 
     let open_port = bitcoind::get_available_port().unwrap();
     let listening_addr = NetAddress::from_str(&format!("127.0.0.1:{open_port}")).unwrap();

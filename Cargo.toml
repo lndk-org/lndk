@@ -30,7 +30,7 @@ bitcoind = { version = "0.30.0", features = [ "22_0" ] }
 chrono = { version = "0.4.26" }
 electrsd = { version = "0.22.0", features = ["legacy", "esplora_a33e97e1", "bitcoind_23_0"] }
 flate2 = "1.0.25"
-ldk-node = "0.1.0"
+ldk-node = { git = "https://github.com/lightningdevkit/ldk-node", rev = "3a31209" }
 minreq = { version = "2.7.0", features = [ "https" ] }
 mockall = "0.11.3"
 tar = "0.4.38"
