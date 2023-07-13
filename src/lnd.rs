@@ -22,14 +22,14 @@ pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
 }
 
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
-pub(crate) struct LndCfg {
+pub struct LndCfg {
     address: String,
     cert: PathBuf,
     macaroon: PathBuf,
 }
 
 impl LndCfg {
-    pub(crate) fn new(address: String, cert: PathBuf, macaroon: PathBuf) -> LndCfg {
+    pub fn new(address: String, cert: PathBuf, macaroon: PathBuf) -> LndCfg {
         LndCfg {
             address,
             cert,
