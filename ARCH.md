@@ -10,7 +10,7 @@ The use of LND's flexible API and LDK's modular lightning library allows us to r
 So, basically, Frankeinstein's monster. With extra steps.
 
 ### Onion Messages
-Onion messaging is implemented using by implementing a custom version of LDK's [OnionMessenger](https://github.com/lightningdevkit/rust-lightning/blob/435b3b480283e40f7b8a945eff6465438f39cd5b/lightning/src/onion_message/messenger.rs#L106) that can use LND's node key to process onion messages. This is achieved by implementing the [NodeSigner](https://github.com/lightningdevkit/rust-lightning/blob/fac5373687a4c7919c8639744dc712d922082cc3/lightning/src/chain/keysinterface.rs#L452) trait, making relevant calls to LND's `signerrpc` API to perform ECDH ops with the node's private key. All other components can use the built-in options available in LDK.
+Onion messaging is implemented using a custom version of LDK's [OnionMessenger](https://github.com/lightningdevkit/rust-lightning/blob/435b3b480283e40f7b8a945eff6465438f39cd5b/lightning/src/onion_message/messenger.rs#L106) that can use LND's node key to process onion messages. This is achieved by implementing the [NodeSigner](https://github.com/lightningdevkit/rust-lightning/blob/fac5373687a4c7919c8639744dc712d922082cc3/lightning/src/chain/keysinterface.rs#L452) trait, making relevant calls to LND's `signerrpc` API to perform ECDH ops with the node's private key. All other components can use the built-in options available in LDK.
 
 ![Onion messenger](docs/arch-onionmessenger.png)
 
