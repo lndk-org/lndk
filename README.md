@@ -13,6 +13,8 @@ Project Milestones:
 * [Code of Conduct](https://github.com/lndk-org/lndk/blob/master/code_of_conduct.md)
 * [Architecture](https://github.com/lndk-org/lndk/blob/master/ARCH.md)
 
+When you encounter a problem with `LNDK`, Feel free to file issues or start [a discussion](https://github.com/lndk-org/lndk/discussions). If your question doesn't fit in either place, find us in the [BOLT 12 Discord](https://discord.gg/Pk7mT3FQFn) in the lndk channel.
+
 ## Setting up LNDK
 
 #### Compiling LND
