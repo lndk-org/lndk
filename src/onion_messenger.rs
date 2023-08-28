@@ -2,13 +2,17 @@ use crate::clock::TokioClock;
 use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
 use crate::rate_limit::{RateLimiter, TokenLimiter};
 use async_trait::async_trait;
+use bitcoin::blockdata::constants::ChainHash;
+use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
 use core::ops::Deref;
-use lightning::chain::keysinterface::EntropySource;
-use lightning::chain::keysinterface::NodeSigner;
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
-use lightning::onion_message::{CustomOnionMessageHandler, OnionMessenger};
+use lightning::onion_message::{
+    CustomOnionMessageHandler, MessageRouter, OffersMessageHandler, OnionMessenger,
+};
+use lightning::sign::EntropySource;
+use lightning::sign::NodeSigner;
 use lightning::util::logger::{Level, Logger, Record};
 use lightning::util::ser::{Readable, Writeable};
 use log::{debug, error, info, trace, warn};
@@ -95,15 +99,25 @@ impl Logger for MessengerUtilities {
 /// 3. Outgoing Poll: Using a simple ticker, produces polling events to check for outgoing onion messages.
 ///
 /// The main consumer processes one MessengerEvent at a time, applying basic rate limiting to each peer to prevent spam.
-pub(crate) async fn run_onion_messenger<ES: Deref, NS: Deref, L: Deref, CMH: Deref>(
+pub(crate) async fn run_onion_messenger<
+    ES: Deref,
+    NS: Deref,
+    L: Deref,
+    MR: Deref,
+    OMH: Deref,
+    CMH: Deref,
+>(
     current_peers: HashMap<PublicKey, bool>,
     ln_client: &mut tonic_lnd::LightningClient,
-    onion_messenger: OnionMessenger<ES, NS, L, CMH>,
+    onion_messenger: OnionMessenger<ES, NS, L, MR, OMH, CMH>,
+    network: Network,
 ) -> Result<(), ()>
 where
     ES::Target: EntropySource,
     NS::Target: NodeSigner,
     L::Target: Logger,
+    MR::Target: MessageRouter,
+    OMH::Target: OffersMessageHandler,
     CMH::Target: CustomOnionMessageHandler + Sized,
 {
     // Setup channels that we'll use to communicate onion messenger events. We buffer our channels by the number of
@@ -201,9 +215,14 @@ where
     let mut message_sender = CustomMessenger {
         client: ln_client.clone(),
     };
-    let consume_result =
-        consume_messenger_events(onion_messenger, receiver, &mut message_sender, rate_limiter)
-            .await;
+    let consume_result = consume_messenger_events(
+        onion_messenger,
+        receiver,
+        &mut message_sender,
+        rate_limiter,
+        network,
+    )
+    .await;
     match consume_result {
         Ok(_) => info!("Consume messenger events exited."),
         Err(e) => error!("Consume messenger events exited: {e}."),
@@ -520,7 +539,10 @@ async fn consume_messenger_events(
     mut events: Receiver<MessengerEvents>,
     message_sender: &mut impl SendCustomMessage,
     rate_limiter: &mut impl RateLimiter,
+    network: Network,
 ) -> Result<(), ConsumerError> {
+    let network = vec![ChainHash::using_genesis_block(network)];
+
     while let Some(onion_event) = events.recv().await {
         match onion_event {
             // We don't want to log SendOutgoing events, since we send out this event every 100 ms.
@@ -543,6 +565,7 @@ async fn consume_messenger_events(
                         &Init {
                             features: init_features,
                             remote_network_address: None,
+                            networks: Some(network.clone()),
                         },
                         false,
                     )
@@ -677,11 +700,12 @@ async fn relay_outgoing_msg_event(
 mod tests {
     use super::*;
     use crate::tests::test_utils::pubkey;
+    use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
+    use lightning::events::OnionMessageProvider;
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
-    use lightning::util::events::OnionMessageProvider;
     use lightning::util::ser::Readable;
     use lightning::util::ser::Writeable;
     use mockall::mock;
@@ -858,10 +882,15 @@ mod tests {
             .await
             .unwrap();
 
-        let consume_err =
-            consume_messenger_events(mock, receiver, &mut sender_mock, &mut rate_limiter)
-                .await
-                .expect_err("consume should error");
+        let consume_err = consume_messenger_events(
+            mock,
+            receiver,
+            &mut sender_mock,
+            &mut rate_limiter,
+            Network::Regtest,
+        )
+        .await
+        .expect_err("consume should error");
         matches!(consume_err, ConsumerError::PeerProducerExit);
     }
 
@@ -882,10 +911,15 @@ mod tests {
 
         let mut sender_mock = MockSendCustomMessenger::new();
 
-        let consume_err =
-            consume_messenger_events(mock, receiver, &mut sender_mock, &mut rate_limiter)
-                .await
-                .expect_err("consume should error");
+        let consume_err = consume_messenger_events(
+            mock,
+            receiver,
+            &mut sender_mock,
+            &mut rate_limiter,
+            Network::Regtest,
+        )
+        .await
+        .expect_err("consume should error");
         matches!(consume_err, ConsumerError::OnionMessengerFailure);
     }
 
@@ -903,6 +937,7 @@ mod tests {
             receiver_done,
             &mut sender_mock,
             &mut rate_limiter,
+            Network::Regtest,
         )
         .await
         .is_ok());

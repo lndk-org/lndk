@@ -15,13 +15,15 @@ mod internal {
 #[macro_use]
 extern crate configure_me;
 
-use crate::lnd::{features_support_onion_messages, get_lnd_client, LndCfg, LndNodeSigner};
+use crate::lnd::{
+    features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
+};
 
 use crate::onion_messenger::{run_onion_messenger, MessengerUtilities};
 use bitcoin::secp256k1::PublicKey;
 use internal::*;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::onion_message::OnionMessenger;
+use lightning::onion_message::{DefaultMessageRouter, OnionMessenger};
 use log::{error, info};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -44,6 +46,18 @@ async fn main() -> Result<(), ()> {
         .await
         .expect("failed to get info")
         .into_inner();
+
+    let mut network_str = None;
+    for chain in info.chains {
+        if chain.chain == "bitcoin" {
+            network_str = Some(chain.network.clone())
+        }
+    }
+    if network_str.is_none() {
+        error!("lnd node is not connected to bitcoin network as expected");
+        return Err(());
+    }
+    let network = string_to_network(&network_str.unwrap());
 
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     info!("Starting lndk for node: {pubkey}.");
@@ -80,11 +94,19 @@ async fn main() -> Result<(), ()> {
         &messenger_utils,
         &node_signer,
         &messenger_utils,
+        &DefaultMessageRouter {},
+        IgnoringMessageHandler {},
         IgnoringMessageHandler {},
     );
 
     let mut peers_client = client.lightning().clone();
-    run_onion_messenger(peer_support, &mut peers_client, onion_messenger).await
+    run_onion_messenger(
+        peer_support,
+        &mut peers_client,
+        onion_messenger,
+        network.unwrap(),
+    )
+    .await
 }
 
 #[cfg(test)]
