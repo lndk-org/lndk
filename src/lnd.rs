@@ -1,12 +1,15 @@
 use bitcoin::bech32::u5;
+use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
-use lightning::chain::keysinterface::{KeyMaterial, NodeSigner, Recipient};
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::path::PathBuf;
 use tonic_lnd::{Client, ConnectError};
 
@@ -130,5 +133,32 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
 
     fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
         unimplemented!("not required for onion messaging");
+    }
+}
+
+#[derive(Debug)]
+/// Error when parsing provided configuration options.
+pub(crate) enum NetworkParseError {
+    /// Invalid indicates an invalid network was provided.
+    Invalid(String),
+}
+
+impl Error for NetworkParseError {}
+
+impl fmt::Display for NetworkParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NetworkParseError::Invalid(network_str) => write!(f, "invalid network provided: {network_str}. Should be mainnet, testnet, signet, or regtest."),
+        }
+    }
+}
+
+pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
+    match network_str {
+        "mainnet" => Ok(Network::Bitcoin),
+        "testnet" => Ok(Network::Testnet),
+        "signet" => Ok(Network::Signet),
+        "regtest" => Ok(Network::Regtest),
+        _ => Err(NetworkParseError::Invalid(network_str.to_string())),
     }
 }
