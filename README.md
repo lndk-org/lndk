@@ -31,7 +31,7 @@ git checkout v0.16.2-patch-customfeatures
 
 While on this branch, compile `LND`. Make sure that the peersrpc and signerrpc services and dev tag are enabled, like this:
 
-`make install --tags="peersrpc signerrpc dev"`
+`make install tags="peersrpc signrpc dev"`
 
 Note that this guide assumes some familiarity with setting up `LND`. If you're looking to get up to speed, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
 
