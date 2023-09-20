@@ -27,7 +27,8 @@ bytes = "1.4.0"
 [dev-dependencies]
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
 bitcoind = { version = "0.30.0", features = [ "22_0" ] }
-ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", branch = "pub-interface" }
+chrono = { version = "0.4.26" }
+ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", branch = "log-dir-tweak" }
 mockall = "0.11.3"
 tempfile = "3.5.0"
 

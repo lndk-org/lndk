@@ -328,7 +328,9 @@ checksum = "defd4e7873dbddba6c7c91e199c7fcb946abc4a6a4ac3195400bcfb01b5de877"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-targets",
 ]
 
@@ -852,7 +854,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/lndk-org/ldk-sample?branch=pub-interface#07b56fd162b3f9907f805b6b38f06d529e4978bf"
+source = "git+https://github.com/lndk-org/ldk-sample?branch=log-dir-tweak#614a87801b2d11326ac483dd65d2a47ab09614b9"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
@@ -973,6 +975,7 @@ dependencies = [
  "bitcoin 0.29.2",
  "bitcoind",
  "bytes",
+ "chrono",
  "configure_me",
  "configure_me_codegen",
  "core-rpc",
