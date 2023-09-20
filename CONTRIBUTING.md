@@ -46,3 +46,8 @@ cargo clippy
     2. Error String: Lower case, no `.` terminating.
     3. Display imps: Lower case, no `.` terminating.
 
+### Integration tests
+
+Note that the way the tests (both unit and integration tests) run now, it's best to run them sequentially rather than concurrently (which is Rust's default) to avoid port conflicts. You can run them sequentially with this command:
+
+`cargo test -- --test-threads=1`

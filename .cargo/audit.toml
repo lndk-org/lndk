@@ -1,2 +1,7 @@
 [advisories]
-ignore = ["RUSTSEC-2023-0052"]
+ignore = [
+    "RUSTSEC-2023-0052",
+    # Since bitcoind is only used in the integration tests,
+    # we can safely ignore this time dependency vulnerability advisory
+    "RUSTSEC-2020-0071",
+]
