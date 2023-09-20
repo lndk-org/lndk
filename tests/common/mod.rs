@@ -1,18 +1,36 @@
+mod test_utils;
+
 use bitcoin::network::constants::Network;
+use bitcoin::secp256k1::PublicKey;
 use bitcoincore_rpc::{bitcoin::Network as BitcoindNetwork, json, RpcApi};
-use bitcoind::{get_available_port, BitcoinD, Conf};
+use bitcoind::{get_available_port, BitcoinD, Conf, ConnectParams};
 use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::{env, fs};
-use tempfile::{tempdir, TempDir};
+use tempfile::{tempdir, Builder, TempDir};
+use tokio::time::Duration;
+use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::Client;
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
-pub async fn setup_test_infrastructure(test_name: &str) -> (BitcoindNode, LdkNode, LdkNode) {
+pub async fn setup_test_infrastructure(
+    test_name: &str,
+) -> (BitcoindNode, LndNode, LdkNode, LdkNode) {
     let bitcoind = setup_bitcoind().await;
-    let (ldk_test_dir, _lnd_test_dir) = setup_test_dirs(test_name);
+    let (ldk_test_dir, lnd_test_dir) = setup_test_dirs(test_name);
+    let mut lnd = LndNode::new(
+        bitcoind.node.params.clone(),
+        bitcoind.zmq_block_port,
+        bitcoind.zmq_tx_port,
+        lnd_test_dir,
+    );
+    lnd.setup_client().await;
 
     let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
 
@@ -43,7 +61,7 @@ pub async fn setup_test_infrastructure(test_name: &str) -> (BitcoindNode, LdkNod
     let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
     let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
 
-    (bitcoind, ldk1, ldk2)
+    (bitcoind, lnd, ldk1, ldk2)
 }
 
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
@@ -84,13 +102,13 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf) {
 pub struct BitcoindNode {
     node: BitcoinD,
     _data_dir: TempDir,
-    _zmq_block_port: u16,
-    _zmq_tx_port: u16,
+    zmq_block_port: u16,
+    zmq_tx_port: u16,
 }
 
 pub async fn setup_bitcoind() -> BitcoindNode {
     let data_dir = tempdir().unwrap();
-    let data_dir_path = data_dir.path().clone().to_path_buf();
+    let data_dir_path = data_dir.path().to_path_buf();
     let mut conf = Conf::default();
     let zmq_block_port = get_available_port().unwrap();
     let zmq_tx_port = get_available_port().unwrap();
@@ -112,7 +130,188 @@ pub async fn setup_bitcoind() -> BitcoindNode {
     BitcoindNode {
         node: bitcoind,
         _data_dir: data_dir,
-        _zmq_block_port: zmq_block_port,
-        _zmq_tx_port: zmq_tx_port,
+        zmq_block_port,
+        zmq_tx_port,
+    }
+}
+
+// LndNode holds the tools we need to interact with a Lightning node.
+pub struct LndNode {
+    address: String,
+    _lnd_dir_tmp: TempDir,
+    cert_path: String,
+    macaroon_path: String,
+    _handle: Child,
+    client: Option<Client>,
+}
+
+impl LndNode {
+    fn new(
+        bitcoind_connect_params: ConnectParams,
+        zmq_block_port: u16,
+        zmq_tx_port: u16,
+        lnd_data_dir: PathBuf,
+    ) -> LndNode {
+        let lnd_exe_dir = env::temp_dir().join(LNDK_TESTS_FOLDER).join("bin");
+        env::set_current_dir(lnd_exe_dir).expect("couldn't set current directory");
+
+        let lnd_dir_binding = Builder::new()
+            .prefix("lnd-data-")
+            .tempdir_in(lnd_data_dir.clone())
+            .unwrap();
+        let lnd_dir = lnd_dir_binding.path();
+
+        let macaroon_path = lnd_dir
+            .join("data/chain/bitcoin/regtest/admin.macaroon")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let connect_params = bitcoind_connect_params.get_cookie_values().unwrap();
+        let log_dir_path_buf = lnd_data_dir.join(format!("lnd-logs"));
+        let log_dir = log_dir_path_buf.as_path();
+        let data_dir = lnd_dir.join("data").to_str().unwrap().to_string();
+        let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
+        let key_path = lnd_dir.to_str().unwrap().to_string() + "/tls.key";
+
+        // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd node, they won't
+        // clash.
+        let port = bitcoind::get_available_port().unwrap();
+        let rpc_addr = format!("localhost:{}", port);
+        let lnd_port = bitcoind::get_available_port().unwrap();
+        let lnd_addr = format!("localhost:{}", lnd_port);
+        let args = [
+            format!("--listen={}", lnd_addr),
+            format!("--rpclisten={}", rpc_addr),
+            format!("--norest"),
+            // With this flag, we don't have to unlock the wallet on startup.
+            format!("--noseedbackup"),
+            format!("--bitcoin.active"),
+            format!("--bitcoin.node=bitcoind"),
+            format!("--bitcoin.regtest"),
+            format!("--datadir={}", data_dir),
+            format!("--tlscertpath={}", cert_path),
+            format!("--tlskeypath={}", key_path),
+            format!("--logdir={}", log_dir.display()),
+            format!("--bitcoind.rpcuser={}", connect_params.0.unwrap()),
+            format!("--bitcoind.rpcpass={}", connect_params.1.unwrap()),
+            format!(
+                "--bitcoind.zmqpubrawblock=tcp://127.0.0.1:{}",
+                zmq_block_port
+            ),
+            format!("--bitcoind.zmqpubrawtx=tcp://127.0.0.1:{}", zmq_tx_port),
+            format!(
+                "--bitcoind.rpchost={:?}",
+                bitcoind_connect_params.rpc_socket
+            ),
+        ];
+
+        // TODO: For Windows we might need to add ".exe" at the end.
+        let cmd = Command::new("./lnd-itest")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to execute lnd command");
+
+        LndNode {
+            address: format!("https://{}", rpc_addr),
+            _lnd_dir_tmp: lnd_dir_binding,
+            cert_path: cert_path,
+            macaroon_path: macaroon_path,
+            _handle: cmd,
+            client: None,
+        }
+    }
+
+    // Setup the client we need to interact with the LND node.
+    async fn setup_client(&mut self) {
+        // We need to give lnd some time to start up before we'll be able to interact with it via the client.
+        let mut retry = false;
+        let mut retry_num = 0;
+        while retry_num == 0 || retry {
+            thread::sleep(Duration::from_secs(3));
+
+            let client_result = tonic_lnd::connect(
+                self.address.clone(),
+                self.cert_path.clone(),
+                self.macaroon_path.clone(),
+            )
+            .await;
+
+            match client_result {
+                Ok(client) => {
+                    self.client = Some(client);
+
+                    retry = false;
+                    retry_num += 1;
+                }
+                Err(err) => {
+                    println!(
+                        "getting client error {err}, retrying call {} time",
+                        retry_num
+                    );
+                    if retry_num == 6 {
+                        panic!("could not set up client: {err}")
+                    }
+                    retry = true;
+                    retry_num += 1;
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_info(&mut self) -> tonic_lnd::lnrpc::GetInfoResponse {
+        let resp = if let Some(client) = self.client.clone() {
+            let get_info_req = GetInfoRequest {};
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .get_info(get_info_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("get_info"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
+
+    // connect_to_peer connects to the specified peer.
+    pub async fn connect_to_peer(
+        &mut self,
+        node_id: PublicKey,
+        addr: SocketAddr,
+    ) -> tonic_lnd::lnrpc::ConnectPeerResponse {
+        let ln_addr = tonic_lnd::lnrpc::LightningAddress {
+            pubkey: node_id.to_string(),
+            host: addr.to_string(),
+        };
+
+        let connect_req = tonic_lnd::lnrpc::ConnectPeerRequest {
+            addr: Some(ln_addr),
+            timeout: 20,
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .connect_peer(connect_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("connect_peer"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
     }
 }
