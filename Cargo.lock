@@ -328,7 +328,9 @@ checksum = "defd4e7873dbddba6c7c91e199c7fcb946abc4a6a4ac3195400bcfb01b5de877"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-targets",
 ]
 
@@ -973,6 +975,7 @@ dependencies = [
  "bitcoin 0.29.2",
  "bitcoind",
  "bytes",
+ "chrono",
  "configure_me",
  "configure_me_codegen",
  "core-rpc",
@@ -1975,8 +1978,7 @@ dependencies = [
 [[package]]
 name = "tonic_lnd"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a207832efa21cc12bd0d520ce36554af91f5bbcc8873273bc1bab238b3365dbb"
+source = "git+https://github.com/Kixunil/tonic_lnd?rev=fac4a67a8d4951d62fc020d61d38628c0064e6df#fac4a67a8d4951d62fc020d61d38628c0064e6df"
 dependencies = [
  "hex 0.4.3",
  "prost 0.9.0",

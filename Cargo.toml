@@ -19,7 +19,7 @@ log = "0.4.17"
 simple_logger = "4.0.0"
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = "0.8.3"
-tonic_lnd = "0.5.1"
+tonic_lnd = { git = "https://github.com/Kixunil/tonic_lnd", rev = "fac4a67a8d4951d62fc020d61d38628c0064e6df" }
 hex = "0.4.3"
 configure_me = "0.4.0"
 bytes = "1.4.0"
@@ -27,6 +27,7 @@ bytes = "1.4.0"
 [dev-dependencies]
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
 bitcoind = { version = "0.30.0", features = [ "22_0" ] }
+chrono = { version = "0.4.26" }
 ldk-sample = { git = "https://github.com/lndk-org/ldk-sample" }
 mockall = "0.11.3"
 tempfile = "3.5.0"
