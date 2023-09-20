@@ -4,15 +4,23 @@ use bitcoind::{get_available_port, BitcoinD, Conf};
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use tempfile::{tempdir, TempDir};
+use std::path::PathBuf;
+use std::{env, fs};
+
+const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
 pub async fn setup_test_infrastructure(test_name: &str) -> (BitcoindNode, LdkNode, LdkNode) {
     let bitcoind = setup_bitcoind().await;
+    let (ldk_test_dir, _lnd_test_dir) = setup_test_dirs();
+
     let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
+
     let ldk1_config = LdkUserInfo {
         bitcoind_rpc_username: connect_params.0.clone().unwrap(),
         bitcoind_rpc_password: connect_params.1.clone().unwrap(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
+        ldk_data_dir: ldk_test_dir.clone(),
         ldk_announced_listen_addr: Vec::new(),
         ldk_peer_listening_port: get_available_port().unwrap(),
         ldk_announced_node_name: [0; 32],
@@ -24,6 +32,7 @@ pub async fn setup_test_infrastructure(test_name: &str) -> (BitcoindNode, LdkNod
         bitcoind_rpc_password: connect_params.1.unwrap(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
+        ldk_data_dir: ldk_test_dir,
         ldk_announced_listen_addr: Vec::new(),
         ldk_peer_listening_port: get_available_port().unwrap(),
         ldk_announced_node_name: [0; 32],
@@ -34,6 +43,33 @@ pub async fn setup_test_infrastructure(test_name: &str) -> (BitcoindNode, LdkNod
     let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
 
     (bitcoind, ldk1, ldk2)
+}
+
+// Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
+// for our tests.
+//
+// The file tree structure looks like:
+//
+// /tmp/lndk-tests
+//             |
+//             +-- /bin (compiled lnd binary is stored here)
+//             |
+//             +-- /lnd-data (lnd data and logs are stored here)
+//             |
+//             +-- /ldk-data (ldk data and logs are stored here)
+//
+fn setup_test_dirs() -> (PathBuf, PathBuf) {
+    let lndk_tests_dir = env::temp_dir().join(LNDK_TESTS_FOLDER);
+    let bin_dir = lndk_tests_dir.join("bin");
+    let ldk_data_dir = lndk_tests_dir.join("ldk-data");
+    let lnd_data_dir = lndk_tests_dir.join("lnd-data");
+
+    fs::create_dir_all(lndk_tests_dir.clone()).unwrap();
+    fs::create_dir_all(bin_dir.clone()).unwrap();
+    fs::create_dir_all(ldk_data_dir.clone()).unwrap();
+    fs::create_dir_all(lnd_data_dir.clone()).unwrap();
+
+    (ldk_data_dir, lnd_data_dir)
 }
 
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
