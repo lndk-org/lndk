@@ -8,20 +8,24 @@ mod internal {
     include!(concat!(env!("OUT_DIR"), "/configure_me_config.rs"));
 }
 
-use lndk::lnd::LndCfg;
 use internal::*;
+use lndk::lnd::LndCfg;
+use lndk::Cfg;
 
 #[macro_use]
 extern crate configure_me;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-    simple_logger::init_with_level(log::Level::Info).unwrap();
-
-    let lnd_config = Config::including_optional_config_files(&["./lndk.conf"])
+    let config = Config::including_optional_config_files(&["./lndk.conf"])
         .unwrap_or_exit()
         .0;
-    let args = LndCfg::new(lnd_config.address, lnd_config.cert, lnd_config.macaroon);
+
+    let lnd_args = LndCfg::new(config.address, config.cert, config.macaroon);
+    let args = Cfg {
+        lnd: lnd_args,
+        log_dir: config.log_dir,
+    };
 
     lndk::run(args).await
 }

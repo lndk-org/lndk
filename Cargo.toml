@@ -12,11 +12,12 @@ spec = "config_spec.toml"
 async-trait = "0.1.66"
 bitcoin = { version = "0.29.2", features = ["rand"] }
 futures = "0.3.26"
+home = "0.5.5"
 lightning = "0.0.116"
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 log = "0.4.17"
-simple_logger = "4.0.0"
+log4rs = { version = "1.2.0", features = ["file_appender"] }
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = "0.8.3"
 tonic_lnd = { git = "https://github.com/Kixunil/tonic_lnd", rev = "fac4a67a8d4951d62fc020d61d38628c0064e6df" }

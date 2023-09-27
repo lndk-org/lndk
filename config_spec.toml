@@ -20,3 +20,8 @@ name = "macaroon"
 type = "std::path::PathBuf"
 optional = false
 doc = "The path to LND macaroon file. Note: the abosolute macaroon file path is required here."
+
+[[param]]
+name = "log_dir"
+type = "String"
+doc = "The path to the lndk log file"
