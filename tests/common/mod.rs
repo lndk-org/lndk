@@ -3,9 +3,9 @@ use bitcoincore_rpc::{bitcoin::Network as BitcoindNetwork, json, RpcApi};
 use bitcoind::{get_available_port, BitcoinD, Conf};
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
-use tempfile::{tempdir, TempDir};
 use std::path::PathBuf;
 use std::{env, fs};
+use tempfile::{tempdir, TempDir};
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
