@@ -864,7 +864,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/lndk-org/ldk-sample#59c719d0c8ac70ccbd6fc334bf21d73f531e01f6"
+source = "git+https://github.com/lndk-org/ldk-sample?branch=onion-handler#65758f45c9caa6befda1c5c139c049b3081ffdfb"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
