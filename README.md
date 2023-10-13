@@ -66,11 +66,11 @@ In order for `LNDK` successfully connect to `LND`, we need to pass in the grpc a
 
 1) These values can be passed in via the command line when running the `LNDK` program, like this:
 
-`cargo run -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
+`cargo run --bin=lndk -- --address=<ADDRESS> --cert=<TLSPATH> --macaroon=<MACAROONPATH>`
 
 Or in a more concrete example:
 
-`cargo run -- --address=https://localhost:10009 --cert=/home/<USERNAME>/.lnd/tls.cert --macaroon=/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
+`cargo run --bin=lndk -- --address=https://localhost:10009 --cert=/home/<USERNAME>/.lnd/tls.cert --macaroon=/home/<USERNAME>/.lnd/data/chain/bitcoin/regtest/admin.macaroon`
 
 **Remember** that the grpc address must start with https:// for the program to work.
 
@@ -81,7 +81,7 @@ Or in a more concrete example:
   * `address="<ADDRESS"`
   * `cert="<TLSPATH>"`
   * `macaroon="<MACAROONPATH>"`
-* Run `cargo run -- --conf lndk.conf`
+* Run `cargo run --bin=lndk -- --conf lndk.conf`
 
 - Use any of the commands with the --help option for more information about each argument.
 

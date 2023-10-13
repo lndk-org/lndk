@@ -1,5 +1,7 @@
 mod clock;
 pub mod lnd;
+#[allow(dead_code)]
+pub mod lndk_offers;
 mod onion_messenger;
 mod rate_limit;
 
