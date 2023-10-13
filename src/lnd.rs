@@ -1,4 +1,6 @@
+use async_trait::async_trait;
 use bitcoin::bech32::u5;
+use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
@@ -13,6 +15,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
+use tonic_lnd::signrpc::KeyLocator;
+use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -177,4 +181,16 @@ pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkPar
         "regtest" => Ok(Network::Regtest),
         _ => Err(NetworkParseError::Invalid(network_str.to_string())),
     }
+}
+
+/// MessageSigner provides a layer of abstraction over the LND API for message signing.
+#[async_trait]
+pub(crate) trait MessageSigner {
+    async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
+    async fn sign_message(
+        &mut self,
+        key_loc: KeyLocator,
+        merkle_hash: Hash,
+        tag: String,
+    ) -> Result<Vec<u8>, Status>;
 }

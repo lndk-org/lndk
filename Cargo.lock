@@ -993,10 +993,10 @@ dependencies = [
 [[package]]
 name = "lightning"
 version = "0.0.118"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d52cec5fa9382154fe9671e8df93095b800c7d77abc66e2a5ef839d672521c5e"
+source = "git+https://github.com/lightningdevkit/rust-lightning?rev=caafcedf3fc40fc6253261218c25b254dd955a82#caafcedf3fc40fc6253261218c25b254dd955a82"
 dependencies = [
  "bitcoin 0.29.2",
+ "musig2",
 ]
 
 [[package]]
@@ -1253,6 +1253,14 @@ name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
+
+[[package]]
+name = "musig2"
+version = "0.1.0"
+source = "git+https://github.com/arik-so/rust-musig2?rev=27797d7#27797d78cf64e8974e38d7f31ebb11e455015a9e"
+dependencies = [
+ "bitcoin 0.29.2",
+]
 
 [[package]]
 name = "normalize-line-endings"
@@ -2209,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "tonic_lnd"
 version = "0.5.1"
-source = "git+https://github.com/Kixunil/tonic_lnd?rev=fac4a67a8d4951d62fc020d61d38628c0064e6df#fac4a67a8d4951d62fc020d61d38628c0064e6df"
+source = "git+https://github.com/orbitalturtle/tonic_lnd?branch=update-signer-client#de989089fdb23f87d3e6bc4796c504bda9b9be9b"
 dependencies = [
  "hex 0.4.3",
  "prost 0.9.0",
