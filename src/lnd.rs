@@ -5,6 +5,8 @@ use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::offers::invoice::UnsignedBolt12Invoice;
+use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -129,6 +131,20 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
         _recipient: Recipient,
     ) -> Result<RecoverableSignature, ()> {
         unimplemented!("not required for onion messaging");
+    }
+
+    fn sign_bolt12_invoice_request(
+        &self,
+        _: &UnsignedInvoiceRequest,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        unimplemented!("not required for onion messaging")
+    }
+
+    fn sign_bolt12_invoice(
+        &self,
+        _: &UnsignedBolt12Invoice,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        unimplemented!("not required for onion messaging")
     }
 
     fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
