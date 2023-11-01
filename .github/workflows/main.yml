@@ -6,8 +6,11 @@ on:
   pull_request:
     branches: ['*']
 
+env:
+  GO_VERSION: 1.21.0
+
 jobs:
-  build_and_test:
+  build_and_format:
     name: LNDK Rust Build
     runs-on: ubuntu-latest
     steps:
@@ -21,11 +24,6 @@ jobs:
           command: build
           args: --release --all-features
       - uses: actions-rs/cargo@v1
-        name: cargo test
-        with:
-          command: test
-          args: --all-targets --benches -- --test-threads=1
-      - uses: actions-rs/cargo@v1
         name: cargo fmt
         with:
           command: fmt
@@ -35,6 +33,29 @@ jobs:
         with:
           command: clippy
           args: -- --deny warnings
+
+  ########################
+  # run ubuntu integration tests
+  ########################
+  ubuntu-integration-test:
+    name: run ubuntu unit and integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: 'true'
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: setup go ${{ env.GO_VERSION }}
+        uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
+        with:
+          go-version: '${{ env.GO_VERSION }}'
+      - name: run unit tests
+        run: cargo test --bin lndk 
+      - name: run integration tests
+        run: make itest
+
   coverage:
     name: LNDK Code Coverage
     runs-on: ubuntu-latest
@@ -48,7 +69,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov --bin lndk --workspace --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
