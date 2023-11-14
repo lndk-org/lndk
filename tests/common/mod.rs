@@ -21,9 +21,9 @@ const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
 pub async fn setup_test_infrastructure(
     test_name: &str,
-) -> (BitcoindNode, LndNode, LdkNode, LdkNode) {
+) -> (BitcoindNode, LndNode, LdkNode, LdkNode, PathBuf) {
     let bitcoind = setup_bitcoind().await;
-    let (ldk_test_dir, lnd_test_dir) = setup_test_dirs(test_name);
+    let (ldk_test_dir, lnd_test_dir, lndk_test_dir) = setup_test_dirs(test_name);
     let mut lnd = LndNode::new(
         bitcoind.node.params.clone(),
         bitcoind.zmq_block_port,
@@ -61,7 +61,7 @@ pub async fn setup_test_infrastructure(
     let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
     let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
 
-    (bitcoind, lnd, ldk1, ldk2)
+    (bitcoind, lnd, ldk1, ldk2, lndk_test_dir)
 }
 
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
@@ -79,8 +79,10 @@ pub async fn setup_test_infrastructure(
 //                   +-- /lnd-data (lnd data and logs are stored here)
 //                   |
 //                   +-- /ldk-data (ldk data and logs are stored here)
+//                   |
+//                   +-- /lndk-data (lndk logs are stored here)
 //
-fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf) {
+fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let lndk_tests_dir = env::temp_dir().join(LNDK_TESTS_FOLDER);
     let bin_dir = lndk_tests_dir.join("bin");
     let now_timestamp = Utc::now();
@@ -88,14 +90,16 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf) {
     let itest_dir = lndk_tests_dir.join(format!("test-{test_name}-{timestamp}"));
     let ldk_data_dir = itest_dir.join("ldk-data");
     let lnd_data_dir = itest_dir.join("lnd-data");
+    let lndk_data_dir = itest_dir.join("lndk-data");
 
     fs::create_dir_all(lndk_tests_dir.clone()).unwrap();
     fs::create_dir_all(bin_dir.clone()).unwrap();
     fs::create_dir_all(itest_dir.clone()).unwrap();
     fs::create_dir_all(ldk_data_dir.clone()).unwrap();
     fs::create_dir_all(lnd_data_dir.clone()).unwrap();
+    fs::create_dir_all(lndk_data_dir.clone()).unwrap();
 
-    (ldk_data_dir, lnd_data_dir)
+    (ldk_data_dir, lnd_data_dir, lndk_data_dir)
 }
 
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
@@ -137,10 +141,10 @@ pub async fn setup_bitcoind() -> BitcoindNode {
 
 // LndNode holds the tools we need to interact with a Lightning node.
 pub struct LndNode {
-    address: String,
+    pub address: String,
     _lnd_dir_tmp: TempDir,
-    cert_path: String,
-    macaroon_path: String,
+    pub cert_path: String,
+    pub macaroon_path: String,
     _handle: Child,
     client: Option<Client>,
 }
@@ -204,6 +208,9 @@ impl LndNode {
                 "--bitcoind.rpchost={:?}",
                 bitcoind_connect_params.rpc_socket
             ),
+            format!("--protocol.custom-message=513"),
+            format!("--protocol.custom-nodeann=39"),
+            format!("--protocol.custom-init=39"),
         ];
 
         // TODO: For Windows we might need to add ".exe" at the end.
