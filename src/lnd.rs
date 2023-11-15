@@ -1,16 +1,22 @@
+use async_trait::async_trait;
 use bitcoin::bech32::u5;
+use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::ln::msgs::UnsignedGossipMessage;
+use lightning::offers::invoice::UnsignedBolt12Invoice;
+use lightning::offers::invoice_request::UnsignedInvoiceRequest;
 use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
+use tonic_lnd::signrpc::KeyLocator;
+use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -131,6 +137,20 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
         unimplemented!("not required for onion messaging");
     }
 
+    fn sign_bolt12_invoice_request(
+        &self,
+        _: &UnsignedInvoiceRequest,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        unimplemented!("not required for onion messaging")
+    }
+
+    fn sign_bolt12_invoice(
+        &self,
+        _: &UnsignedBolt12Invoice,
+    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
+        unimplemented!("not required for onion messaging")
+    }
+
     fn sign_gossip_message(&self, _msg: UnsignedGossipMessage) -> Result<Signature, ()> {
         unimplemented!("not required for onion messaging");
     }
@@ -161,4 +181,16 @@ pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkPar
         "regtest" => Ok(Network::Regtest),
         _ => Err(NetworkParseError::Invalid(network_str.to_string())),
     }
+}
+
+/// MessageSigner provides a layer of abstraction over the LND API for message signing.
+#[async_trait]
+pub(crate) trait MessageSigner {
+    async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
+    async fn sign_message(
+        &mut self,
+        key_loc: KeyLocator,
+        merkle_hash: Hash,
+        tag: String,
+    ) -> Result<Vec<u8>, Status>;
 }

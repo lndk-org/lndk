@@ -703,7 +703,6 @@ mod tests {
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
-    use lightning::events::OnionMessageProvider;
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
     use lightning::util::ser::Readable;
@@ -742,12 +741,9 @@ mod tests {
     mock! {
             OnionHandler{}
 
-            impl OnionMessageProvider for OnionHandler {
-                fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
-            }
-
             impl OnionMessageHandler for OnionHandler {
                 fn handle_onion_message(&self, peer_node_id: &PublicKey, msg: &OnionMessage);
+                fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
                 fn peer_connected(&self, their_node_id: &PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
                 fn peer_disconnected(&self, their_node_id: &PublicKey);
                 fn provided_node_features(&self) -> NodeFeatures;

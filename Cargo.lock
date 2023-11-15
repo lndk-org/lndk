@@ -42,6 +42,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "anstream"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ab91ebe16eb252986481c5b62f6098f3b698a45e34b5b98200cf20dd2484a44"
+dependencies = [
+ "anstyle",
+ "anstyle-parse",
+ "anstyle-query",
+ "anstyle-wincon",
+ "colorchoice",
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7079075b41f533b8c61d2a4d073c4676e1f8b249ff94a393b0595db304e0dd87"
+
+[[package]]
+name = "anstyle-parse"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "317b9a89c1868f5ea6ff1d9539a69f45dffc21ce321ac1fd1160dfa48c8e2140"
+dependencies = [
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle-query"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ca11d4be1bab0c8bc8734a9aa7bf4ee8316d462a08c6ac5052f888fef5b494b"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "anstyle-wincon"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0699d10d2f4d628a98ee7b57b289abbc98ff3bad977cb3152709d4bf2330628"
+dependencies = [
+ "anstyle",
+ "windows-sys",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -313,9 +361,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.83"
+version = "1.0.84"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1174fb0b6ec23863f8b971027804a42614e347eafb0a95bf0b12cdae21fc4d0"
+checksum = "0f8e7c90afad890484a21653d08b6e209ae34770fb5ee298f9c699fcc1e5c856"
 dependencies = [
  "libc",
 ]
@@ -345,6 +393,52 @@ name = "chunked_transfer"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cca491388666e04d7248af3f60f0c40cfb0991c72205595d7c396e3510207d1a"
+
+[[package]]
+name = "clap"
+version = "4.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2275f18819641850fa26c89acc84d465c1bf91ce57bc2748b28c420473352f64"
+dependencies = [
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07cdf1b148b25c1e1f7a42225e30a0d99a615cd4637eae7365548dd4529b95bc"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex",
+ "strsim",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf9804afaaf59a91e75b022a30fb7229a7901f60c755489cc61c9b423b836442"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.39",
+]
+
+[[package]]
+name = "clap_lex"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "702fc72eb24e5a1e48ce58027a675bc24edd52096d5397d4aea7c6dd9eca0bd1"
+
+[[package]]
+name = "colorchoice"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
 name = "configure_me"
@@ -668,6 +762,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
 name = "hermit-abi"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,9 +802,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.9"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd6effc99afb63425aff9b05836f029929e345a6148a14b7ecd5ab67af944482"
+checksum = "8947b1a6fad4393052c7ba1f4cd97bed3e953a95c79c92ad9b051a04611d9fbb"
 dependencies = [
  "bytes",
  "fnv",
@@ -862,7 +962,7 @@ dependencies = [
  "chrono",
  "hex 0.3.2",
  "libc",
- "lightning",
+ "lightning 0.0.116",
  "lightning-background-processor",
  "lightning-block-sync",
  "lightning-invoice",
@@ -891,13 +991,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightning"
+version = "0.0.118"
+source = "git+https://github.com/lightningdevkit/rust-lightning?rev=caafcedf3fc40fc6253261218c25b254dd955a82#caafcedf3fc40fc6253261218c25b254dd955a82"
+dependencies = [
+ "bitcoin 0.29.2",
+ "musig2",
+]
+
+[[package]]
 name = "lightning-background-processor"
 version = "0.0.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "398b68a96cceb3c1227504bd5faeb74f26c3233447bc10cc1cb2c67e01b51556"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning",
+ "lightning 0.0.116",
  "lightning-rapid-gossip-sync",
 ]
 
@@ -909,7 +1018,7 @@ checksum = "d94c276dbe2a777d58ed6ececca96006247a4717c00ac4cdfff62d76852be783"
 dependencies = [
  "bitcoin 0.29.2",
  "chunked_transfer",
- "lightning",
+ "lightning 0.0.116",
  "serde_json",
 ]
 
@@ -922,7 +1031,7 @@ dependencies = [
  "bech32 0.9.1",
  "bitcoin 0.29.2",
  "bitcoin_hashes 0.11.0",
- "lightning",
+ "lightning 0.0.116",
  "num-traits",
  "secp256k1 0.24.3",
 ]
@@ -934,7 +1043,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366c0ae225736cbc03555bd5fb4b44b2e8fe2ca3c868ec53a4b325c38b2ab2bd"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning",
+ "lightning 0.0.116",
  "tokio",
 ]
 
@@ -946,7 +1055,7 @@ checksum = "93caaafeb42115b70119619c2420e362cce776670427fc4ced3e6df77b41c0b6"
 dependencies = [
  "bitcoin 0.29.2",
  "libc",
- "lightning",
+ "lightning 0.0.116",
  "winapi",
 ]
 
@@ -957,7 +1066,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a07af5814234924e623bca499e003fca1864024d5bd984e752230f73a131584"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning",
+ "lightning 0.0.116",
 ]
 
 [[package]]
@@ -981,6 +1090,7 @@ dependencies = [
  "bitcoind",
  "bytes",
  "chrono",
+ "clap",
  "configure_me",
  "configure_me_codegen",
  "core-rpc",
@@ -988,7 +1098,7 @@ dependencies = [
  "hex 0.4.3",
  "home",
  "ldk-sample",
- "lightning",
+ "lightning 0.0.118",
  "log",
  "log4rs",
  "mockall",
@@ -1143,6 +1253,14 @@ name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
+
+[[package]]
+name = "musig2"
+version = "0.1.0"
+source = "git+https://github.com/arik-so/rust-musig2?rev=27797d7#27797d78cf64e8974e38d7f31ebb11e455015a9e"
+dependencies = [
+ "bitcoin 0.29.2",
+]
 
 [[package]]
 name = "normalize-line-endings"
@@ -1358,7 +1476,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
  "bytes",
- "heck",
+ "heck 0.3.3",
  "itertools",
  "log",
  "multimap",
@@ -1622,9 +1740,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-pemfile"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d3987094b1d07b653b7dfdc3f70ce9a1da9c51ac18c1b06b662e4f9a0e9f4b2"
+checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
 dependencies = [
  "base64 0.21.5",
 ]
@@ -1782,9 +1900,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.11.1"
+version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+checksum = "4dccd0940a2dcdf68d092b8cbab7dc0ad8fa938bf95787e1b916b0e3d0e8e970"
 
 [[package]]
 name = "socket2"
@@ -1817,6 +1935,12 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
+name = "strsim"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "syn"
@@ -1919,9 +2043,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.33.0"
+version = "1.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f38200e3ef7995e5ef13baec2f432a6da0aa9ac495b2c0e8f3b7eec2c92d653"
+checksum = "d0c014766411e834f7af5b8f4cf46257aab4036ca95e9d2c144a10f59ad6f5b9"
 dependencies = [
  "backtrace",
  "bytes",
@@ -1946,9 +2070,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "630bdcf245f78637c13ec01ffae6187cca34625e8c63150d424b59e55af2675e"
+checksum = "5b8a1e28f2deaa14e508979454cb3a223b10b938b45af148bc0986de36f1923b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2093,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "tonic_lnd"
 version = "0.5.1"
-source = "git+https://github.com/Kixunil/tonic_lnd?rev=fac4a67a8d4951d62fc020d61d38628c0064e6df#fac4a67a8d4951d62fc020d61d38628c0064e6df"
+source = "git+https://github.com/orbitalturtle/tonic_lnd?branch=update-signer-client#de989089fdb23f87d3e6bc4796c504bda9b9be9b"
 dependencies = [
  "hex 0.4.3",
  "prost 0.9.0",
@@ -2226,6 +2350,12 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "utf8parse"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "void"
