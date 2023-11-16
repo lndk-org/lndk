@@ -46,7 +46,6 @@ pub async fn run(args: Cfg) -> Result<(), ()> {
         .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
         .build(log_dir)
         .unwrap();
-
     let config = LogConfig::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
         .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
@@ -58,7 +57,10 @@ pub async fn run(args: Cfg) -> Result<(), ()> {
         )
         .unwrap();
 
-    let _log_handle = log4rs::init_config(config).unwrap();
+    // We can skip the error here for our integration tests. init_config only returns an error
+    // if the logger is already set. We encounter this error in the integration tests if one
+    // lndk process is starting up while another is shutting down.
+    let _log_handle = log4rs::init_config(config);
 
     let mut client = get_lnd_client(args.lnd).expect("failed to connect");
 
