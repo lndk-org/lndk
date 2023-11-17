@@ -185,7 +185,7 @@ pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkPar
 
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.
 #[async_trait]
-pub(crate) trait MessageSigner {
+pub trait MessageSigner {
     async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
     async fn sign_message(
         &mut self,
@@ -193,4 +193,5 @@ pub(crate) trait MessageSigner {
         merkle_hash: Hash,
         tag: String,
     ) -> Result<Vec<u8>, Status>;
+    async fn signer(&mut self) -> &mut tonic_lnd::SignerClient;
 }
