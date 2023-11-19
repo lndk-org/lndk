@@ -7,6 +7,7 @@ use bitcoind::{get_available_port, BitcoinD, Conf, ConnectParams};
 use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
+use lightning::util::logger::Level;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -44,6 +45,8 @@ pub async fn setup_test_infrastructure(
         ldk_peer_listening_port: get_available_port().unwrap(),
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
+        log_level: Level::Trace,
+        node_num: 1,
     };
 
     let ldk2_config = LdkUserInfo {
@@ -56,6 +59,8 @@ pub async fn setup_test_infrastructure(
         ldk_peer_listening_port: get_available_port().unwrap(),
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
+        log_level: Level::Trace,
+        node_num: 2,
     };
 
     let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
