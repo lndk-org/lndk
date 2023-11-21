@@ -256,7 +256,10 @@ where
 /// lookup_onion_support performs a best-effort lookup in the node's list of current peers to determine whether it
 /// supports onion messaging. If the node is not found a warning is logged and we assume that onion messaging is not
 /// supported.
-async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::LightningClient) -> bool {
+pub async fn lookup_onion_support(
+    pubkey: &PublicKey,
+    client: &mut tonic_lnd::LightningClient,
+) -> bool {
     match client
         .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
             latest_error: false,
@@ -609,15 +612,15 @@ async fn consume_messenger_events(
 
 #[async_trait]
 /// SendCustomMessage provides a level of abstraction over LND's send custom message API.
-trait SendCustomMessage {
+pub trait SendCustomMessage {
     async fn send_custom_message(
         &mut self,
         request: SendCustomMessageRequest,
     ) -> Result<SendCustomMessageResponse, Status>;
 }
 
-struct CustomMessenger {
-    client: LightningClient,
+pub struct CustomMessenger {
+    pub client: LightningClient,
 }
 
 #[async_trait]
@@ -668,7 +671,7 @@ async fn produce_outgoing_message_events(
 
 /// relay_outgoing_msg_event is responsible for passing along new outgoing messages from peers. If a new onion message
 /// turns up, it will pass it along to lnd.
-async fn relay_outgoing_msg_event(
+pub(crate) async fn relay_outgoing_msg_event(
     peer: &PublicKey,
     msg: OnionMessage,
     ln_client: &mut impl SendCustomMessage,
