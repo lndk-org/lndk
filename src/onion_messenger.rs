@@ -8,8 +8,10 @@ use bitcoin::secp256k1::PublicKey;
 use core::ops::Deref;
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
+use lightning::offers::invoice::Bolt12Invoice;
 use lightning::onion_message::{
-    CustomOnionMessageHandler, MessageRouter, OffersMessageHandler, OnionMessenger,
+    CustomOnionMessageHandler, MessageRouter, OffersMessage, OffersMessageHandler, OnionMessenger,
+    PendingOnionMessage,
 };
 use lightning::sign::EntropySource;
 use lightning::sign::NodeSigner;
@@ -19,12 +21,13 @@ use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io::Cursor;
 use std::marker::Copy;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{select, time, time::Duration, time::Interval};
 use tonic_lnd::{
@@ -696,6 +699,32 @@ pub(crate) async fn relay_outgoing_msg_event(
     match ln_client.send_custom_message(req).await {
         Ok(_) => debug!("Sent outgoing onion message {msg:?} to {peer}."),
         Err(e) => error!("Error sending custom message {e} to {peer}."),
+    }
+}
+
+// A simple offers message handler.
+#[derive(Clone)]
+pub struct InvoiceHandler {
+    pub invoices: Arc<Mutex<VecDeque<Bolt12Invoice>>>,
+}
+
+impl OffersMessageHandler for InvoiceHandler {
+    fn handle_message(&self, message: OffersMessage) -> Option<OffersMessage> {
+        match message {
+            OffersMessage::Invoice(invoice) => {
+                println!("Received an invoice offers message.");
+                self.invoices.lock().unwrap().push_back(invoice);
+                None
+            }
+            _ => {
+                println!("Received an unsupported offers message.");
+                None
+            }
+        }
+    }
+
+    fn release_pending_messages(&self) -> Vec<PendingOnionMessage<OffersMessage>> {
+        vec![]
     }
 }
 
