@@ -51,12 +51,12 @@ const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 /// A refcell is used for entropy_source to provide interior mutability for ChaCha20Rng. We need a mutable reference
 /// to be able to use the chacha library’s fill_bytes method, but the EntropySource interface in LDK is for an
 /// immutable reference.
-pub(crate) struct MessengerUtilities {
+pub struct MessengerUtilities {
     entropy_source: RefCell<ChaCha20Rng>,
 }
 
 impl MessengerUtilities {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         MessengerUtilities {
             entropy_source: RefCell::new(ChaCha20Rng::from_entropy()),
         }

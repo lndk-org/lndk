@@ -53,14 +53,14 @@ pub(crate) fn features_support_onion_messages(
 }
 
 /// LndNodeSigner provides signing operations using LND's signer subserver.
-pub(crate) struct LndNodeSigner<'a> {
+pub struct LndNodeSigner<'a> {
     pubkey: PublicKey,
     secp_ctx: Secp256k1<secp256k1::All>,
     signer: RefCell<&'a mut tonic_lnd::SignerClient>,
 }
 
 impl<'a> LndNodeSigner<'a> {
-    pub(crate) fn new(pubkey: PublicKey, signer: &'a mut tonic_lnd::SignerClient) -> Self {
+    pub fn new(pubkey: PublicKey, signer: &'a mut tonic_lnd::SignerClient) -> Self {
         LndNodeSigner {
             pubkey,
             secp_ctx: Secp256k1::new(),
