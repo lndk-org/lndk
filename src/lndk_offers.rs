@@ -1,7 +1,5 @@
-use crate::lnd::{LndNodeSigner, MessageSigner, ONION_MESSAGES_OPTIONAL};
-use crate::onion_messenger::{
-    lookup_onion_support, relay_outgoing_msg_event, MessengerUtilities, SendCustomMessage,
-};
+use crate::lnd::{MessageSigner, ONION_MESSAGES_OPTIONAL};
+use crate::onion_messenger::{lookup_onion_support, relay_outgoing_msg_event, SendCustomMessage};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::hashes::sha256::Hash;
@@ -13,14 +11,13 @@ use futures::executor::block_on;
 use lightning::blinded_path::BlindedPath;
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessageHandler};
-use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::Offer;
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::{
-    CustomOnionMessageHandler, DefaultMessageRouter, Destination, MessageRouter, OffersMessage,
-    OffersMessageHandler, OnionMessagePath, OnionMessenger, SendError,
+    CustomOnionMessageHandler, Destination, MessageRouter, OffersMessage, OffersMessageHandler,
+    OnionMessagePath, OnionMessenger, SendError,
 };
 use lightning::sign::EntropySource;
 use lightning::sign::NodeSigner;
@@ -64,28 +61,15 @@ pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
 }
 
 // request_invoice builds an invoice request and tries to send it to the offer maker.
-pub async fn request_invoice(
+pub async fn request_invoice<OMH: OnionMessageHandler + SendOnion>(
     client: Client,
+    onion_messenger: &OMH,
     custom_msg_client: impl SendCustomMessage,
-    pubkey: PublicKey,
     offer: Offer,
     introduction_node: PublicKey,
     blinded_path: BlindedPath,
 ) -> Result<(), OfferError<Secp256k1Error>> {
-    let mut signer_clone = client.clone();
-    let node_client = signer_clone.signer();
-    let node_signer = LndNodeSigner::new(pubkey, node_client);
-    let messenger_utils = MessengerUtilities::new();
-    let onion_messenger = OnionMessenger::new(
-        &messenger_utils,
-        &node_signer,
-        &messenger_utils,
-        &DefaultMessageRouter {},
-        IgnoringMessageHandler {},
-        IgnoringMessageHandler {},
-    );
-
-    // Ensure that the introduction node we need to connect to actually supports onion messaging.
+    // Double check that the introduction node we need to connect to actually supports onion messaging.
     let onion_support =
         lookup_onion_support(&introduction_node.clone(), client.clone().lightning()).await;
     if !onion_support {
@@ -162,10 +146,10 @@ pub async fn create_invoice_request(
 }
 
 // send_invoice_request sends the invoice request to node that created the offer we want to pay.
-pub async fn send_invoice_request(
+pub async fn send_invoice_request<OMH: OnionMessageHandler + SendOnion>(
     network: Network,
     invoice_request: InvoiceRequest,
-    onion_messenger: impl OnionMessageHandler + SendOnion,
+    onion_messenger: &OMH,
     intermediate_nodes: Vec<PublicKey>,
     blinded_path: BlindedPath,
     mut custom_msg_client: impl SendCustomMessage,

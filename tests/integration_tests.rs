@@ -4,11 +4,16 @@ use lndk;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use ldk_sample::node_api::Node as LdkNode;
+use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::offer::Quantity;
+use lightning::onion_message::{DefaultMessageRouter, OnionMessenger};
+use lndk::lnd::LndNodeSigner;
 use lndk::lndk_offers::request_invoice;
-use lndk::onion_messenger::CustomMessenger;
+use lndk::onion_messenger::{CustomMessenger, InvoiceHandler, MessengerUtilities};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::select;
 use tokio::time::{sleep, timeout, Duration as TokioDuration};
@@ -141,6 +146,22 @@ async fn test_lndk_send_invoice_request() {
         ),
     };
 
+    let mut signer_clone = lnd.client.clone().unwrap();
+    let signer_client = signer_clone.signer();
+    let node_signer = LndNodeSigner::new(lnd_pubkey.clone(), signer_client);
+    let messenger_utils = MessengerUtilities::new();
+    let mut invoice_handler = InvoiceHandler {
+        invoices: Arc::new(Mutex::new(VecDeque::new())),
+    };
+    let onion_messenger = OnionMessenger::new(
+        &messenger_utils,
+        &node_signer,
+        &messenger_utils,
+        &DefaultMessageRouter {},
+        &mut invoice_handler,
+        IgnoringMessageHandler {},
+    );
+
     let client = lnd.client.clone().unwrap();
     let mut client_clone = lnd.client.clone().unwrap();
     let custom_msg_client = CustomMessenger {
@@ -152,7 +173,7 @@ async fn test_lndk_send_invoice_request() {
             panic!("lndk should not have completed first {:?}", val);
         },
         // Make sure lndk successfully sends the invoice_request.
-        res = request_invoice(client, custom_msg_client, lnd_pubkey, offer, pubkey_2, blinded_path) => {
+        res = request_invoice(client, &onion_messenger, custom_msg_client, offer, pubkey_2, blinded_path) => {
             assert!(res.is_ok());
 
             ldk1.stop().await;
