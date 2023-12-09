@@ -947,7 +947,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/lndk-org/ldk-sample?branch=offers#848e562f0ef57c95e015454cc2c00bca1e315e29"
+source = "git+https://github.com/lndk-org/ldk-sample?branch=offer-handling#cdc1b006694eb323a8a982d523ae5b40f5f857ad"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
@@ -1095,6 +1095,7 @@ dependencies = [
  "rand_core 0.6.4",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tonic 0.8.3",
  "tonic_lnd",
 ]

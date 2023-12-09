@@ -19,11 +19,11 @@ where
     while retry_num < 3 {
         sleep(Duration::from_secs(3)).await;
         match f().await {
-            Err(_) => {
+            Err(e) => {
                 println!("retrying {} call", func_name.clone());
                 retry_num += 1;
                 if retry_num == 5 {
-                    panic!("{} call failed after 3 retries", func_name);
+                    panic!("{} call failed after 3 retries: {:?}", func_name, e);
                 }
                 continue;
             }

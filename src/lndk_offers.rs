@@ -10,7 +10,7 @@ use core::ops::Deref;
 use futures::executor::block_on;
 use lightning::blinded_path::BlindedPath;
 use lightning::ln::features::InitFeatures;
-use lightning::ln::msgs::{Init, OnionMessageHandler};
+use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::Offer;
@@ -22,9 +22,12 @@ use lightning::onion_message::{
 use lightning::sign::EntropySource;
 use lightning::sign::NodeSigner;
 use lightning::util::logger::Logger;
+use lightning::util::ser::Readable;
 use std::error::Error;
 use std::fmt::Display;
+use std::io::Cursor;
 use tokio::task;
+use tokio_stream::StreamExt;
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
 use tonic_lnd::Client;
@@ -40,6 +43,8 @@ pub enum OfferError<Secp256k1Error> {
     DeriveKeyFailure(Status),
     /// Trouble sending an offers-related onion message along.
     SendError(SendError),
+    /// GetInvoiceError Indicates a failure to receive an invoice.
+    GetInvoiceError,
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -49,6 +54,7 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::SignError(e) => write!(f, "Error signing invoice request: {e:?}"),
             OfferError::DeriveKeyFailure(e) => write!(f, "Error signing invoice request: {e:?}"),
             OfferError::SendError(e) => write!(f, "Error sending onion message: {e:?}"),
+            OfferError::GetInvoiceError => write!(f, "Error retrieving invoice"),
         }
     }
 }
@@ -198,6 +204,32 @@ pub async fn send_invoice_request<OMH: OnionMessageHandler + SendOnion>(
         &mut custom_msg_client,
     )
     .await;
+
+    Ok(())
+}
+
+// After we've requested an invoice from the offer maker, wait for them to send us back an invoice.
+pub async fn wait_for_invoice<OMH: OnionMessageHandler + SendOnion>(
+    ln_client: &mut tonic_lnd::LightningClient,
+    onion_messenger: &OMH,
+) -> Result<(), OfferError<Secp256k1Error>> {
+    let message_stream = ln_client
+        .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
+        .await
+        .expect("message subscription failed")
+        .into_inner();
+
+    let mut message_stream = message_stream.take(1);
+    if let Some(msg) = message_stream.next().await {
+        let message = msg.unwrap();
+        if let Ok(onion_msg) = <OnionMessage as Readable>::read(&mut Cursor::new(message.data)) {
+            let pubkey = PublicKey::from_slice(&message.peer).unwrap();
+            onion_messenger.handle_onion_message(&pubkey, &onion_msg);
+            return Ok(());
+        } else {
+            return Err(OfferError::GetInvoiceError);
+        }
+    }
     Ok(())
 }
 
