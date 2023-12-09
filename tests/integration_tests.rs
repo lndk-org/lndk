@@ -1,9 +1,10 @@
 mod common;
 use lndk;
 
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use ldk_sample::node_api::Node as LdkNode;
+use lightning::blinded_path::BlindedPath;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::{DefaultMessageRouter, OnionMessenger};
@@ -168,12 +169,15 @@ async fn test_lndk_send_invoice_request() {
         client: client_clone.lightning().to_owned(),
     };
     let blinded_path = offer.paths()[0].clone();
+    let secp_ctx = Secp256k1::new();
+    let reply_path =
+        BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
     select! {
         val = lndk::run(lndk_cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // Make sure lndk successfully sends the invoice_request.
-        res = request_invoice(client, &onion_messenger, custom_msg_client, offer, pubkey_2, blinded_path) => {
+        res = request_invoice(client, &onion_messenger, custom_msg_client, offer, pubkey_2, reply_path, blinded_path) => {
             assert!(res.is_ok());
 
             ldk1.stop().await;

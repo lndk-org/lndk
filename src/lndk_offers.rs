@@ -67,6 +67,7 @@ pub async fn request_invoice<OMH: OnionMessageHandler + SendOnion>(
     custom_msg_client: impl SendCustomMessage,
     offer: Offer,
     introduction_node: PublicKey,
+    reply_path: BlindedPath,
     blinded_path: BlindedPath,
 ) -> Result<(), OfferError<Secp256k1Error>> {
     // Double check that the introduction node we need to connect to actually supports onion messaging.
@@ -80,12 +81,14 @@ pub async fn request_invoice<OMH: OnionMessageHandler + SendOnion>(
         create_invoice_request(client.clone(), offer, vec![], Network::Regtest, 20000)
             .await
             .expect("should build invoice request");
+
     send_invoice_request(
         Network::Regtest,
         invoice_request,
         onion_messenger,
         vec![introduction_node],
         blinded_path,
+        reply_path,
         custom_msg_client,
     )
     .await
@@ -152,6 +155,7 @@ pub async fn send_invoice_request<OMH: OnionMessageHandler + SendOnion>(
     onion_messenger: &OMH,
     intermediate_nodes: Vec<PublicKey>,
     blinded_path: BlindedPath,
+    reply_path: BlindedPath,
     mut custom_msg_client: impl SendCustomMessage,
 ) -> Result<(), OfferError<bitcoin::secp256k1::Error>> {
     // We need to make sure our local onion messenger is connected to the needed local peers in
@@ -181,7 +185,7 @@ pub async fn send_invoice_request<OMH: OnionMessageHandler + SendOnion>(
     let contents = OffersMessage::InvoiceRequest(invoice_request);
 
     onion_messenger
-        .send_onion(path, contents, None)
+        .send_onion(path, contents, Some(reply_path))
         .map_err(OfferError::<Secp256k1Error>::SendError)?;
 
     let onion_message = onion_messenger
@@ -471,6 +475,7 @@ mod tests {
 
         let invoice_request = get_invoice_request();
         let blinded_path = get_blinded_path();
+        let reply_path = get_blinded_path();
         let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
 
         assert!(send_invoice_request(
@@ -479,6 +484,7 @@ mod tests {
             onion_mock,
             vec![pubkey],
             blinded_path,
+            reply_path,
             sender_mock
         )
         .await
@@ -506,6 +512,7 @@ mod tests {
 
         let invoice_request = get_invoice_request();
         let blinded_path = get_blinded_path();
+        let reply_path = get_blinded_path();
         let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
 
         assert!(send_invoice_request(
@@ -514,6 +521,7 @@ mod tests {
             onion_mock,
             vec![pubkey],
             blinded_path,
+            reply_path,
             sender_mock
         )
         .await
@@ -543,6 +551,7 @@ mod tests {
 
         let invoice_request = get_invoice_request();
         let blinded_path = get_blinded_path();
+        let reply_path = get_blinded_path();
         let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
 
         assert!(send_invoice_request(
@@ -551,6 +560,7 @@ mod tests {
             onion_mock,
             vec![pubkey],
             blinded_path,
+            reply_path,
             sender_mock
         )
         .await
