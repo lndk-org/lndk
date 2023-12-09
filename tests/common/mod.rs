@@ -109,7 +109,7 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf, PathBuf) {
 
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
 pub struct BitcoindNode {
-    node: BitcoinD,
+    pub node: BitcoinD,
     _data_dir: TempDir,
     zmq_block_port: u16,
     zmq_tx_port: u16,
@@ -150,7 +150,8 @@ pub struct LndNode {
     _lnd_dir_tmp: TempDir,
     pub cert_path: String,
     pub macaroon_path: String,
-    _handle: Child,
+    args: [String; 20],
+    pub handle: Child,
     pub client: Option<Client>,
 }
 
@@ -202,6 +203,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
+            format!("--debuglevel=debug,PEER=info"),
             format!("--bitcoind.rpcuser={}", connect_params.0.unwrap()),
             format!("--bitcoind.rpcpass={}", connect_params.1.unwrap()),
             format!(
@@ -220,7 +222,7 @@ impl LndNode {
 
         // TODO: For Windows we might need to add ".exe" at the end.
         let cmd = Command::new("./lnd-itest")
-            .args(args)
+            .args(args.clone())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -231,9 +233,24 @@ impl LndNode {
             _lnd_dir_tmp: lnd_dir_binding,
             cert_path: cert_path,
             macaroon_path: macaroon_path,
-            _handle: cmd,
+            args: args,
+            handle: cmd,
             client: None,
         }
+    }
+
+    pub async fn start(&mut self) {
+        let lnd_exe_dir = env::temp_dir().join(LNDK_TESTS_FOLDER).join("bin");
+        env::set_current_dir(lnd_exe_dir).expect("couldn't set current directory");
+
+        let cmd = Command::new("./lnd-itest")
+            .args(self.args.clone())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to execute lnd command");
+
+        self.handle = cmd
     }
 
     // Setup the client we need to interact with the LND node.
@@ -319,6 +336,30 @@ impl LndNode {
                     .await
             };
             let resp = test_utils::retry_async(make_request, String::from("connect_peer"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
+
+    // Get an on-chain bitcoin address connect to our LND node.
+    pub async fn new_address(&mut self) -> tonic_lnd::lnrpc::NewAddressResponse {
+        let addr_req = tonic_lnd::lnrpc::NewAddressRequest {
+            r#type: 4, // 4 is the TAPROOT_PUBKEY type.
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .new_address(addr_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("new_address"));
             resp.await.unwrap()
         } else {
             panic!("No client")
