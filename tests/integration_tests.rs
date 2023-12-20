@@ -83,8 +83,11 @@ async fn test_lndk_forwards_onion_message() {
         ),
         signals,
     };
+
+    let handler = lndk::OfferHandler::new();
+    let messenger = lndk::LndkOnionMessenger::new(handler);
     select! {
-        val = lndk::run(lndk_cfg) => {
+        val = messenger.run(lndk_cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
