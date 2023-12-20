@@ -1108,6 +1108,7 @@ dependencies = [
  "tokio",
  "tonic 0.8.3",
  "tonic_lnd",
+ "triggered",
 ]
 
 [[package]]
@@ -2302,6 +2303,12 @@ dependencies = [
  "pin-project",
  "tracing",
 ]
+
+[[package]]
+name = "triggered"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce148eae0d1a376c1b94ae651fc3261d9cb8294788b962b7382066376503a2d1"
 
 [[package]]
 name = "try-lock"

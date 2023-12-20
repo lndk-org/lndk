@@ -4,6 +4,7 @@ use lndk;
 use bitcoin::secp256k1::PublicKey;
 use chrono::Utc;
 use ldk_sample::node_api::Node as LdkNode;
+use lndk::LifecycleSignals;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::select;
@@ -59,6 +60,7 @@ async fn test_lndk_forwards_onion_message() {
 
     // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that lndk
     // successfully helps lnd forward the onion message from ldk1 to ldk2.
+    let (shutdown, listener) = triggered::trigger();
     let lnd_cfg = lndk::lnd::LndCfg::new(
         lnd.address,
         PathBuf::from_str(&lnd.cert_path).unwrap(),
@@ -66,6 +68,10 @@ async fn test_lndk_forwards_onion_message() {
     );
     let now_timestamp = Utc::now();
     let timestamp = now_timestamp.format("%d-%m-%Y-%H%M");
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+    };
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg,
         log_dir: Some(
@@ -75,6 +81,7 @@ async fn test_lndk_forwards_onion_message() {
                 .unwrap()
                 .to_string(),
         ),
+        signals,
     };
     select! {
         val = lndk::run(lndk_cfg) => {
@@ -82,6 +89,7 @@ async fn test_lndk_forwards_onion_message() {
         },
         // We wait for ldk2 to receive the onion message.
         (ldk1, ldk2) = wait_to_receive_onion_message(ldk1, ldk2, PublicKey::from_str(&lnd_info.identity_pubkey).unwrap()) => {
+            shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
         }

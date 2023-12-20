@@ -23,12 +23,21 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Once;
 use tonic_lnd::lnrpc::GetInfoRequest;
+use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
 
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+    pub signals: LifecycleSignals,
+}
+
+pub struct LifecycleSignals {
+    // Use to externally trigger shutdown.
+    pub shutdown: Trigger,
+    // Used to listen for the signal to shutdown.
+    pub listener: Listener,
 }
 
 pub fn init_logger(config: LogConfig) {
@@ -136,6 +145,7 @@ pub async fn run(args: Cfg) -> Result<(), ()> {
         &mut peers_client,
         onion_messenger,
         network.unwrap(),
+        args.signals,
     )
     .await
 }
