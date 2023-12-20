@@ -30,5 +30,6 @@ async fn main() -> Result<(), ()> {
         listener,
     };
 
-    lndk::run(args).await
+    let handler = lndk::OfferHandler::new();
+    handler.run(args).await
 }
