@@ -13,7 +13,10 @@ use crate::onion_messenger::{run_onion_messenger, MessengerUtilities};
 use bitcoin::secp256k1::PublicKey;
 use home::home_dir;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::onion_message::{DefaultMessageRouter, OnionMessenger};
+use lightning::offers::offer::Offer;
+use lightning::onion_message::{
+    DefaultMessageRouter, OffersMessage, OffersMessageHandler, OnionMessenger, PendingOnionMessage,
+};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -21,6 +24,7 @@ use log4rs::config::{Appender, Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Mutex;
 use tonic_lnd::lnrpc::GetInfoRequest;
 use triggered::{Listener, Trigger};
 
@@ -33,11 +37,39 @@ pub struct Cfg {
     pub listener: Listener,
 }
 
-pub struct OfferHandler {}
+pub enum OfferError {
+    OfferAlreadyAdded,
+}
+
+enum OfferState {
+    OfferAdded,
+    InvoiceRequestSent,
+    InvoiceReceived,
+    InvoicePaymentDispatched,
+    InvoicePaid,
+}
+
+pub struct OfferHandler {
+    active_offers: Mutex<HashMap<Offer, OfferState>>,
+    pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
+}
 
 impl OfferHandler {
     pub fn new() -> Self {
-        OfferHandler {}
+        OfferHandler {
+            active_offers: Mutex::new(HashMap::new()),
+            pending_messages: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Adds an offer to be paid with the amount specified. May only be called once for a single offer.
+    pub fn pay_offer(&mut self, _offer: Offer, _amount: u64) -> Result<(), OfferError> {
+        /*
+           Check if we've already added offer -> error.
+           Add offer to state map.
+           Create invoice request and push to offer queue.
+        */
+        Ok(())
     }
 
     pub async fn run(&self, args: Cfg) -> Result<(), ()> {
@@ -129,7 +161,7 @@ impl OfferHandler {
             &node_signer,
             &messenger_utils,
             &DefaultMessageRouter {},
-            IgnoringMessageHandler {},
+            self,
             IgnoringMessageHandler {},
         );
 
@@ -143,6 +175,29 @@ impl OfferHandler {
             args.listener,
         )
         .await
+    }
+}
+
+impl OffersMessageHandler for OfferHandler {
+    fn handle_message(&self, message: OffersMessage) -> Option<OffersMessage> {
+        match message {
+            OffersMessage::InvoiceRequest(_) => {
+                log::error!("Invoice request received, payment not yet supported.");
+                None
+            }
+            OffersMessage::Invoice(_invoice) => {
+                // lookup corresponding invoice request / fail if not known
+                // Validate invoice for invoice request
+                // Progress state to invoice received
+                // Dispatch payment and update state
+                None
+            }
+            OffersMessage::InvoiceError(_error) => None,
+        }
+    }
+
+    fn release_pending_messages(&self) -> Vec<PendingOnionMessage<OffersMessage>> {
+        core::mem::take(&mut self.pending_messages.lock().unwrap())
     }
 }
 
