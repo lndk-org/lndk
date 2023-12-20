@@ -13,7 +13,9 @@ use crate::onion_messenger::MessengerUtilities;
 use bitcoin::secp256k1::PublicKey;
 use home::home_dir;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
-use lightning::onion_message::{DefaultMessageRouter, OnionMessenger};
+use lightning::onion_message::{
+    DefaultMessageRouter, OffersMessage, OffersMessageHandler, OnionMessenger, PendingOnionMessage,
+};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -21,7 +23,7 @@ use log4rs::config::{Appender, Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use triggered::{Listener, Trigger};
 
@@ -144,7 +146,7 @@ impl LndkOnionMessenger {
             &node_signer,
             &messenger_utils,
             &DefaultMessageRouter {},
-            IgnoringMessageHandler {},
+            &self.offer_handler,
             IgnoringMessageHandler {},
         );
 
@@ -160,17 +162,49 @@ impl LndkOnionMessenger {
     }
 }
 
-pub struct OfferHandler {}
+#[allow(dead_code)]
+enum OfferState {
+    OfferAdded,
+    InvoiceRequestSent,
+    InvoiceReceived,
+    InvoicePaymentDispatched,
+    InvoicePaid,
+}
+
+pub struct OfferHandler {
+    _active_offers: Mutex<HashMap<String, OfferState>>,
+    pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
+}
 
 impl OfferHandler {
     pub fn new() -> Self {
-        OfferHandler {}
+        OfferHandler {
+            _active_offers: Mutex::new(HashMap::new()),
+            pending_messages: Mutex::new(Vec::new()),
+        }
     }
 }
 
 impl Default for OfferHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl OffersMessageHandler for OfferHandler {
+    fn handle_message(&self, message: OffersMessage) -> Option<OffersMessage> {
+        match message {
+            OffersMessage::InvoiceRequest(_) => {
+                log::error!("Invoice request received, payment not yet supported.");
+                None
+            }
+            OffersMessage::Invoice(_invoice) => None,
+            OffersMessage::InvoiceError(_error) => None,
+        }
+    }
+
+    fn release_pending_messages(&self) -> Vec<PendingOnionMessage<OffersMessage>> {
+        core::mem::take(&mut self.pending_messages.lock().unwrap())
     }
 }
 
