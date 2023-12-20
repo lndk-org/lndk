@@ -22,10 +22,15 @@ use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
 use tonic_lnd::lnrpc::GetInfoRequest;
+use triggered::{Listener, Trigger};
 
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+    // Use to externally trigger shutdown.
+    pub shutdown: Trigger,
+    // Used to listen for the signal to shutdown.
+    pub listener: Listener,
 }
 
 pub async fn run(args: Cfg) -> Result<(), ()> {
@@ -127,6 +132,8 @@ pub async fn run(args: Cfg) -> Result<(), ()> {
         &mut peers_client,
         onion_messenger,
         network.unwrap(),
+        args.shutdown,
+        args.listener,
     )
     .await
 }

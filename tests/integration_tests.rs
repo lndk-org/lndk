@@ -59,6 +59,7 @@ async fn test_lndk_forwards_onion_message() {
 
     // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that lndk
     // successfully helps lnd forward the onion message from ldk1 to ldk2.
+    let (shutdown, listener) = triggered::trigger();
     let lnd_cfg = lndk::lnd::LndCfg::new(
         lnd.address,
         PathBuf::from_str(&lnd.cert_path).unwrap(),
@@ -75,6 +76,8 @@ async fn test_lndk_forwards_onion_message() {
                 .unwrap()
                 .to_string(),
         ),
+        shutdown: shutdown.clone(),
+        listener,
     };
     select! {
         val = lndk::run(lndk_cfg) => {
@@ -82,6 +85,7 @@ async fn test_lndk_forwards_onion_message() {
         },
         // We wait for ldk2 to receive the onion message.
         (ldk1, ldk2) = wait_to_receive_onion_message(ldk1, ldk2, PublicKey::from_str(&lnd_info.identity_pubkey).unwrap()) => {
+            shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
         }
