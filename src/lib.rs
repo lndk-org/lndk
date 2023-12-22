@@ -21,11 +21,20 @@ use log4rs::config::{Appender, Config as LogConfig, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Once;
 use tonic_lnd::lnrpc::GetInfoRequest;
+
+static INIT: Once = Once::new();
 
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+}
+
+pub fn init_logger(config: LogConfig) {
+    INIT.call_once(|| {
+        log4rs::init_config(config).expect("failed to initialize logger");
+    });
 }
 
 pub async fn run(args: Cfg) -> Result<(), ()> {
@@ -58,7 +67,7 @@ pub async fn run(args: Cfg) -> Result<(), ()> {
         )
         .unwrap();
 
-    let _log_handle = log4rs::init_config(config).unwrap();
+    init_logger(config);
 
     let mut client = get_lnd_client(args.lnd).expect("failed to connect");
 
