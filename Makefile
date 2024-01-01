@@ -14,5 +14,5 @@ itest:
 	@$(call print, "Building lnd for itests.")
 	git submodule update --init --recursive
 	cd lnd/cmd/lnd; $(GO_BUILD) -tags="peersrpc signrpc walletrpc dev" -o $(TMP_DIR)/lndk-tests/bin/lnd-itest$(EXEC_SUFFIX)
-	$(CARGO_TEST) -- -- test '*' --test-threads=1 --nocapture
+	$(CARGO_TEST) --test '*' -- --test-threads=1 --nocapture
 
