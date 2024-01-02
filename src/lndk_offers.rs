@@ -8,7 +8,7 @@ use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey};
 use futures::executor::block_on;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::offers::merkle::SignError;
-use lightning::offers::offer::Offer;
+use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use std::error::Error;
 use std::fmt::Display;
@@ -27,6 +27,10 @@ pub enum OfferError<Secp256k1Error> {
     SignError(SignError<Secp256k1Error>),
     /// DeriveKeyFailure indicates a failure to derive key for signing the invoice request.
     DeriveKeyFailure(Status),
+    /// User provided an invalid amount.
+    InvalidAmount(String),
+    /// Invalid currency contained in the offer.
+    InvalidCurrency,
     /// Unable to connect to peer.
     PeerConnectError(Status),
     /// No node address.
@@ -39,6 +43,11 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::BuildUIRFailure(e) => write!(f, "Error building invoice request: {e:?}"),
             OfferError::SignError(e) => write!(f, "Error signing invoice request: {e:?}"),
             OfferError::DeriveKeyFailure(e) => write!(f, "Error signing invoice request: {e:?}"),
+            OfferError::InvalidAmount(e) => write!(f, "User provided an invalid amount: {e:?}"),
+            OfferError::InvalidCurrency => write!(
+                f,
+                "LNDK doesn't yet support offer currencies other than bitcoin"
+            ),
             OfferError::PeerConnectError(e) => write!(f, "Error connecting to peer: {e:?}"),
             OfferError::NodeAddressNotFound => write!(f, "Couldn't get node address"),
         }
@@ -109,6 +118,53 @@ impl OfferHandler {
         .await
         .unwrap()
     }
+}
+
+// Checks that the user-provided amount matches the offer.
+pub async fn validate_amount(
+    offer: &Offer,
+    amount_msats: Option<u64>,
+) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
+    let validated_amount = match offer.amount() {
+        Some(offer_amount) => {
+            match *offer_amount {
+                Amount::Bitcoin {
+                    amount_msats: bitcoin_amt,
+                } => {
+                    if let Some(msats) = amount_msats {
+                        if msats < bitcoin_amt {
+                            return Err(OfferError::InvalidAmount(format!(
+                                "{msats} is less than offer amount {}",
+                                bitcoin_amt
+                            )));
+                        }
+                        msats
+                    } else {
+                        // If user didn't set amount, set it to the offer amount.
+                        if bitcoin_amt == 0 {
+                            return Err(OfferError::InvalidAmount(
+                                "Offer doesn't set an amount, so user must specify one".to_string(),
+                            ));
+                        }
+                        bitcoin_amt
+                    }
+                }
+                _ => {
+                    return Err(OfferError::InvalidCurrency);
+                }
+            }
+        }
+        None => {
+            if let Some(msats) = amount_msats {
+                msats
+            } else {
+                return Err(OfferError::InvalidAmount(
+                    "Offer doesn't set an amount, so user must specify one".to_string(),
+                ));
+            }
+        }
+    };
+    Ok(validated_amount)
 }
 
 // connect_to_peer connects to the provided node if we're not already connected.
@@ -228,12 +284,30 @@ impl MessageSigner for Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::secp256k1::{KeyPair, Secp256k1, SecretKey};
+    use lightning::offers::offer::{OfferBuilder, Quantity};
     use mockall::mock;
     use std::str::FromStr;
+    use std::time::{Duration, SystemTime};
     use tonic_lnd::lnrpc::NodeAddress;
 
     fn get_offer() -> String {
         "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
+    }
+
+    fn build_custom_offer(amount_msats: u64) -> Offer {
+        let secp_ctx = Secp256k1::new();
+        let keys = KeyPair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
+        let pubkey = PublicKey::from(keys);
+
+        let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
+        OfferBuilder::new("coffee".to_string(), pubkey)
+            .amount_msats(amount_msats)
+            .supported_quantity(Quantity::Unbounded)
+            .absolute_expiry(expiration.duration_since(SystemTime::UNIX_EPOCH).unwrap())
+            .issuer("Foo Bar".to_string())
+            .build()
+            .unwrap()
     }
 
     fn get_pubkey() -> String {
@@ -335,6 +409,28 @@ mod tests {
             .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
             .await
             .is_err())
+    }
+
+    #[tokio::test]
+    async fn test_validate_amount() {
+        // If the amount the user provided is greater than the offer-provided amount, then
+        // we should be good.
+        let offer = build_custom_offer(20000);
+        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+
+        let offer = build_custom_offer(0);
+        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_invalid_amount() {
+        // If the amount the user provided is lower than the offer amount, we error.
+        let offer = build_custom_offer(20000);
+        assert!(validate_amount(&offer, Some(1000)).await.is_err());
+
+        // Both user amount and offer amount can't be 0.
+        let offer = build_custom_offer(0);
+        assert!(validate_amount(&offer, None).await.is_err());
     }
 
     #[tokio::test]
