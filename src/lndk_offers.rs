@@ -1,5 +1,5 @@
 use crate::lnd::{features_support_onion_messages, MessageSigner, PeerConnector};
-use crate::OfferHandler;
+use crate::{OfferHandler, OfferState, PayOfferParams};
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
@@ -11,12 +11,14 @@ use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest}
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
+use lightning::onion_message::{Destination, OffersMessage, PendingOnionMessage};
 use log::error;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
+use tokio::sync::mpsc::Receiver;
 use tokio::task;
-use tonic_lnd::lnrpc::{LightningNode, ListPeersRequest, ListPeersResponse};
+use tonic_lnd::lnrpc::{GetInfoRequest, LightningNode, ListPeersRequest, ListPeersResponse};
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
 use tonic_lnd::Client;
@@ -24,6 +26,8 @@ use tonic_lnd::Client;
 #[derive(Debug)]
 /// OfferError is an error that occurs during the process of paying an offer.
 pub enum OfferError<Secp256k1Error> {
+    /// AlreadyProcessing indicates that we're already in the process of paying an offer.
+    AlreadyProcessing,
     /// BuildUIRFailure indicates a failure to build the unsigned invoice request.
     BuildUIRFailure(Bolt12SemanticError),
     /// SignError indicates a failure to sign the invoice request.
@@ -47,6 +51,9 @@ pub enum OfferError<Secp256k1Error> {
 impl Display for OfferError<Secp256k1Error> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            OfferError::AlreadyProcessing => {
+                write!(f, "LNDK is already trying to pay for provided offer")
+            }
             OfferError::BuildUIRFailure(e) => write!(f, "Error building invoice request: {e:?}"),
             OfferError::SignError(e) => write!(f, "Error signing invoice request: {e:?}"),
             OfferError::DeriveKeyFailure(e) => write!(f, "Error signing invoice request: {e:?}"),
@@ -71,9 +78,76 @@ pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
 }
 
 impl OfferHandler {
-    #[allow(dead_code)]
+    pub async fn send_invoice_request(
+        &self,
+        mut cfg: PayOfferParams,
+        mut started: Receiver<u32>,
+    ) -> Result<(), OfferError<bitcoin::secp256k1::Error>> {
+        // Wait for onion messenger to give us the signal that it's ready. Once the onion messenger drops
+        // the channel sender, recv will return None and we'll stop blocking here.
+        if started.recv().await.is_some() {
+            error!("Error: we shouldn't receive any messages on this channel");
+        }
+
+        let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
+
+        // For now we connect directly to the introduction node of the blinded path so we don't need any
+        // intermediate nodes here. In the future we'll query for a full path to the introduction node for
+        // better sender privacy.
+        match cfg.destination {
+            Destination::Node(pubkey) => connect_to_peer(cfg.client.clone(), pubkey).await?,
+            Destination::BlindedPath(ref path) => {
+                connect_to_peer(cfg.client.clone(), path.introduction_node_id).await?
+            }
+        };
+
+        let offer_id = cfg.offer.clone().to_string();
+        {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            if active_offers.contains_key(&offer_id.clone()) {
+                return Err(OfferError::AlreadyProcessing);
+            }
+            active_offers.insert(cfg.offer.to_string().clone(), OfferState::OfferAdded);
+        }
+
+        let invoice_request = self
+            .create_invoice_request(
+                cfg.client.clone(),
+                cfg.offer,
+                vec![],
+                cfg.network,
+                validated_amount,
+            )
+            .await?;
+
+        if cfg.reply_path.is_none() {
+            let info = cfg
+                .client
+                .lightning()
+                .get_info(GetInfoRequest {})
+                .await
+                .expect("failed to get info")
+                .into_inner();
+
+            let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
+            cfg.reply_path = Some(self.create_reply_path(cfg.client.clone(), pubkey).await?)
+        };
+        let contents = OffersMessage::InvoiceRequest(invoice_request);
+        let pending_message = PendingOnionMessage {
+            contents,
+            destination: cfg.destination,
+            reply_path: cfg.reply_path,
+        };
+
+        let mut pending_messages = self.pending_messages.lock().unwrap();
+        pending_messages.push(pending_message);
+        std::mem::drop(pending_messages);
+
+        Ok(())
+    }
+
     // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12 process of paying an offer.
-    pub(crate) async fn create_invoice_request(
+    pub async fn create_invoice_request(
         &self,
         mut signer: impl MessageSigner + std::marker::Send + 'static,
         offer: Offer,
@@ -163,7 +237,7 @@ impl OfferHandler {
             )
         } else {
             Ok(BlindedPath::new_for_message(
-                &[intro_node.unwrap()],
+                &[intro_node.unwrap(), node_id],
                 &self.messenger_utils,
                 &secp_ctx,
             )
@@ -220,6 +294,14 @@ pub async fn validate_amount(
         }
     };
     Ok(validated_amount)
+}
+
+pub async fn get_destination(offer: &Offer) -> Destination {
+    if offer.paths().is_empty() {
+        Destination::Node(offer.signing_pubkey())
+    } else {
+        Destination::BlindedPath(offer.paths()[0].clone())
+    }
 }
 
 // connect_to_peer connects to the provided node if we're not already connected.
@@ -347,6 +429,10 @@ mod tests {
     use std::time::{Duration, SystemTime};
     use tonic_lnd::lnrpc::NodeAddress;
 
+    fn get_offer() -> String {
+        "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
+    }
+
     fn build_custom_offer(amount_msats: u64) -> Offer {
         let secp_ctx = Secp256k1::new();
         let keys = KeyPair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
@@ -364,6 +450,10 @@ mod tests {
 
     fn get_pubkey() -> String {
         "0313ba7ccbd754c117962b9afab6c2870eb3ef43f364a9f6c43d0fabb4553776ba".to_string()
+    }
+
+    fn get_signature() -> String {
+        "28b937976a29c15827433086440b36c2bec6ca5bd977557972dca8641cd59ffba50daafb8ee99a19c950976b46f47d9e7aa716652e5657dfc555b82eff467f18".to_string()
     }
 
     mock! {
@@ -385,6 +475,78 @@ mod tests {
              async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
          }
+    }
+
+    #[tokio::test]
+    async fn test_request_invoice() {
+        let mut signer_mock = MockTestBolt12Signer::new();
+
+        signer_mock.expect_derive_key().returning(|_| {
+            Ok(PublicKey::from_str(&get_pubkey())
+                .unwrap()
+                .serialize()
+                .to_vec())
+        });
+
+        signer_mock.expect_sign_message().returning(|_, _, _| {
+            Ok(Signature::from_str(&get_signature())
+                .unwrap()
+                .as_ref()
+                .to_vec())
+        });
+
+        let offer = decode(get_offer()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_ok())
+    }
+
+    #[tokio::test]
+    async fn test_request_invoice_derive_key_error() {
+        let mut signer_mock = MockTestBolt12Signer::new();
+
+        signer_mock
+            .expect_derive_key()
+            .returning(|_| Err(Status::unknown("error testing")));
+
+        signer_mock.expect_sign_message().returning(|_, _, _| {
+            Ok(Signature::from_str(&get_signature())
+                .unwrap()
+                .as_ref()
+                .to_vec())
+        });
+
+        let offer = decode(get_offer()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_err())
+    }
+
+    #[tokio::test]
+    async fn test_request_invoice_signer_error() {
+        let mut signer_mock = MockTestBolt12Signer::new();
+
+        signer_mock.expect_derive_key().returning(|_| {
+            Ok(PublicKey::from_str(&get_pubkey())
+                .unwrap()
+                .serialize()
+                .to_vec())
+        });
+
+        signer_mock
+            .expect_sign_message()
+            .returning(|_, _, _| Err(Status::unknown("error testing")));
+
+        let offer = decode(get_offer()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_err())
     }
 
     #[tokio::test]

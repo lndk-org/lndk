@@ -29,6 +29,7 @@ pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
 }
 
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
+#[derive(Clone)]
 pub struct LndCfg {
     address: String,
     cert: PathBuf,
@@ -186,7 +187,7 @@ pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkPar
 
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.
 #[async_trait]
-pub(crate) trait MessageSigner {
+pub trait MessageSigner {
     async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
     async fn sign_message(
         &mut self,

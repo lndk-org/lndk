@@ -8,13 +8,17 @@ mod rate_limit;
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
 };
-
+use crate::lndk_offers::OfferError;
 use crate::onion_messenger::MessengerUtilities;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::network::constants::Network;
+use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey};
 use home::home_dir;
+use lightning::blinded_path::BlindedPath;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
+use lightning::offers::offer::Offer;
 use lightning::onion_message::{
-    DefaultMessageRouter, OffersMessage, OffersMessageHandler, OnionMessenger, PendingOnionMessage,
+    DefaultMessageRouter, Destination, OffersMessage, OffersMessageHandler, OnionMessenger,
+    PendingOnionMessage,
 };
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
@@ -24,8 +28,9 @@ use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Mutex, Once};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
@@ -175,18 +180,40 @@ enum OfferState {
 }
 
 pub struct OfferHandler {
-    _active_offers: Mutex<HashMap<String, OfferState>>,
+    active_offers: Mutex<HashMap<String, OfferState>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     messenger_utils: MessengerUtilities,
+}
+
+#[derive(Clone)]
+pub struct PayOfferParams {
+    pub offer: Offer,
+    pub amount: Option<u64>,
+    pub network: Network,
+    pub client: Client,
+    /// The destination the offer creator provided, which we will use to send the invoice request.
+    pub destination: Destination,
+    /// The path we will send back to the offer creator, so it knows where to send back the invoice.
+    pub reply_path: Option<BlindedPath>,
 }
 
 impl OfferHandler {
     pub fn new() -> Self {
         OfferHandler {
-            _active_offers: Mutex::new(HashMap::new()),
+            active_offers: Mutex::new(HashMap::new()),
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils: MessengerUtilities::new(),
         }
+    }
+
+    /// Adds an offer to be paid with the amount specified. May only be called once for a single offer.
+    pub async fn pay_offer(
+        &self,
+        cfg: PayOfferParams,
+        started: Receiver<u32>,
+    ) -> Result<(), OfferError<Secp256k1Error>> {
+        self.send_invoice_request(cfg, started).await?;
+        Ok(())
     }
 }
 
