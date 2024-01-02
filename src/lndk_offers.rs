@@ -1,4 +1,4 @@
-use crate::lnd::MessageSigner;
+use crate::lnd::{MessageSigner, PeerConnector};
 use crate::OfferHandler;
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
@@ -13,19 +13,24 @@ use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use std::error::Error;
 use std::fmt::Display;
 use tokio::task;
+use tonic_lnd::lnrpc::{LightningNode, ListPeersRequest, ListPeersResponse};
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
 use tonic_lnd::Client;
 
 #[derive(Debug)]
 /// OfferError is an error that occurs during the process of paying an offer.
-pub(crate) enum OfferError<Secp256k1Error> {
+pub enum OfferError<Secp256k1Error> {
     /// BuildUIRFailure indicates a failure to build the unsigned invoice request.
     BuildUIRFailure(Bolt12SemanticError),
     /// SignError indicates a failure to sign the invoice request.
     SignError(SignError<Secp256k1Error>),
     /// DeriveKeyFailure indicates a failure to derive key for signing the invoice request.
     DeriveKeyFailure(Status),
+    /// Unable to connect to peer.
+    PeerConnectError(Status),
+    /// No node address.
+    NodeAddressNotFound,
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -34,6 +39,8 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::BuildUIRFailure(e) => write!(f, "Error building invoice request: {e:?}"),
             OfferError::SignError(e) => write!(f, "Error signing invoice request: {e:?}"),
             OfferError::DeriveKeyFailure(e) => write!(f, "Error signing invoice request: {e:?}"),
+            OfferError::PeerConnectError(e) => write!(f, "Error connecting to peer: {e:?}"),
+            OfferError::NodeAddressNotFound => write!(f, "Couldn't get node address"),
         }
     }
 }
@@ -104,6 +111,89 @@ impl OfferHandler {
     }
 }
 
+// connect_to_peer connects to the provided node if we're not already connected.
+pub async fn connect_to_peer(
+    mut connector: impl PeerConnector,
+    node_id: PublicKey,
+) -> Result<(), OfferError<Secp256k1Error>> {
+    let resp = connector
+        .list_peers()
+        .await
+        .map_err(OfferError::PeerConnectError)?;
+
+    let node_id_str = node_id.to_string();
+    for peer in resp.peers.iter() {
+        if peer.pub_key == node_id_str {
+            return Ok(());
+        }
+    }
+
+    let node = connector
+        .get_node_info(node_id_str.clone())
+        .await
+        .map_err(OfferError::PeerConnectError)?;
+
+    let node = match node {
+        Some(node) => node,
+        None => return Err(OfferError::NodeAddressNotFound),
+    };
+
+    if node.addresses.is_empty() {
+        return Err(OfferError::NodeAddressNotFound);
+    }
+
+    connector
+        .connect_peer(node_id_str, node.addresses[0].clone().addr)
+        .await
+        .map_err(OfferError::PeerConnectError)?;
+
+    Ok(())
+}
+
+#[async_trait]
+impl PeerConnector for Client {
+    async fn list_peers(&mut self) -> Result<ListPeersResponse, Status> {
+        let list_req = ListPeersRequest {
+            ..Default::default()
+        };
+
+        self.lightning()
+            .list_peers(list_req)
+            .await
+            .map(|resp| resp.into_inner())
+    }
+
+    async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status> {
+        let ln_addr = tonic_lnd::lnrpc::LightningAddress {
+            pubkey: node_id,
+            host: addr,
+        };
+
+        let connect_req = tonic_lnd::lnrpc::ConnectPeerRequest {
+            addr: Some(ln_addr),
+            timeout: 20,
+            ..Default::default()
+        };
+
+        self.lightning()
+            .connect_peer(connect_req.clone())
+            .await
+            .map(|_| ())
+    }
+
+    async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status> {
+        let req = tonic_lnd::lnrpc::NodeInfoRequest {
+            pub_key,
+            include_channels: false,
+        };
+
+        self.lightning()
+            .get_node_info(req)
+            .await
+            .map(|resp| resp.into_inner().node)
+    }
+}
+
 #[async_trait]
 impl MessageSigner for Client {
     async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status> {
@@ -140,6 +230,7 @@ mod tests {
     use super::*;
     use mockall::mock;
     use std::str::FromStr;
+    use tonic_lnd::lnrpc::NodeAddress;
 
     fn get_offer() -> String {
         "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
@@ -160,6 +251,17 @@ mod tests {
          impl MessageSigner for TestBolt12Signer {
              async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
              async fn sign_message(&mut self, key_loc: KeyLocator, merkle_hash: Hash, tag: String) -> Result<Vec<u8>, Status>;
+         }
+    }
+
+    mock! {
+        TestPeerConnector{}
+
+         #[async_trait]
+         impl PeerConnector for TestPeerConnector {
+             async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
+             async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
+             async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
          }
     }
 
@@ -233,5 +335,97 @@ mod tests {
             .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
             .await
             .is_err())
+    }
+
+    #[tokio::test]
+    async fn test_connect_peer() {
+        let mut connector_mock = MockTestPeerConnector::new();
+        connector_mock.expect_list_peers().returning(|| {
+            Ok(ListPeersResponse {
+                ..Default::default()
+            })
+        });
+
+        connector_mock.expect_get_node_info().returning(|_| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            };
+
+            Ok(Some(node))
+        });
+
+        connector_mock
+            .expect_connect_peer()
+            .returning(|_, _| Ok(()));
+
+        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        assert!(connect_to_peer(connector_mock, pubkey).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_connect_peer_already_connected() {
+        let mut connector_mock = MockTestPeerConnector::new();
+        connector_mock.expect_list_peers().returning(|| {
+            let peer = tonic_lnd::lnrpc::Peer {
+                pub_key: get_pubkey(),
+                ..Default::default()
+            };
+
+            Ok(ListPeersResponse {
+                peers: vec![peer],
+                ..Default::default()
+            })
+        });
+
+        connector_mock.expect_get_node_info().returning(|_| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            };
+
+            Ok(Some(node))
+        });
+
+        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        assert!(connect_to_peer(connector_mock, pubkey).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_connect_peer_connect_error() {
+        let mut connector_mock = MockTestPeerConnector::new();
+        connector_mock.expect_list_peers().returning(|| {
+            Ok(ListPeersResponse {
+                ..Default::default()
+            })
+        });
+
+        connector_mock.expect_get_node_info().returning(|_| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            };
+
+            Ok(Some(node))
+        });
+
+        connector_mock
+            .expect_connect_peer()
+            .returning(|_, _| Err(Status::unknown("")));
+
+        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        assert!(connect_to_peer(connector_mock, pubkey).await.is_err());
     }
 }

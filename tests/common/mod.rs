@@ -326,4 +326,32 @@ impl LndNode {
 
         resp
     }
+
+    // disconnect_peer disconnects the specified peer.
+    #[allow(dead_code)]
+    pub async fn disconnect_peer(
+        &mut self,
+        node_id: PublicKey,
+    ) -> tonic_lnd::lnrpc::DisconnectPeerResponse {
+        let disconnect_req = tonic_lnd::lnrpc::DisconnectPeerRequest {
+            pub_key: node_id.to_string(),
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .disconnect_peer(disconnect_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("disconnect_peer"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
 }
