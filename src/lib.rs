@@ -110,6 +110,7 @@ impl LndkOnionMessenger {
             .into_inner();
 
         let mut network_str = None;
+        #[allow(deprecated)]
         for chain in info.chains {
             if chain.chain == "bitcoin" {
                 network_str = Some(chain.network.clone())
