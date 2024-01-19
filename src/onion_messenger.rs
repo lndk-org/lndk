@@ -65,6 +65,12 @@ impl MessengerUtilities {
     }
 }
 
+impl Default for MessengerUtilities {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EntropySource for MessengerUtilities {
     // TODO: surface LDK's EntropySource and use instead.
     fn get_secure_random_bytes(&self) -> [u8; 32] {
