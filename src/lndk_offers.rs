@@ -7,11 +7,13 @@ use bitcoin::secp256k1::schnorr::Signature;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
 use futures::executor::block_on;
 use lightning::blinded_path::BlindedPath;
+use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::{Destination, OffersMessage, PendingOnionMessage};
+use lightning::sign::EntropySource;
 use log::error;
 use std::error::Error;
 use std::fmt::Display;
@@ -151,7 +153,7 @@ impl OfferHandler {
         &self,
         mut signer: impl MessageSigner + std::marker::Send + 'static,
         offer: Offer,
-        metadata: Vec<u8>,
+        _metadata: Vec<u8>,
         network: Network,
         msats: u64,
     ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
@@ -169,8 +171,19 @@ impl OfferHandler {
         let pubkey =
             PublicKey::from_slice(&pubkey_bytes).expect("failed to deserialize public key");
 
+        // Generate a new payment id for this payment.
+        let bytes = self.messenger_utils.get_secure_random_bytes();
+        // We need to add some metadata to the invoice request to help with verification of the invoice
+        // once returned from the offer maker. Once we get an invoice back, this metadata will help us
+        // to determine: 1) That the invoice is truly for the invoice request we sent. 2) We don't pay
+        // duplicate invoices.
         let unsigned_invoice_req = offer
-            .request_invoice(metadata, pubkey)
+            .request_invoice_deriving_metadata(
+                pubkey,
+                &self.expanded_key,
+                &self.messenger_utils,
+                PaymentId(bytes),
+            )
             .unwrap()
             .chain(network)
             .unwrap()
@@ -349,7 +362,6 @@ impl PeerConnector for Client {
         let list_req = ListPeersRequest {
             ..Default::default()
         };
-
         self.lightning()
             .list_peers(list_req)
             .await
