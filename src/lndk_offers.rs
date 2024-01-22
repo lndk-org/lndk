@@ -1,4 +1,4 @@
-use crate::lnd::{features_support_onion_messages, MessageSigner, PeerConnector};
+use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
 use crate::{OfferHandler, OfferState, PayOfferParams};
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
@@ -21,7 +21,11 @@ use std::fmt::Display;
 use std::str::FromStr;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
-use tonic_lnd::lnrpc::{GetInfoRequest, LightningNode, ListPeersRequest, ListPeersResponse};
+use tonic_lnd::lnrpc::{
+    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
+    QueryRoutesResponse, Route,
+};
+use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
 use tonic_lnd::Client;
@@ -49,6 +53,12 @@ pub enum OfferError<Secp256k1Error> {
     ListPeersFailure(Status),
     /// Failure to build a reply path.
     BuildBlindedPathFailure,
+    /// Unable to find or send to payment route.
+    RouteFailure(Status),
+    /// Failed to track payment.
+    TrackFailure(Status),
+    /// Failed to send payment.
+    PaymentFailure,
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -69,6 +79,9 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::NodeAddressNotFound => write!(f, "Couldn't get node address"),
             OfferError::ListPeersFailure(e) => write!(f, "Error listing peers: {e:?}"),
             OfferError::BuildBlindedPathFailure => write!(f, "Error building blinded path"),
+            OfferError::RouteFailure(e) => write!(f, "Error routing payment: {e:?}"),
+            OfferError::TrackFailure(e) => write!(f, "Error tracking payment: {e:?}"),
+            OfferError::PaymentFailure => write!(f, "Failed to send payment"),
         }
     }
 }
@@ -245,6 +258,33 @@ impl OfferHandler {
                 OfferError::BuildBlindedPathFailure
             }))?
         }
+    }
+
+    /// pay_invoice tries to pay the provided invoice.
+    pub(crate) async fn pay_invoice(
+        &self,
+        mut payer: impl InvoicePayer + std::marker::Send + 'static,
+        path: BlindedPath,
+        cltv_expiry_delta: u16,
+        fee_base_msat: u32,
+        payment_hash: [u8; 32],
+        msats: u64,
+    ) -> Result<(), OfferError<Secp256k1Error>> {
+        let resp = payer
+            .query_routes(path, cltv_expiry_delta, fee_base_msat, msats)
+            .await
+            .map_err(OfferError::RouteFailure)?;
+
+        let _ = payer
+            .send_to_route(payment_hash, resp.routes[0].clone())
+            .await
+            .map_err(OfferError::RouteFailure)?;
+
+        // The payment is still in flight. We'll track it until it settles.
+        payer
+            .track_payment(payment_hash)
+            .await
+            .map_err(|_| OfferError::PaymentFailure)
     }
 }
 
@@ -436,9 +476,97 @@ impl MessageSigner for Client {
     }
 }
 
+#[async_trait]
+impl InvoicePayer for Client {
+    async fn query_routes(
+        &mut self,
+        path: BlindedPath,
+        cltv_expiry_delta: u16,
+        fee_base_msat: u32,
+        msats: u64,
+    ) -> Result<QueryRoutesResponse, Status> {
+        let mut blinded_hops = vec![];
+        for hop in path.blinded_hops.iter() {
+            let new_hop = tonic_lnd::lnrpc::BlindedHop {
+                blinded_node: hop.blinded_node_id.serialize().to_vec(),
+                encrypted_data: hop.clone().encrypted_payload,
+            };
+            blinded_hops.push(new_hop);
+        }
+
+        let blinded_path = Some(tonic_lnd::lnrpc::BlindedPath {
+            introduction_node: path.introduction_node_id.serialize().to_vec(),
+            blinding_point: path.blinding_point.serialize().to_vec(),
+            blinded_hops,
+        });
+
+        let blinded_payment_paths = tonic_lnd::lnrpc::BlindedPaymentPath {
+            blinded_path,
+            total_cltv_delta: u32::from(cltv_expiry_delta) + 120,
+            base_fee_msat: u64::from(fee_base_msat),
+            ..Default::default()
+        };
+
+        let query_req = tonic_lnd::lnrpc::QueryRoutesRequest {
+            amt_msat: msats as i64,
+            blinded_payment_paths: vec![blinded_payment_paths],
+            ..Default::default()
+        };
+
+        let resp = self.lightning().query_routes(query_req).await?;
+        Ok(resp.into_inner())
+    }
+
+    async fn send_to_route(
+        &mut self,
+        payment_hash: [u8; 32],
+        route: Route,
+    ) -> Result<HtlcAttempt, Status> {
+        let send_req = tonic_lnd::routerrpc::SendToRouteRequest {
+            payment_hash: payment_hash.to_vec(),
+            route: Some(route),
+            ..Default::default()
+        };
+
+        let resp = self.router().send_to_route_v2(send_req).await?;
+        Ok(resp.into_inner())
+    }
+
+    async fn track_payment(
+        &mut self,
+        payment_hash: [u8; 32],
+    ) -> Result<(), OfferError<Secp256k1Error>> {
+        let req = TrackPaymentRequest {
+            payment_hash: payment_hash.to_vec(),
+            no_inflight_updates: true,
+        };
+
+        let mut stream = self
+            .router()
+            .track_payment_v2(req)
+            .await
+            .map_err(OfferError::TrackFailure)?
+            .into_inner();
+
+        // Wait for a failed or successful payment.
+        while let Some(payment) = stream.message().await.map_err(OfferError::TrackFailure)? {
+            if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Succeeded {
+                return Ok(());
+            } else if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Failed {
+                return Err(OfferError::PaymentFailure);
+            } else {
+                continue;
+            }
+        }
+
+        Err(OfferError::PaymentFailure)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MessengerUtilities;
     use bitcoin::secp256k1::{Error as Secp256k1Error, KeyPair, Secp256k1, SecretKey};
     use core::convert::Infallible;
     use lightning::offers::merkle::SignError;
@@ -491,6 +619,17 @@ mod tests {
             .expect("failed verifying signature")
     }
 
+    fn get_blinded_path() -> BlindedPath {
+        let entropy_source = MessengerUtilities::new();
+        let secp_ctx = Secp256k1::new();
+        BlindedPath::new_for_message(
+            &[PublicKey::from_str(&get_pubkey()).unwrap()],
+            &entropy_source,
+            &secp_ctx,
+        )
+        .unwrap()
+    }
+
     mock! {
         TestBolt12Signer{}
 
@@ -511,6 +650,17 @@ mod tests {
              async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
          }
+    }
+
+    mock! {
+    TestInvoicePayer{}
+
+        #[async_trait]
+        impl InvoicePayer for TestInvoicePayer{
+            async fn query_routes(&mut self, path: BlindedPath, cltv_expiry_delta: u16, fee_base_msat: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
+            async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
+            async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<(), OfferError<Secp256k1Error>>;
+        }
     }
 
     #[tokio::test]
@@ -758,5 +908,80 @@ mod tests {
             .create_reply_path(connector_mock, receiver_node_id)
             .await
             .is_err())
+    }
+
+    #[tokio::test]
+    async fn test_pay_invoice() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock.expect_query_routes().returning(|_, _, _, _| {
+            let route = Route {
+                ..Default::default()
+            };
+            Ok(QueryRoutesResponse {
+                routes: vec![route],
+                ..Default::default()
+            })
+        });
+
+        payer_mock.expect_send_to_route().returning(|_, _| {
+            Ok(HtlcAttempt {
+                ..Default::default()
+            })
+        });
+
+        payer_mock.expect_track_payment().returning(|_| Ok(()));
+
+        let blinded_path = get_blinded_path();
+        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_pay_invoice_query_error() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock
+            .expect_query_routes()
+            .returning(|_, _, _, _| Err(Status::unknown("unknown error")));
+
+        let blinded_path = get_blinded_path();
+        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pay_invoice_send_error() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock.expect_query_routes().returning(|_, _, _, _| {
+            let route = Route {
+                ..Default::default()
+            };
+            Ok(QueryRoutesResponse {
+                routes: vec![route],
+                ..Default::default()
+            })
+        });
+
+        payer_mock
+            .expect_send_to_route()
+            .returning(|_, _| Err(Status::unknown("unknown error")));
+
+        let blinded_path = get_blinded_path();
+        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
+            .await
+            .is_err());
     }
 }
