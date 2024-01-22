@@ -9,7 +9,7 @@ use chrono::Utc;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::blinded_path::BlindedPath;
 use lightning::offers::offer::Quantity;
-use lightning::onion_message::Destination;
+use lightning::onion_message::messenger::Destination;
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{LifecycleSignals, PayOfferParams};
 use std::path::PathBuf;

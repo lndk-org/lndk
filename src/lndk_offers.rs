@@ -12,7 +12,8 @@ use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest}
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
-use lightning::onion_message::{Destination, OffersMessage, PendingOnionMessage};
+use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
+use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
 use log::error;
 use std::error::Error;
@@ -401,7 +402,7 @@ impl MessageSigner for Client {
     ) -> Result<Vec<u8>, Status> {
         let tag_vec = tag.as_bytes().to_vec();
         let req = SignMessageReq {
-            msg: merkle_root.as_ref().to_vec(),
+            msg: <bitcoin::hashes::sha256::Hash as AsRef<[u8; 32]>>::as_ref(&merkle_root).to_vec(),
             tag: tag_vec,
             key_loc: Some(key_loc),
             schnorr_sig: true,

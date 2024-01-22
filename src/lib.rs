@@ -18,10 +18,11 @@ use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice_error::InvoiceError;
 use lightning::offers::offer::Offer;
-use lightning::onion_message::{
-    DefaultMessageRouter, Destination, OffersMessage, OffersMessageHandler, OnionMessenger,
-    PendingOnionMessage,
+use lightning::onion_message::messenger::{
+    DefaultMessageRouter, Destination, OnionMessenger, PendingOnionMessage,
 };
+use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
+use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::{EntropySource, KeyMaterial};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
@@ -121,6 +122,7 @@ impl LndkOnionMessenger {
             return Err(());
         }
         let network = string_to_network(&network_str.unwrap());
+        let network = network.unwrap();
 
         let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
         info!("Starting lndk for node: {pubkey}.");
@@ -153,11 +155,13 @@ impl LndkOnionMessenger {
         let mut node_client = client.signer().clone();
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::new();
+        let network_graph = &NetworkGraph::new(network, &messenger_utils);
+        let message_router = &DefaultMessageRouter::new(network_graph);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,
             &node_signer,
             &messenger_utils,
-            &DefaultMessageRouter {},
+            message_router,
             &self.offer_handler,
             IgnoringMessageHandler {},
         );
@@ -167,7 +171,7 @@ impl LndkOnionMessenger {
             peer_support,
             &mut peers_client,
             onion_messenger,
-            network.unwrap(),
+            network,
             args.signals,
         )
         .await
