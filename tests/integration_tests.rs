@@ -8,6 +8,8 @@ use lndk::LifecycleSignals;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::select;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
 
 async fn wait_to_receive_onion_message(
@@ -68,9 +70,11 @@ async fn test_lndk_forwards_onion_message() {
     );
     let now_timestamp = Utc::now();
     let timestamp = now_timestamp.format("%d-%m-%Y-%H%M");
+    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
         listener,
+        started: tx,
     };
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg,

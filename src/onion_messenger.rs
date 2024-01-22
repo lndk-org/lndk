@@ -217,6 +217,9 @@ impl LndkOnionMessenger {
             }
         });
 
+        // By dropping the sender, we signal to the receiver that the onion messenger has successfully started up.
+        drop(signals.started);
+
         // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
         // allow interior mutability (see LndNodeSigner) so this function can't safely be passed off to another thread.
         // This function is expected to finish if any producing thread exits (because we're no longer receiving the

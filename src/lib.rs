@@ -24,6 +24,7 @@ use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Mutex, Once};
+use tokio::sync::mpsc::Sender;
 use tonic_lnd::lnrpc::GetInfoRequest;
 use triggered::{Listener, Trigger};
 
@@ -40,6 +41,8 @@ pub struct LifecycleSignals {
     pub shutdown: Trigger,
     // Used to listen for the signal to shutdown.
     pub listener: Listener,
+    // Used to signal when the onion messenger has started up.
+    pub started: Sender<u32>,
 }
 
 pub fn init_logger(config: LogConfig) {
