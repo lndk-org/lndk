@@ -98,7 +98,7 @@ impl OfferHandler {
         &self,
         mut cfg: PayOfferParams,
         mut started: Receiver<u32>,
-    ) -> Result<(), OfferError<bitcoin::secp256k1::Error>> {
+    ) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
         // Wait for onion messenger to give us the signal that it's ready. Once the onion messenger drops
         // the channel sender, recv will return None and we'll stop blocking here.
         if started.recv().await.is_some() {
@@ -159,7 +159,7 @@ impl OfferHandler {
         pending_messages.push(pending_message);
         std::mem::drop(pending_messages);
 
-        Ok(())
+        Ok(validated_amount)
     }
 
     // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12 process of paying an offer.
@@ -264,28 +264,43 @@ impl OfferHandler {
     pub(crate) async fn pay_invoice(
         &self,
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
-        path: BlindedPath,
-        cltv_expiry_delta: u16,
-        fee_base_msat: u32,
-        payment_hash: [u8; 32],
-        msats: u64,
+        params: PayInvoiceParams,
     ) -> Result<(), OfferError<Secp256k1Error>> {
         let resp = payer
-            .query_routes(path, cltv_expiry_delta, fee_base_msat, msats)
+            .query_routes(
+                params.path,
+                params.cltv_expiry_delta,
+                params.fee_base_msat,
+                params.msats,
+            )
             .await
             .map_err(OfferError::RouteFailure)?;
 
         let _ = payer
-            .send_to_route(payment_hash, resp.routes[0].clone())
+            .send_to_route(params.payment_hash, resp.routes[0].clone())
             .await
             .map_err(OfferError::RouteFailure)?;
 
-        // The payment is still in flight. We'll track it until it settles.
+        {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.insert(params.offer_id, OfferState::InvoicePaymentDispatched);
+        }
+
+        // We'll track the payment until it settles.
         payer
-            .track_payment(payment_hash)
+            .track_payment(params.payment_hash)
             .await
             .map_err(|_| OfferError::PaymentFailure)
     }
+}
+
+pub struct PayInvoiceParams {
+    pub path: BlindedPath,
+    pub cltv_expiry_delta: u16,
+    pub fee_base_msat: u32,
+    pub payment_hash: [u8; 32],
+    pub msats: u64,
+    pub offer_id: String,
 }
 
 // Checks that the user-provided amount matches the offer.
@@ -935,10 +950,15 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
-        assert!(handler
-            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
-            .await
-            .is_ok());
+        let params = PayInvoiceParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            payment_hash: payment_hash,
+            msats: 2000,
+            offer_id: get_offer(),
+        };
+        assert!(handler.pay_invoice(payer_mock, params).await.is_ok());
     }
 
     #[tokio::test]
@@ -952,10 +972,15 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
-        assert!(handler
-            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
-            .await
-            .is_err());
+        let params = PayInvoiceParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            payment_hash: payment_hash,
+            msats: 2000,
+            offer_id: get_offer(),
+        };
+        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
     }
 
     #[tokio::test]
@@ -979,9 +1004,14 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
-        assert!(handler
-            .pay_invoice(payer_mock, blinded_path, 200, 1, payment_hash, 2000)
-            .await
-            .is_err());
+        let params = PayInvoiceParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            payment_hash: payment_hash,
+            msats: 2000,
+            offer_id: get_offer(),
+        };
+        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
     }
 }
