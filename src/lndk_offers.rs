@@ -195,24 +195,9 @@ impl OfferHandler {
         // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
         // task because we need to call block_on on sign_message so that sign_closure can be a
         // synchronous closure.
-        task::spawn_blocking(move || {
-            let sign_closure = |msg: &UnsignedInvoiceRequest| {
-                let tagged_hash = msg.as_ref();
-                let tag = tagged_hash.tag().to_string();
-
-                let signature =
-                    block_on(signer.sign_message(key_loc, tagged_hash.merkle_root(), tag))
-                        .map_err(|_| Secp256k1Error::InvalidSignature)?;
-
-                Signature::from_slice(&signature)
-            };
-
-            unsigned_invoice_req
-                .sign(sign_closure)
-                .map_err(OfferError::SignError)
-        })
-        .await
-        .unwrap()
+        task::spawn_blocking(move || signer.sign_uir(key_loc, unsigned_invoice_req))
+            .await
+            .unwrap()
     }
 
     /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
@@ -428,12 +413,34 @@ impl MessageSigner for Client {
         let resp_inner = resp.into_inner();
         Ok(resp_inner.signature)
     }
+
+    fn sign_uir(
+        &mut self,
+        key_loc: KeyLocator,
+        unsigned_invoice_req: UnsignedInvoiceRequest,
+    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
+        let sign_closure = |msg: &UnsignedInvoiceRequest| {
+            let tagged_hash = msg.as_ref();
+            let tag = tagged_hash.tag().to_string();
+
+            let signature = block_on(self.sign_message(key_loc, tagged_hash.merkle_root(), tag))
+                .map_err(|_| Secp256k1Error::InvalidSignature)?;
+
+            Signature::from_slice(&signature)
+        };
+
+        unsigned_invoice_req
+            .sign(sign_closure)
+            .map_err(OfferError::SignError)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::secp256k1::{KeyPair, Secp256k1, SecretKey};
+    use bitcoin::secp256k1::{Error as Secp256k1Error, KeyPair, Secp256k1, SecretKey};
+    use core::convert::Infallible;
+    use lightning::offers::merkle::SignError;
     use lightning::offers::offer::{OfferBuilder, Quantity};
     use mockall::mock;
     use std::collections::HashMap;
@@ -464,8 +471,23 @@ mod tests {
         "0313ba7ccbd754c117962b9afab6c2870eb3ef43f364a9f6c43d0fabb4553776ba".to_string()
     }
 
-    fn get_signature() -> String {
-        "28b937976a29c15827433086440b36c2bec6ca5bd977557972dca8641cd59ffba50daafb8ee99a19c950976b46f47d9e7aa716652e5657dfc555b82eff467f18".to_string()
+    fn get_invoice_request(offer: Offer, amount: u64) -> InvoiceRequest {
+        let secp_ctx = Secp256k1::new();
+        let keys = KeyPair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
+        let pubkey = PublicKey::from(keys);
+        offer
+            .request_invoice(vec![42; 64], pubkey)
+            .unwrap()
+            .chain(Network::Regtest)
+            .unwrap()
+            .amount_msats(amount)
+            .unwrap()
+            .build()
+            .unwrap()
+            .sign::<_, Infallible>(|message| {
+                Ok(secp_ctx.sign_schnorr_no_aux_rand(message.as_ref().as_digest(), &keys))
+            })
+            .expect("failed verifying signature")
     }
 
     mock! {
@@ -475,6 +497,7 @@ mod tests {
          impl MessageSigner for TestBolt12Signer {
              async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
              async fn sign_message(&mut self, key_loc: KeyLocator, merkle_hash: Hash, tag: String) -> Result<Vec<u8>, Status>;
+             fn sign_uir(&mut self, key_loc: KeyLocator, unsigned_invoice_req: UnsignedInvoiceRequest) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>>;
          }
     }
 
@@ -494,25 +517,27 @@ mod tests {
         let mut signer_mock = MockTestBolt12Signer::new();
 
         signer_mock.expect_derive_key().returning(|_| {
-            Ok(PublicKey::from_str(&get_pubkey())
-                .unwrap()
-                .serialize()
-                .to_vec())
-        });
-
-        signer_mock.expect_sign_message().returning(|_, _, _| {
-            Ok(Signature::from_str(&get_signature())
-                .unwrap()
-                .as_ref()
-                .to_vec())
+            let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+            Ok(pubkey.serialize().to_vec())
         });
 
         let offer = decode(get_offer()).unwrap();
+        let offer_amount = offer.amount().unwrap();
+        let amount = match offer_amount {
+            Amount::Bitcoin { amount_msats } => *amount_msats,
+            _ => panic!("unexpected amount type"),
+        };
+
+        signer_mock
+            .expect_sign_uir()
+            .returning(move |_, _| Ok(get_invoice_request(offer.clone(), amount)));
+
+        let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
-        assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
-            .await
-            .is_ok())
+        let resp = handler
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, amount)
+            .await;
+        assert!(resp.is_ok())
     }
 
     #[tokio::test]
@@ -523,17 +548,14 @@ mod tests {
             .expect_derive_key()
             .returning(|_| Err(Status::unknown("error testing")));
 
-        signer_mock.expect_sign_message().returning(|_, _, _| {
-            Ok(Signature::from_str(&get_signature())
-                .unwrap()
-                .as_ref()
-                .to_vec())
-        });
+        signer_mock
+            .expect_sign_uir()
+            .returning(move |_, _| Ok(get_invoice_request(decode(get_offer()).unwrap(), 10000)));
 
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
             .await
             .is_err())
     }
@@ -549,14 +571,16 @@ mod tests {
                 .to_vec())
         });
 
-        signer_mock
-            .expect_sign_message()
-            .returning(|_, _, _| Err(Status::unknown("error testing")));
+        signer_mock.expect_sign_uir().returning(move |_, _| {
+            Err(OfferError::SignError(SignError::Signing(
+                Secp256k1Error::InvalidSignature,
+            )))
+        });
 
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
             .await
             .is_err())
     }

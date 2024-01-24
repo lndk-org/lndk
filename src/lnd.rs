@@ -1,3 +1,4 @@
+use crate::OfferError;
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
 use bitcoin::hashes::sha256::Hash;
@@ -8,7 +9,7 @@ use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
-use lightning::offers::invoice_request::UnsignedInvoiceRequest;
+use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -195,6 +196,11 @@ pub trait MessageSigner {
         merkle_hash: Hash,
         tag: String,
     ) -> Result<Vec<u8>, Status>;
+    fn sign_uir(
+        &mut self,
+        key_loc: KeyLocator,
+        unsigned_invoice_req: UnsignedInvoiceRequest,
+    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>>;
 }
 
 /// PeerConnector provides a layer of abstraction over the LND API for connecting to a peer.

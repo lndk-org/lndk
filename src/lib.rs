@@ -184,7 +184,7 @@ enum OfferState {
 pub struct OfferHandler {
     active_offers: Mutex<HashMap<String, OfferState>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
-    messenger_utils: MessengerUtilities,
+    pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
 }
 
