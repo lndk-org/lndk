@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 mod internal {
     #![allow(clippy::enum_variant_names)]
     #![allow(clippy::unnecessary_lazy_evaluations)]
