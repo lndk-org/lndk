@@ -162,7 +162,7 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
 
 #[derive(Debug)]
 /// Error when parsing provided configuration options.
-pub(crate) enum NetworkParseError {
+pub enum NetworkParseError {
     /// Invalid indicates an invalid network was provided.
     Invalid(String),
 }
@@ -177,7 +177,7 @@ impl fmt::Display for NetworkParseError {
     }
 }
 
-pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
+pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
     match network_str {
         "mainnet" => Ok(Network::Bitcoin),
         "testnet" => Ok(Network::Testnet),
