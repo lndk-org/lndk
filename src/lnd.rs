@@ -176,6 +176,8 @@ impl fmt::Display for NetworkParseError {
 }
 
 pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
+    let network_lowercase = String::from(network_str).to_lowercase();
+    let network_str = network_lowercase.as_str();
     match network_str {
         "mainnet" => Ok(Network::Bitcoin),
         "testnet" => Ok(Network::Testnet),
