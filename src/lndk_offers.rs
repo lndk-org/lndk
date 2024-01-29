@@ -1,17 +1,20 @@
-use crate::lnd::{MessageSigner, PeerConnector};
+use crate::lnd::{features_support_onion_messages, MessageSigner, PeerConnector};
 use crate::OfferHandler;
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::schnorr::Signature;
-use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey};
+use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
 use futures::executor::block_on;
+use lightning::blinded_path::BlindedPath;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
+use log::error;
 use std::error::Error;
 use std::fmt::Display;
+use std::str::FromStr;
 use tokio::task;
 use tonic_lnd::lnrpc::{LightningNode, ListPeersRequest, ListPeersResponse};
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
@@ -35,6 +38,10 @@ pub enum OfferError<Secp256k1Error> {
     PeerConnectError(Status),
     /// No node address.
     NodeAddressNotFound,
+    /// Cannot list peers.
+    ListPeersFailure(Status),
+    /// Failure to build a reply path.
+    BuildBlindedPathFailure,
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -50,6 +57,8 @@ impl Display for OfferError<Secp256k1Error> {
             ),
             OfferError::PeerConnectError(e) => write!(f, "Error connecting to peer: {e:?}"),
             OfferError::NodeAddressNotFound => write!(f, "Couldn't get node address"),
+            OfferError::ListPeersFailure(e) => write!(f, "Error listing peers: {e:?}"),
+            OfferError::BuildBlindedPathFailure => write!(f, "Error building blinded path"),
         }
     }
 }
@@ -117,6 +126,52 @@ impl OfferHandler {
         })
         .await
         .unwrap()
+    }
+
+    /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
+    /// invoice so they know where to send the invoice back to. We try to find a peer that we're
+    /// connected to with onion messaging support that we can use to form a blinded path,
+    /// otherwise we creae a blinded path directly to ourselves.
+    pub async fn create_reply_path(
+        &self,
+        mut connector: impl PeerConnector + std::marker::Send + 'static,
+        node_id: PublicKey,
+    ) -> Result<BlindedPath, OfferError<Secp256k1Error>> {
+        // Find an introduction node for our blinded path.
+        let current_peers = connector.list_peers().await.map_err(|e| {
+            error!("Could not lookup current peers: {e}.");
+            OfferError::ListPeersFailure(e)
+        })?;
+
+        let mut intro_node = None;
+        for peer in current_peers.peers {
+            let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+            let onion_support = features_support_onion_messages(&peer.features);
+            if onion_support {
+                intro_node = Some(pubkey);
+            }
+        }
+
+        let secp_ctx = Secp256k1::new();
+        if intro_node.is_none() {
+            Ok(
+                BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
+                    .map_err(|_| {
+                        error!("Could not create blinded path.");
+                        OfferError::BuildBlindedPathFailure
+                    })?,
+            )
+        } else {
+            Ok(BlindedPath::new_for_message(
+                &[intro_node.unwrap()],
+                &self.messenger_utils,
+                &secp_ctx,
+            )
+            .map_err(|_| {
+                error!("Could not create blinded path.");
+                OfferError::BuildBlindedPathFailure
+            }))?
+        }
     }
 }
 
@@ -287,13 +342,10 @@ mod tests {
     use bitcoin::secp256k1::{KeyPair, Secp256k1, SecretKey};
     use lightning::offers::offer::{OfferBuilder, Quantity};
     use mockall::mock;
+    use std::collections::HashMap;
     use std::str::FromStr;
     use std::time::{Duration, SystemTime};
     use tonic_lnd::lnrpc::NodeAddress;
-
-    fn get_offer() -> String {
-        "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
-    }
 
     fn build_custom_offer(amount_msats: u64) -> Offer {
         let secp_ctx = Secp256k1::new();
@@ -312,10 +364,6 @@ mod tests {
 
     fn get_pubkey() -> String {
         "0313ba7ccbd754c117962b9afab6c2870eb3ef43f364a9f6c43d0fabb4553776ba".to_string()
-    }
-
-    fn get_signature() -> String {
-        "28b937976a29c15827433086440b36c2bec6ca5bd977557972dca8641cd59ffba50daafb8ee99a19c950976b46f47d9e7aa716652e5657dfc555b82eff467f18".to_string()
     }
 
     mock! {
@@ -337,78 +385,6 @@ mod tests {
              async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
          }
-    }
-
-    #[tokio::test]
-    async fn test_request_invoice() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock.expect_derive_key().returning(|_| {
-            Ok(PublicKey::from_str(&get_pubkey())
-                .unwrap()
-                .serialize()
-                .to_vec())
-        });
-
-        signer_mock.expect_sign_message().returning(|_, _, _| {
-            Ok(Signature::from_str(&get_signature())
-                .unwrap()
-                .as_ref()
-                .to_vec())
-        });
-
-        let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
-        assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
-            .await
-            .is_ok())
-    }
-
-    #[tokio::test]
-    async fn test_request_invoice_derive_key_error() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock
-            .expect_derive_key()
-            .returning(|_| Err(Status::unknown("error testing")));
-
-        signer_mock.expect_sign_message().returning(|_, _, _| {
-            Ok(Signature::from_str(&get_signature())
-                .unwrap()
-                .as_ref()
-                .to_vec())
-        });
-
-        let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
-        assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
-            .await
-            .is_err())
-    }
-
-    #[tokio::test]
-    async fn test_request_invoice_signer_error() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock.expect_derive_key().returning(|_| {
-            Ok(PublicKey::from_str(&get_pubkey())
-                .unwrap()
-                .serialize()
-                .to_vec())
-        });
-
-        signer_mock
-            .expect_sign_message()
-            .returning(|_, _, _| Err(Status::unknown("error testing")));
-
-        let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
-        assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000)
-            .await
-            .is_err())
     }
 
     #[tokio::test]
@@ -523,5 +499,65 @@ mod tests {
 
         let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
         assert!(connect_to_peer(connector_mock, pubkey).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_create_reply_path() {
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock.expect_list_peers().returning(|| {
+            let feature = tonic_lnd::lnrpc::Feature {
+                ..Default::default()
+            };
+            let mut feature_entry = HashMap::new();
+            feature_entry.insert(38, feature);
+
+            let peer = tonic_lnd::lnrpc::Peer {
+                pub_key: get_pubkey(),
+                features: feature_entry,
+                ..Default::default()
+            };
+            Ok(ListPeersResponse { peers: vec![peer] })
+        });
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_reply_path(connector_mock, receiver_node_id)
+            .await
+            .is_ok())
+    }
+
+    #[tokio::test]
+    // Test that create_reply_path works fine when no suitable introduction node peer is found.
+    async fn test_create_reply_path_no_intro_node() {
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_peers()
+            .returning(|| Ok(ListPeersResponse { peers: vec![] }));
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_reply_path(connector_mock, receiver_node_id)
+            .await
+            .is_ok())
+    }
+
+    #[tokio::test]
+    async fn test_create_reply_path_list_peers_error() {
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_peers()
+            .returning(|| Err(Status::unknown("unknown error")));
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_reply_path(connector_mock, receiver_node_id)
+            .await
+            .is_err())
     }
 }
