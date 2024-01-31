@@ -1,4 +1,5 @@
 use crate::lnd::MessageSigner;
+use crate::OfferHandler;
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
@@ -44,58 +45,63 @@ pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
     offer_str.parse::<Offer>()
 }
 
-#[allow(dead_code)]
-// create_request_invoice builds and signs an invoice request, the first step in the BOLT 12 process of paying an offer.
-pub(crate) async fn create_request_invoice(
-    mut signer: impl MessageSigner + std::marker::Send + 'static,
-    offer: Offer,
-    metadata: Vec<u8>,
-    network: Network,
-    msats: u64,
-) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
-    // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
-    // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
-    let key_loc = KeyLocator {
-        key_family: 6,
-        key_index: 1,
-    };
-
-    let pubkey_bytes = signer
-        .derive_key(key_loc.clone())
-        .await
-        .map_err(OfferError::DeriveKeyFailure)?;
-    let pubkey = PublicKey::from_slice(&pubkey_bytes).expect("failed to deserialize public key");
-
-    let unsigned_invoice_req = offer
-        .request_invoice(metadata, pubkey)
-        .unwrap()
-        .chain(network)
-        .unwrap()
-        .amount_msats(msats)
-        .unwrap()
-        .build()
-        .map_err(OfferError::BuildUIRFailure)?;
-
-    // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
-    // task because we need to call block_on on sign_message so that sign_closure can be a
-    // synchronous closure.
-    task::spawn_blocking(move || {
-        let sign_closure = |msg: &UnsignedInvoiceRequest| {
-            let tagged_hash = msg.as_ref();
-            let tag = tagged_hash.tag().to_string();
-
-            let signature = block_on(signer.sign_message(key_loc, tagged_hash.merkle_root(), tag))
-                .map_err(|_| Secp256k1Error::InvalidSignature)?;
-
-            Signature::from_slice(&signature)
+impl OfferHandler {
+    #[allow(dead_code)]
+    // create_request_invoice builds and signs an invoice request, the first step in the BOLT 12 process of paying an offer.
+    pub(crate) async fn create_request_invoice(
+        &self,
+        mut signer: impl MessageSigner + std::marker::Send + 'static,
+        offer: Offer,
+        metadata: Vec<u8>,
+        network: Network,
+        msats: u64,
+    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
+        // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
+        // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
+        let key_loc = KeyLocator {
+            key_family: 6,
+            key_index: 1,
         };
 
-        unsigned_invoice_req
-            .sign(sign_closure)
-            .map_err(OfferError::SignError)
-    })
-    .await
-    .unwrap()
+        let pubkey_bytes = signer
+            .derive_key(key_loc.clone())
+            .await
+            .map_err(OfferError::DeriveKeyFailure)?;
+        let pubkey =
+            PublicKey::from_slice(&pubkey_bytes).expect("failed to deserialize public key");
+
+        let unsigned_invoice_req = offer
+            .request_invoice(metadata, pubkey)
+            .unwrap()
+            .chain(network)
+            .unwrap()
+            .amount_msats(msats)
+            .unwrap()
+            .build()
+            .map_err(OfferError::BuildUIRFailure)?;
+
+        // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
+        // task because we need to call block_on on sign_message so that sign_closure can be a
+        // synchronous closure.
+        task::spawn_blocking(move || {
+            let sign_closure = |msg: &UnsignedInvoiceRequest| {
+                let tagged_hash = msg.as_ref();
+                let tag = tagged_hash.tag().to_string();
+
+                let signature =
+                    block_on(signer.sign_message(key_loc, tagged_hash.merkle_root(), tag))
+                        .map_err(|_| Secp256k1Error::InvalidSignature)?;
+
+                Signature::from_slice(&signature)
+            };
+
+            unsigned_invoice_req
+                .sign(sign_closure)
+                .map_err(OfferError::SignError)
+        })
+        .await
+        .unwrap()
+    }
 }
 
 #[async_trait]
@@ -176,12 +182,11 @@ mod tests {
         });
 
         let offer = decode(get_offer()).unwrap();
-
-        assert!(
-            create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
-                .await
-                .is_ok()
-        )
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_ok())
     }
 
     #[tokio::test]
@@ -200,12 +205,11 @@ mod tests {
         });
 
         let offer = decode(get_offer()).unwrap();
-
-        assert!(
-            create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
-                .await
-                .is_err()
-        )
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_err())
     }
 
     #[tokio::test]
@@ -224,11 +228,10 @@ mod tests {
             .returning(|_, _, _| Err(Status::unknown("error testing")));
 
         let offer = decode(get_offer()).unwrap();
-
-        assert!(
-            create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
-                .await
-                .is_err()
-        )
+        let handler = OfferHandler::new();
+        assert!(handler
+            .create_request_invoice(signer_mock, offer, vec![], Network::Regtest, 10000)
+            .await
+            .is_err())
     }
 }
