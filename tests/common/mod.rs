@@ -14,7 +14,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
-use tokio::time::Duration;
+use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
 
@@ -353,5 +353,67 @@ impl LndNode {
         };
 
         resp
+    }
+
+    // Create an on-chain bitcoin address to fund our LND node.
+    pub async fn new_address(&mut self) -> tonic_lnd::lnrpc::NewAddressResponse {
+        let addr_req = tonic_lnd::lnrpc::NewAddressRequest {
+            r#type: 4, // 4 is the TAPROOT_PUBKEY type.
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .new_address(addr_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("new_address"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
+
+    // wait_for_chain_sync waits until we're synced to chain according to the get_info response.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_chain_sync(&mut self) {
+        match timeout(Duration::from_secs(100), self.check_chain_sync()).await {
+            Err(_) => panic!("timeout before lnd synced to chain"),
+            _ => {}
+        };
+    }
+
+    pub async fn check_chain_sync(&mut self) {
+        loop {
+            let resp = self.get_info().await;
+            if resp.synced_to_chain {
+                return;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    // wait_for_lnd_sync waits until we're synced to graph according to the get_info response.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_graph_sync(&mut self) {
+        match timeout(Duration::from_secs(100), self.check_graph_sync()).await {
+            Err(_) => panic!("timeout before lnd synced to graph"),
+            _ => {}
+        };
+    }
+
+    pub async fn check_graph_sync(&mut self) {
+        loop {
+            let resp = self.get_info().await;
+            if resp.synced_to_graph {
+                return;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 }
