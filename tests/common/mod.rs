@@ -8,7 +8,7 @@ use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -35,28 +35,32 @@ pub async fn setup_test_infrastructure(
 
     let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
 
+    let port = get_available_port().unwrap();
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let ldk1_config = LdkUserInfo {
         bitcoind_rpc_username: connect_params.0.clone().unwrap(),
         bitcoind_rpc_password: connect_params.1.clone().unwrap(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
         ldk_data_dir: ldk_test_dir.clone(),
-        ldk_announced_listen_addr: Vec::new(),
-        ldk_peer_listening_port: get_available_port().unwrap(),
+        ldk_announced_listen_addr: vec![addr.into()],
+        ldk_peer_listening_port: port,
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
         log_level: Level::Trace,
         node_num: 1,
     };
 
+    let port = get_available_port().unwrap();
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let ldk2_config = LdkUserInfo {
         bitcoind_rpc_username: connect_params.0.unwrap(),
         bitcoind_rpc_password: connect_params.1.unwrap(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
         ldk_data_dir: ldk_test_dir,
-        ldk_announced_listen_addr: Vec::new(),
-        ldk_peer_listening_port: get_available_port().unwrap(),
+        ldk_announced_listen_addr: vec![addr.into()],
+        ldk_peer_listening_port: port,
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
         log_level: Level::Trace,
