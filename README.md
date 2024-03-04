@@ -19,17 +19,9 @@ When you encounter a problem with `LNDK`, Feel free to file issues or start [a d
 
 #### Compiling LND
 
-To run `LNDK`, `LND` is assumed to be running. You'll need to make some adjustments when compiling and running `LND` to make it compatible with `LNDK`.
+To run `LNDK`, you require access to a `LND` node running _at least_ [LND v0.17.0](https://github.com/lightningnetwork/lnd/releases/tag/v0.17.0-beta).
 
-First, you'll need to run a particular [branch](https://github.com/lightningnetwork/lnd/tree/v0.16.2-patch-customfeatures) of `LND` to allow the advertising of onion_message feature bits. To do so, follow these steps:
-
-```
-git clone https://github.com/lightningnetwork/lnd
-cd lnd
-git checkout v0.16.2-patch-customfeatures
-```
-
-While on this branch, compile `LND`. Make sure that the peersrpc and signerrpc services and dev tag are enabled, like this:
+You will need to compile `LND` in `dev` mode (to enable protocol-level feature handling externally) and enable the `peersrpc` and `signerrpc` sub-servers:
 
 `make install tags="peersrpc signrpc dev"`
 
