@@ -11,15 +11,18 @@ use crate::lnd::{
 use crate::lndk_offers::OfferError;
 use crate::onion_messenger::MessengerUtilities;
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey};
+use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
 use home::home_dir;
 use lightning::blinded_path::BlindedPath;
+use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
+use lightning::offers::invoice_error::InvoiceError;
 use lightning::offers::offer::Offer;
 use lightning::onion_message::{
     DefaultMessageRouter, Destination, OffersMessage, OffersMessageHandler, OnionMessenger,
     PendingOnionMessage,
 };
+use lightning::sign::{EntropySource, KeyMaterial};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -182,7 +185,8 @@ enum OfferState {
 pub struct OfferHandler {
     active_offers: Mutex<HashMap<String, OfferState>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
-    messenger_utils: MessengerUtilities,
+    pub messenger_utils: MessengerUtilities,
+    expanded_key: ExpandedKey,
 }
 
 #[derive(Clone)]
@@ -199,10 +203,15 @@ pub struct PayOfferParams {
 
 impl OfferHandler {
     pub fn new() -> Self {
+        let messenger_utils = MessengerUtilities::new();
+        let random_bytes = messenger_utils.get_secure_random_bytes();
+        let expanded_key = ExpandedKey::new(&KeyMaterial(random_bytes));
+
         OfferHandler {
             active_offers: Mutex::new(HashMap::new()),
             pending_messages: Mutex::new(Vec::new()),
-            messenger_utils: MessengerUtilities::new(),
+            messenger_utils,
+            expanded_key,
         }
     }
 
@@ -230,7 +239,20 @@ impl OffersMessageHandler for OfferHandler {
                 log::error!("Invoice request received, payment not yet supported.");
                 None
             }
-            OffersMessage::Invoice(_invoice) => None,
+            OffersMessage::Invoice(invoice) => {
+                let secp_ctx = &Secp256k1::new();
+                // We verify that this invoice is a response to the invoice request we just sent.
+                match invoice.verify(&self.expanded_key, secp_ctx) {
+                    // TODO: Eventually when we allow for multiple payments in flight, we can use the
+                    // returned payment id below to check if we already processed an invoice for
+                    // this payment. Right now it's safe to let this be because we won't try to pay
+                    // a second invoice (if it comes through).
+                    Ok(_payment_id) => Some(OffersMessage::Invoice(invoice)),
+                    Err(()) => Some(OffersMessage::InvoiceError(InvoiceError::from_string(
+                        String::from("invoice verification failure"),
+                    ))),
+                }
+            }
             OffersMessage::InvoiceError(_error) => None,
         }
     }
