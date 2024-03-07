@@ -5,13 +5,13 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use bitcoincore_rpc::bitcoin::Network as RpcNetwork;
 use bitcoincore_rpc::RpcApi;
-use chrono::Utc;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::blinded_path::BlindedPath;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
+use lndk::lnd::LndCfg;
 use lndk::onion_messenger::MessengerUtilities;
-use lndk::{LifecycleSignals, PayOfferParams};
+use lndk::{LifecycleSignals, LndkOnionMessenger, PayOfferParams};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -20,6 +20,47 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
+
+struct Lndk {
+    cfg: lndk::Cfg,
+    messenger: LndkOnionMessenger,
+    rx: Receiver<u32>,
+    shutdown: triggered::Trigger,
+}
+
+async fn setup_lndk(lnd_cfg: LndCfg, lndk_dir: PathBuf) -> Lndk {
+    let (shutdown, listener) = triggered::trigger();
+    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
+
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+        started: tx,
+    };
+
+    let cfg = lndk::Cfg {
+        lnd: lnd_cfg,
+        auto_connect: false,
+        log_dir: Some(
+            lndk_dir
+                .join(format!("lndk-logs.txt"))
+                .to_str()
+                .unwrap()
+                .to_string(),
+        ),
+        signals,
+    };
+
+    let handler = lndk::OfferHandler::new();
+    let messenger = lndk::LndkOnionMessenger::new(handler);
+
+    Lndk {
+        cfg,
+        messenger,
+        rx,
+        shutdown,
+    }
+}
 
 async fn wait_to_receive_onion_message(
     ldk1: LdkNode,
@@ -70,41 +111,19 @@ async fn test_lndk_forwards_onion_message() {
 
     // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that lndk
     // successfully helps lnd forward the onion message from ldk1 to ldk2.
-    let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
+    let lnd_cfg = LndCfg::new(
         lnd.address,
         PathBuf::from_str(&lnd.cert_path).unwrap(),
         PathBuf::from_str(&lnd.macaroon_path).unwrap(),
     );
-    let now_timestamp = Utc::now();
-    let timestamp = now_timestamp.format("%d-%m-%Y-%H%M");
-    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-        started: tx,
-    };
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg,
-        log_dir: Some(
-            lndk_dir
-                .join(format!("lndk-logs-{test_name}-{timestamp}"))
-                .to_str()
-                .unwrap()
-                .to_string(),
-        ),
-        signals,
-    };
-
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
         (ldk1, ldk2) = wait_to_receive_onion_message(ldk1, ldk2, PublicKey::from_str(&lnd_info.identity_pubkey).unwrap()) => {
-            shutdown.trigger();
+            lndk.shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
         }
@@ -183,30 +202,11 @@ async fn test_lndk_send_invoice_request() {
         .expect("should create offer");
 
     // Now we'll spin up lndk, which should forward the invoice request to ldk2.
-    let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
+    let lnd_cfg = LndCfg::new(
         lnd.address.clone(),
         PathBuf::from_str(&lnd.cert_path).unwrap(),
         PathBuf::from_str(&lnd.macaroon_path).unwrap(),
     );
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-        started: tx,
-    };
-
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg.clone(),
-        log_dir: Some(
-            lndk_dir
-                .join(format!("lndk-logs.txt"))
-                .to_str()
-                .unwrap()
-                .to_string(),
-        ),
-        signals,
-    };
 
     let mut client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
@@ -237,8 +237,7 @@ async fn test_lndk_send_invoice_request() {
     }
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let lndk = setup_lndk(lnd_cfg.clone(), lndk_dir.clone()).await;
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
         amount: Some(20_000),
@@ -248,11 +247,11 @@ async fn test_lndk_send_invoice_request() {
         reply_path: Some(reply_path.clone()),
     };
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.send_invoice_request(pay_cfg.clone(), rx) => {
+        res = lndk.messenger.offer_handler.send_invoice_request(pay_cfg.clone(), lndk.rx) => {
             assert!(res.is_ok());
         }
     }
@@ -262,36 +261,15 @@ async fn test_lndk_send_invoice_request() {
     lnd.disconnect_peer(pubkey_2).await;
     lnd.wait_for_chain_sync().await;
 
-    let (shutdown, listener) = triggered::trigger();
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-        started: tx,
-    };
-
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg,
-        log_dir: Some(
-            lndk_dir
-                .join(format!("lndk-logs.txt"))
-                .to_str()
-                .unwrap()
-                .to_string(),
-        ),
-        signals,
-    };
-
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.send_invoice_request(pay_cfg, rx) => {
+        res = lndk.messenger.offer_handler.send_invoice_request(pay_cfg, lndk.rx) => {
             assert!(res.is_ok());
-            shutdown.trigger();
+            lndk.shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
         }
@@ -384,31 +362,12 @@ async fn test_lndk_pay_offer() {
         .await
         .expect("should create offer");
 
-    let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
+    let lnd_cfg = LndCfg::new(
         lnd.address.clone(),
         PathBuf::from_str(&lnd.cert_path).unwrap(),
         PathBuf::from_str(&lnd.macaroon_path).unwrap(),
     );
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-        started: tx,
-    };
-
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg,
-        log_dir: Some(
-            lndk_dir
-                .join(format!("lndk-logs.txt"))
-                .to_str()
-                .unwrap()
-                .to_string(),
-        ),
-        signals,
-    };
+    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
 
     let messenger_utils = MessengerUtilities::new();
     let client = lnd.client.clone().unwrap();
@@ -417,9 +376,6 @@ async fn test_lndk_pay_offer() {
     let reply_path =
         BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
 
-    // Make sure lndk successfully sends the invoice_request.
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
     let pay_cfg = PayOfferParams {
         offer,
         amount: Some(20_000),
