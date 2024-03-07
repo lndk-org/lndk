@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 mod internal {
     #![allow(clippy::enum_variant_names)]
     #![allow(clippy::unnecessary_lazy_evaluations)]
@@ -10,7 +11,9 @@ mod internal {
 
 use internal::*;
 use lndk::lnd::LndCfg;
-use lndk::Cfg;
+use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 #[macro_use]
 extern crate configure_me;
@@ -22,10 +25,21 @@ async fn main() -> Result<(), ()> {
         .0;
 
     let lnd_args = LndCfg::new(config.address, config.cert, config.macaroon);
+    let (shutdown, listener) = triggered::trigger();
+    // Create the channel which will tell us when the onion messenger has finished starting up.
+    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
+    let signals = LifecycleSignals {
+        shutdown,
+        listener,
+        started: tx,
+    };
     let args = Cfg {
         lnd: lnd_args,
         log_dir: config.log_dir,
+        signals,
     };
 
-    lndk::run(args).await
+    let handler = OfferHandler::new();
+    let messenger = LndkOnionMessenger::new(handler);
+    messenger.run(args).await
 }

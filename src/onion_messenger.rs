@@ -1,6 +1,7 @@
 use crate::clock::TokioClock;
 use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
 use crate::rate_limit::{RateLimiter, TokenLimiter};
+use crate::{LifecycleSignals, LndkOnionMessenger};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::network::constants::Network;
@@ -32,6 +33,7 @@ use tonic_lnd::{
     lnrpc::CustomMessage, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
     lnrpc::SendCustomMessageResponse, tonic::Status, LightningClient,
 };
+use triggered::Listener;
 
 /// ONION_MESSAGE_TYPE is the message type number used in BOLT1 message types for onion messages.
 const ONION_MESSAGE_TYPE: u32 = 513;
@@ -51,15 +53,21 @@ const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 /// A refcell is used for entropy_source to provide interior mutability for ChaCha20Rng. We need a mutable reference
 /// to be able to use the chacha library’s fill_bytes method, but the EntropySource interface in LDK is for an
 /// immutable reference.
-pub(crate) struct MessengerUtilities {
+pub struct MessengerUtilities {
     entropy_source: RefCell<ChaCha20Rng>,
 }
 
 impl MessengerUtilities {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         MessengerUtilities {
             entropy_source: RefCell::new(ChaCha20Rng::from_entropy()),
         }
+    }
+}
+
+impl Default for MessengerUtilities {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -88,169 +96,177 @@ impl Logger for MessengerUtilities {
     }
 }
 
-/// run_onion_messenger is the main event loop for connecting an OnionMessenger to LND's various APIs to handle
-/// onion messages externally to LND. It follows a producer / consumer pattern, with many producers
-/// creating MessengerEvents that are handled by a single consumer that drives the OnionMessenger accordingly. This
-/// function will block until consumer errors or one of the producers exits.
-///
-/// Producers:
-/// 1. Peer Events: Sourced from LND's PeerEventSubscription API, produces peer online and offline events.
-/// 2. Incoming Messages: Sourced from LND's SubscribeCustomMessages API, produces incoming onion message events.
-/// 3. Outgoing Poll: Using a simple ticker, produces polling events to check for outgoing onion messages.
-///
-/// The main consumer processes one MessengerEvent at a time, applying basic rate limiting to each peer to prevent spam.
-pub(crate) async fn run_onion_messenger<
-    ES: Deref,
-    NS: Deref,
-    L: Deref,
-    MR: Deref,
-    OMH: Deref,
-    CMH: Deref,
->(
-    current_peers: HashMap<PublicKey, bool>,
-    ln_client: &mut tonic_lnd::LightningClient,
-    onion_messenger: OnionMessenger<ES, NS, L, MR, OMH, CMH>,
-    network: Network,
-) -> Result<(), ()>
-where
-    ES::Target: EntropySource,
-    NS::Target: NodeSigner,
-    L::Target: Logger,
-    MR::Target: MessageRouter,
-    OMH::Target: OffersMessageHandler,
-    CMH::Target: CustomOnionMessageHandler + Sized,
-{
-    // Setup channels that we'll use to communicate onion messenger events. We buffer our channels by the number of
-    // peers (+1 because we require a non-zero buffer) that the node currently has so that we can send all of our
-    // startup online events in one go (before we boot up the consumer). The number of peers that we have is also
-    // related to the number of events we can expect to process, so it's a sensible enough buffer size.
-    let (sender, receiver) = channel(current_peers.len() + 1);
-    for (peer, onion_support) in current_peers.clone() {
-        sender
-            .send(MessengerEvents::PeerConnected(peer, onion_support))
-            .await
-            .map_err(|e| {
-                error!("Notify peer connected: {e}.");
-            })?
-    }
-
-    // Setup channels that we'll use to signal to spawned producers that an exit has occurred elsewhere so they should
-    // exit, and a tokio task set to track all our spawned tasks.
-    // TODO: Combine these channels into a single channel.
-    let (peers_exit_sender, peers_exit_receiver) = channel(1);
-    let (in_messages_exit_sender, in_messages_exit_receiver) = channel(1);
-    let (out_messages_exit_sender, out_messages_exit_receiver) = channel(1);
-    let mut set = tokio::task::JoinSet::new();
-
-    // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
-    // starting up. The onion messenger can handle superfluous online/offline reports, so it's okay if this ends
-    // up creating some duplicate events. The event subscription from LND blocks until it gets its first event (which
-    // could take very long), so we get the subscription itself inside of our producer thread.
-    let mut peers_client = ln_client.clone();
-    let peers_sender = sender.clone();
-    set.spawn(async move {
-        let peer_subscription = peers_client
-            .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
-            .await
-            .expect("peer subscription failed")
-            .into_inner();
-
-        let peer_stream = PeerStream {
-            peer_subscription,
-            client: peers_client,
-        };
-
-        match produce_peer_events(peer_stream, peers_sender, peers_exit_receiver).await {
-            Ok(_) => debug!("Peer events producer exited."),
-            Err(e) => error!("Peer events producer exited: {e}."),
-        };
-    });
-
-    // Subscribe to custom messaging events from LND so that we can receive incoming messages.
-    let mut messages_client = ln_client.clone();
-    let in_msg_sender = sender.clone();
-    set.spawn(async move {
-        let message_subscription = messages_client
-            .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
-            .await
-            .expect("message subscription failed")
-            .into_inner();
-
-        let message_stream = MessageStream {
-            message_subscription,
-        };
-
-        match produce_incoming_message_events(
-            message_stream,
-            in_msg_sender,
-            in_messages_exit_receiver,
-        )
-        .await
-        {
-            Ok(_) => debug!("Message events producer exited."),
-            Err(e) => error!("Message events producer exited: {e}."),
+impl LndkOnionMessenger {
+    /// run_onion_messenger is the main event loop for connecting an OnionMessenger to LND's various APIs to handle
+    /// onion messages externally to LND. It follows a producer / consumer pattern, with many producers
+    /// creating MessengerEvents that are handled by a single consumer that drives the OnionMessenger accordingly. This
+    /// function will block until consumer errors or one of the producers exits.
+    ///
+    /// Producers:
+    /// 1. Peer Events: Sourced from LND's PeerEventSubscription API, produces peer online and offline events.
+    /// 2. Incoming Messages: Sourced from LND's SubscribeCustomMessages API, produces incoming onion message events.
+    /// 3. Outgoing Poll: Using a simple ticker, produces polling events to check for outgoing onion messages.
+    ///
+    /// The main consumer processes one MessengerEvent at a time, applying basic rate limiting to each peer to prevent spam.
+    pub(crate) async fn run_onion_messenger<
+        ES: Deref,
+        NS: Deref,
+        L: Deref,
+        MR: Deref,
+        OMH: Deref,
+        CMH: Deref,
+    >(
+        &self,
+        current_peers: HashMap<PublicKey, bool>,
+        ln_client: &mut tonic_lnd::LightningClient,
+        onion_messenger: OnionMessenger<ES, NS, L, MR, OMH, CMH>,
+        network: Network,
+        signals: LifecycleSignals,
+    ) -> Result<(), ()>
+    where
+        ES::Target: EntropySource,
+        NS::Target: NodeSigner,
+        L::Target: Logger,
+        MR::Target: MessageRouter,
+        OMH::Target: OffersMessageHandler,
+        CMH::Target: CustomOnionMessageHandler + Sized,
+    {
+        // Setup channels that we'll use to communicate onion messenger events. We buffer our channels by the number of
+        // peers (+1 because we require a non-zero buffer) that the node currently has so that we can send all of our
+        // startup online events in one go (before we boot up the consumer). The number of peers that we have is also
+        // related to the number of events we can expect to process, so it's a sensible enough buffer size.
+        let (sender, receiver) = channel(current_peers.len() + 1);
+        for (peer, onion_support) in current_peers.clone() {
+            sender
+                .send(MessengerEvents::PeerConnected(peer, onion_support))
+                .await
+                .map_err(|e| {
+                    error!("Notify peer connected: {e}.");
+                })?
         }
-    });
 
-    // Spin up a ticker that polls at an interval for any outgoing messages so that we can pass on outgoing messages to
-    // LND.
-    let interval = time::interval(MSG_POLL_INTERVAL);
-    set.spawn(async move {
-        match produce_outgoing_message_events(sender, out_messages_exit_receiver, interval).await {
-            Ok(_) => debug!("Outgoing message events producer exited."),
-            Err(e) => error!("Outgoing message events producer exited: {e}."),
-        }
-    });
+        let mut set = tokio::task::JoinSet::new();
 
-    // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
-    // allow interior mutability (see LndNodeSigner) so this function can't safely be passed off to another thread.
-    // This function is expected to finish if any producing thread exits (because we're no longer receiving the
-    // events we need).
-    let rate_limiter = &mut TokenLimiter::new(
-        current_peers.keys().copied(),
-        DEFAULT_CALL_COUNT,
-        DEFAULT_CALL_FREQUENCY,
-        TokioClock::new(),
-    );
-    let mut message_sender = CustomMessenger {
-        client: ln_client.clone(),
-    };
-    let consume_result = consume_messenger_events(
-        onion_messenger,
-        receiver,
-        &mut message_sender,
-        rate_limiter,
-        network,
-    )
-    .await;
-    match consume_result {
-        Ok(_) => info!("Consume messenger events exited."),
-        Err(e) => error!("Consume messenger events exited: {e}."),
-    }
+        // Subscribe to peer events from LND first thing so that we don't miss any online/offline events while we are
+        // starting up. The onion messenger can handle superfluous online/offline reports, so it's okay if this ends
+        // up creating some duplicate events. The event subscription from LND blocks until it gets its first event (which
+        // could take very long), so we get the subscription itself inside of our producer thread.
+        let mut peers_client = ln_client.clone();
+        let peers_sender = sender.clone();
+        let (peers_shutdown, peers_listener) = (signals.shutdown.clone(), signals.listener.clone());
+        set.spawn(async move {
+            let peer_subscription = peers_client
+                .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
+                .await
+                .expect("peer subscription failed")
+                .into_inner();
 
-    // Once the consumer has exited, we drop our exit signal channel's sender so that the receiving channels will close.
-    // This signals to all producers that it's time to exit, so we can await their exit once we've done this.
-    drop(peers_exit_sender);
-    drop(in_messages_exit_sender);
-    drop(out_messages_exit_sender);
+            let peer_stream = PeerStream {
+                peer_subscription,
+                client: peers_client,
+            };
 
-    // Tasks will independently exit, so we can assert that they do so in any order.
-    let mut task_err = false;
-    while let Some(res) = set.join_next().await {
-        match res {
-            Ok(_) => info!("Producer exited."),
-            Err(_) => {
-                task_err = true;
-                error!("Producer exited with an error.");
+            match produce_peer_events(peer_stream, peers_sender, peers_listener).await {
+                Ok(_) => debug!("Peer events producer exited."),
+                Err(e) => {
+                    peers_shutdown.trigger();
+                    error!("Peer events producer exited: {e}.");
+                }
+            };
+        });
+
+        // Subscribe to custom messaging events from LND so that we can receive incoming messages.
+        let mut messages_client = ln_client.clone();
+        let in_msg_sender = sender.clone();
+        let (messages_shutdown, messages_listener) =
+            (signals.shutdown.clone(), signals.listener.clone());
+        set.spawn(async move {
+            let message_subscription = messages_client
+                .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
+                .await
+                .expect("message subscription failed")
+                .into_inner();
+
+            let message_stream = MessageStream {
+                message_subscription,
+            };
+
+            match produce_incoming_message_events(message_stream, in_msg_sender, messages_listener)
+                .await
+            {
+                Ok(_) => debug!("Message events producer exited."),
+                Err(e) => {
+                    messages_shutdown.trigger();
+                    error!("Message events producer exited: {e}.");
+                }
             }
-        };
-    }
-    // Exit with an error if any task did not exit cleanly.
-    if consume_result.is_err() || task_err {
-        return Err(());
-    }
+        });
 
-    Ok(())
+        // Spin up a ticker that polls at an interval for any outgoing messages so that we can pass on outgoing messages to
+        // LND.
+        let interval = time::interval(MSG_POLL_INTERVAL);
+        let (events_shutdown, events_listener) =
+            (signals.shutdown.clone(), signals.listener.clone());
+        set.spawn(async move {
+            match produce_outgoing_message_events(sender, events_listener, interval).await {
+                Ok(_) => debug!("Outgoing message events producer exited."),
+                Err(e) => {
+                    events_shutdown.trigger();
+                    error!("Outgoing message events producer exited: {e}.");
+                }
+            }
+        });
+
+        // By dropping the sender, we signal to the receiver that the onion messenger has successfully started up.
+        drop(signals.started);
+
+        // Consume events is our main controlling loop, so we run it inline here. We use a RefCell in onion_messenger to
+        // allow interior mutability (see LndNodeSigner) so this function can't safely be passed off to another thread.
+        // This function is expected to finish if any producing thread exits (because we're no longer receiving the
+        // events we need).
+        let rate_limiter = &mut TokenLimiter::new(
+            current_peers.keys().copied(),
+            DEFAULT_CALL_COUNT,
+            DEFAULT_CALL_FREQUENCY,
+            TokioClock::new(),
+        );
+        let mut message_sender = CustomMessenger {
+            client: ln_client.clone(),
+        };
+        let consume_result = consume_messenger_events(
+            onion_messenger,
+            receiver,
+            &mut message_sender,
+            rate_limiter,
+            network,
+        )
+        .await;
+        match consume_result {
+            Ok(_) => info!("Consume messenger events exited."),
+            Err(e) => {
+                signals.shutdown.trigger();
+                error!("Consume messenger events exited: {e}.");
+            }
+        }
+
+        // Tasks will independently exit, so we can assert that they do so in any order.
+        let mut task_err = false;
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(_) => info!("Producer exited."),
+                Err(_) => {
+                    task_err = true;
+                    error!("Producer exited with an error.");
+                }
+            };
+        }
+        // Exit with an error if any task did not exit cleanly.
+        if consume_result.is_err() || task_err {
+            return Err(());
+        }
+
+        Ok(())
+    }
 }
 
 /// lookup_onion_support performs a best-effort lookup in the node's list of current peers to determine whether it
@@ -338,7 +354,7 @@ impl PeerEventProducer for PeerStream {
 async fn produce_peer_events(
     mut source: impl PeerEventProducer,
     events: Sender<MessengerEvents>,
-    mut exit: Receiver<()>,
+    listener: Listener,
 ) -> Result<(), ProducerError> {
     loop {
         select! (
@@ -347,7 +363,7 @@ async fn produce_peer_events(
             // of events that can't be consumed, possibly blocking if the channel buffer is small).
             biased;
 
-            _ = exit.recv() => {
+            _ = listener.clone() => {
                 info!("Peer events received signal to quit.");
                 return Ok(())
             }
@@ -421,7 +437,7 @@ impl IncomingMessageProducer for MessageStream {
 async fn produce_incoming_message_events(
     mut source: impl IncomingMessageProducer,
     events: Sender<MessengerEvents>,
-    mut exit: Receiver<()>,
+    listener: Listener,
 ) -> Result<(), ProducerError> {
     loop {
         select! (
@@ -430,7 +446,7 @@ async fn produce_incoming_message_events(
         // of events that can't be consumed, possibly blocking if the channel buffer is small).
         biased;
 
-        _ = exit.recv() => {
+        _ = listener.clone() => {
             info!("Peer events received signal to quit.");
             return Ok(())
         }
@@ -641,7 +657,7 @@ impl SendCustomMessage for CustomMessenger {
 /// events anyway.
 async fn produce_outgoing_message_events(
     events: Sender<MessengerEvents>,
-    mut exit: Receiver<()>,
+    listener: Listener,
     mut interval: Interval,
 ) -> Result<(), ProducerError> {
     loop {
@@ -651,7 +667,7 @@ async fn produce_outgoing_message_events(
             // of events that can't be consumed, possibly blocking if the channel buffer is small).
             biased;
 
-            _ = exit.recv() => {
+            _ = listener.clone() => {
                 info!("Outgoing messenger events received signal to quit.");
                 return Ok(());
             }
@@ -942,7 +958,7 @@ mod tests {
     #[tokio::test]
     async fn test_produce_peer_events() {
         let (sender, mut receiver) = channel(4);
-        let (_exit_sender, exit) = channel(1);
+        let (_shutdown, listener) = triggered::trigger();
 
         let mut mock = MockPeerProducer::new();
 
@@ -977,7 +993,7 @@ mod tests {
             .returning(|| Err(Status::unknown("mock stream err")));
 
         matches!(
-            produce_peer_events(mock, sender, exit)
+            produce_peer_events(mock, sender, listener)
                 .await
                 .expect_err("producer should error"),
             ProducerError::StreamError(_)
@@ -1007,11 +1023,11 @@ mod tests {
     #[tokio::test]
     async fn test_produce_peer_events_exit() {
         let (sender, _receiver) = channel(1);
-        let (exit_sender, exit) = channel(1);
+        let (shutdown, listener) = triggered::trigger();
 
         let mock = MockPeerProducer::new();
-        drop(exit_sender);
-        assert!(produce_peer_events(mock, sender, exit).await.is_ok());
+        shutdown.trigger();
+        assert!(produce_peer_events(mock, sender, listener).await.is_ok());
     }
 
     mock! {
@@ -1026,7 +1042,7 @@ mod tests {
     #[tokio::test]
     async fn test_produce_incoming_message_events() {
         let (sender, mut receiver) = channel(2);
-        let (_exit_sender, exit) = channel(1);
+        let (_shutdown, listener) = triggered::trigger();
 
         let mut mock = MockMessageProducer::new();
 
@@ -1056,7 +1072,7 @@ mod tests {
             .returning(|| Err(Status::unknown("mock stream err")));
 
         matches!(
-            produce_incoming_message_events(mock, sender, exit)
+            produce_incoming_message_events(mock, sender, listener)
                 .await
                 .expect_err("producer should error"),
             ProducerError::StreamError(_),
@@ -1076,11 +1092,11 @@ mod tests {
     #[tokio::test]
     async fn test_produce_incoming_message_exit() {
         let (sender, _receiver) = channel(2);
-        let (exit_sender, exit) = channel(1);
+        let (shutdown, listener) = triggered::trigger();
 
         let mock = MockMessageProducer::new();
-        drop(exit_sender);
-        assert!(produce_incoming_message_events(mock, sender, exit)
+        shutdown.trigger();
+        assert!(produce_incoming_message_events(mock, sender, listener)
             .await
             .is_ok());
     }
@@ -1088,16 +1104,14 @@ mod tests {
     #[tokio::test]
     async fn test_produce_outgoing_message_events_exit() {
         let (sender, _) = channel(1);
-        let (exit_sender, exit_receiver) = channel(1);
+        let (shutdown, listener) = triggered::trigger();
         let interval = time::interval(MSG_POLL_INTERVAL);
 
         // Let's test that produce_outgoing_message_events successfully exits when it receives the signal, rather than
         // loop infinitely.
-        drop(exit_sender);
-        assert!(
-            produce_outgoing_message_events(sender, exit_receiver, interval)
-                .await
-                .is_ok()
-        );
+        shutdown.trigger();
+        assert!(produce_outgoing_message_events(sender, listener, interval)
+            .await
+            .is_ok());
     }
 }

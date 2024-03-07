@@ -18,3 +18,9 @@ impl Clock for TokioClock {
         Instant::now()
     }
 }
+
+impl Default for TokioClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}

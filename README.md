@@ -21,9 +21,9 @@ When you encounter a problem with `LNDK`, Feel free to file issues or start [a d
 
 To run `LNDK`, you require access to a `LND` node running _at least_ [LND v0.17.0](https://github.com/lightningnetwork/lnd/releases/tag/v0.17.0-beta).
 
-You will need to compile `LND` in `dev` mode (to enable protocol-level feature handling externally) and enable the `peersrpc` and `signerrpc` sub-servers:
+You will need to compile `LND` in `dev` mode (to enable protocol-level feature handling externally) and enable the `peersrpc`, `signerrpc`, and `walletrpc` sub-servers:
 
-`make install tags="peersrpc signrpc dev"`
+`make install tags="peersrpc signrpc walletrpc dev"`
 
 Note that this guide assumes some familiarity with setting up `LND`. If you're looking to get up to speed, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
 
@@ -82,7 +82,7 @@ Or in a more concrete example:
 Rather than use the admin.macaroon with unrestricted permission to an `LND` node, we can bake a macaroon using lncli with much more specific permissions for better security. With this command, generate a macaroon which will give `LNDK` only the specific grpc endpoints it's designed to hit:
 
 ```
-lncli --save_to=<FILEPATH>/lndk.macaroon uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/SubscribePeerEvents uri:/lnrpc.Lightning/SendCustomMessage uri:/lnrpc.Lightning/SubscribeCustomMessages uri:/peersrpc.Peers/UpdateNodeAnnouncement uri:/signrpc.Signer/DeriveSharedKey
+lncli bakemacaroon --save_to=<FILEPATH>/lndk.macaroon uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/SubscribePeerEvents uri:/lnrpc.Lightning/SendCustomMessage uri:/lnrpc.Lightning/SubscribeCustomMessages uri:/peersrpc.Peers/UpdateNodeAnnouncement uri:/signrpc.Signer/DeriveSharedKey
 ```
 
 ## Security

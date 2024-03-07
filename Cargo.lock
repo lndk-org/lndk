@@ -775,12 +775,6 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 
 [[package]]
 name = "hex"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
-
-[[package]]
-name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
@@ -953,22 +947,22 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/lndk-org/ldk-sample?branch=onion-handler#65758f45c9caa6befda1c5c139c049b3081ffdfb"
+source = "git+https://github.com/lndk-org/ldk-sample?branch=change-node-announcement-interval#d24839740b44048568341ca37e289557eff52fd9"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
  "bitcoin 0.29.2",
  "bitcoin-bech32",
  "chrono",
- "hex 0.3.2",
  "libc",
- "lightning 0.0.116",
+ "lightning 0.0.118",
  "lightning-background-processor",
  "lightning-block-sync",
  "lightning-invoice",
  "lightning-net-tokio",
  "lightning-persister",
  "lightning-rapid-gossip-sync",
+ "log",
  "rand 0.4.6",
  "serde_json",
  "tempfile",
@@ -983,9 +977,9 @@ checksum = "89d92a4743f9a61002fae18374ed11e7973f530cb3a3255fb354818118b2203c"
 
 [[package]]
 name = "lightning"
-version = "0.0.116"
+version = "0.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90a0f2155316f1570446a0447c993480673f840748c8ed25bbc59dfc442ac770"
+checksum = "cb0cb32c79c42444453bfabed7bd4f4ef64dfdd2e35e191fa8f3b9099ad2a186"
 dependencies = [
  "bitcoin 0.29.2",
 ]
@@ -993,7 +987,7 @@ dependencies = [
 [[package]]
 name = "lightning"
 version = "0.0.118"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=caafcedf3fc40fc6253261218c25b254dd955a82#caafcedf3fc40fc6253261218c25b254dd955a82"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
  "musig2",
@@ -1001,72 +995,67 @@ dependencies = [
 
 [[package]]
 name = "lightning-background-processor"
-version = "0.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "398b68a96cceb3c1227504bd5faeb74f26c3233447bc10cc1cb2c67e01b51556"
+version = "0.0.118"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning 0.0.116",
+ "lightning 0.0.118",
  "lightning-rapid-gossip-sync",
 ]
 
 [[package]]
 name = "lightning-block-sync"
-version = "0.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d94c276dbe2a777d58ed6ececca96006247a4717c00ac4cdfff62d76852be783"
+version = "0.0.118"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
  "chunked_transfer",
- "lightning 0.0.116",
+ "lightning 0.0.118",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
 name = "lightning-invoice"
-version = "0.24.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1788c0158526ec27a502043c2911ea6ea58fdc656bdf8749484942c07b790d23"
+checksum = "6d2380d053673c467c5f0be992cd4685e40d141d075647d74b64aba1b9c0b1ae"
 dependencies = [
  "bech32 0.9.1",
  "bitcoin 0.29.2",
  "bitcoin_hashes 0.11.0",
- "lightning 0.0.116",
+ "lightning 0.0.117",
  "num-traits",
  "secp256k1 0.24.3",
 ]
 
 [[package]]
 name = "lightning-net-tokio"
-version = "0.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "366c0ae225736cbc03555bd5fb4b44b2e8fe2ca3c868ec53a4b325c38b2ab2bd"
+version = "0.0.118"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning 0.0.116",
+ "lightning 0.0.118",
  "tokio",
 ]
 
 [[package]]
 name = "lightning-persister"
-version = "0.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93caaafeb42115b70119619c2420e362cce776670427fc4ced3e6df77b41c0b6"
+version = "0.0.118"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
- "libc",
- "lightning 0.0.116",
- "winapi",
+ "lightning 0.0.118",
+ "windows-sys",
 ]
 
 [[package]]
 name = "lightning-rapid-gossip-sync"
-version = "0.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a07af5814234924e623bca499e003fca1864024d5bd984e752230f73a131584"
+version = "0.0.118"
+source = "git+https://github.com/orbitalturtle/rust-lightning?branch=v0.0.118-custom#07cb4d3ec5a9b7d9b338721061f69e80ca3d5381"
 dependencies = [
  "bitcoin 0.29.2",
- "lightning 0.0.116",
+ "lightning 0.0.118",
 ]
 
 [[package]]
@@ -1095,7 +1084,7 @@ dependencies = [
  "configure_me_codegen",
  "core-rpc",
  "futures",
- "hex 0.4.3",
+ "hex",
  "home",
  "ldk-sample",
  "lightning 0.0.118",
@@ -1108,6 +1097,7 @@ dependencies = [
  "tokio",
  "tonic 0.8.3",
  "tonic_lnd",
+ "triggered",
 ]
 
 [[package]]
@@ -2219,7 +2209,7 @@ name = "tonic_lnd"
 version = "0.5.1"
 source = "git+https://github.com/orbitalturtle/tonic_lnd?branch=update-signer-client#de989089fdb23f87d3e6bc4796c504bda9b9be9b"
 dependencies = [
- "hex 0.4.3",
+ "hex",
  "prost 0.9.0",
  "rustls 0.19.1",
  "rustls-pemfile",
@@ -2302,6 +2292,12 @@ dependencies = [
  "pin-project",
  "tracing",
 ]
+
+[[package]]
+name = "triggered"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce148eae0d1a376c1b94ae651fc3261d9cb8294788b962b7382066376503a2d1"
 
 [[package]]
 name = "try-lock"
