@@ -8,7 +8,7 @@ mod rate_limit;
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
 };
-use crate::lndk_offers::OfferError;
+use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
@@ -16,12 +16,14 @@ use home::home_dir;
 use lightning::blinded_path::BlindedPath;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
+use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::invoice_error::InvoiceError;
 use lightning::offers::offer::Offer;
-use lightning::onion_message::{
-    DefaultMessageRouter, Destination, OffersMessage, OffersMessageHandler, OnionMessenger,
-    PendingOnionMessage,
+use lightning::onion_message::messenger::{
+    DefaultMessageRouter, Destination, OnionMessenger, PendingOnionMessage,
 };
+use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
+use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::{EntropySource, KeyMaterial};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
@@ -32,6 +34,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::{sleep, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
@@ -110,6 +113,7 @@ impl LndkOnionMessenger {
             .into_inner();
 
         let mut network_str = None;
+        #[allow(deprecated)]
         for chain in info.chains {
             if chain.chain == "bitcoin" {
                 network_str = Some(chain.network.clone())
@@ -120,6 +124,7 @@ impl LndkOnionMessenger {
             return Err(());
         }
         let network = string_to_network(&network_str.unwrap());
+        let network = network.unwrap();
 
         let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
         info!("Starting lndk for node: {pubkey}.");
@@ -152,11 +157,13 @@ impl LndkOnionMessenger {
         let mut node_client = client.signer().clone();
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::new();
+        let network_graph = &NetworkGraph::new(network, &messenger_utils);
+        let message_router = &DefaultMessageRouter::new(network_graph);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,
             &node_signer,
             &messenger_utils,
-            &DefaultMessageRouter {},
+            message_router,
             &self.offer_handler,
             IgnoringMessageHandler {},
         );
@@ -166,7 +173,7 @@ impl LndkOnionMessenger {
             peer_support,
             &mut peers_client,
             onion_messenger,
-            network.unwrap(),
+            network,
             args.signals,
         )
         .await
@@ -184,6 +191,7 @@ enum OfferState {
 
 pub struct OfferHandler {
     active_offers: Mutex<HashMap<String, OfferState>>,
+    active_invoices: Mutex<Vec<Bolt12Invoice>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
@@ -209,6 +217,7 @@ impl OfferHandler {
 
         OfferHandler {
             active_offers: Mutex::new(HashMap::new()),
+            active_invoices: Mutex::new(Vec::new()),
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils,
             expanded_key,
@@ -221,8 +230,42 @@ impl OfferHandler {
         cfg: PayOfferParams,
         started: Receiver<u32>,
     ) -> Result<(), OfferError<Secp256k1Error>> {
-        self.send_invoice_request(cfg, started).await?;
-        Ok(())
+        let client_clone = cfg.client.clone();
+        let offer_id = cfg.offer.clone().to_string();
+        let validated_amount = self.send_invoice_request(cfg, started).await?;
+
+        let invoice = self.wait_for_invoice().await;
+        {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
+        }
+
+        let payment_hash = invoice.payment_hash();
+        let path_info = invoice.payment_paths()[0].clone();
+
+        let params = PayInvoiceParams {
+            path: path_info.1,
+            cltv_expiry_delta: path_info.0.cltv_expiry_delta,
+            fee_base_msat: path_info.0.fee_base_msat,
+            payment_hash: payment_hash.0,
+            msats: validated_amount,
+            offer_id,
+        };
+
+        self.pay_invoice(client_clone, params).await
+    }
+
+    /// wait_for_invoice waits for the offer creator to respond with an invoice.
+    async fn wait_for_invoice(&self) -> Bolt12Invoice {
+        loop {
+            {
+                let mut active_invoices = self.active_invoices.lock().unwrap();
+                if active_invoices.len() == 1 {
+                    return active_invoices.pop().unwrap();
+                }
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 }
 
@@ -247,13 +290,20 @@ impl OffersMessageHandler for OfferHandler {
                     // returned payment id below to check if we already processed an invoice for
                     // this payment. Right now it's safe to let this be because we won't try to pay
                     // a second invoice (if it comes through).
-                    Ok(_payment_id) => Some(OffersMessage::Invoice(invoice)),
+                    Ok(_payment_id) => {
+                        let mut active_invoices = self.active_invoices.lock().unwrap();
+                        active_invoices.push(invoice.clone());
+                        Some(OffersMessage::Invoice(invoice))
+                    }
                     Err(()) => Some(OffersMessage::InvoiceError(InvoiceError::from_string(
                         String::from("invoice verification failure"),
                     ))),
                 }
             }
-            OffersMessage::InvoiceError(_error) => None,
+            OffersMessage::InvoiceError(error) => {
+                log::error!("Invoice error received: {}", error);
+                None
+            }
         }
     }
 

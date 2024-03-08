@@ -15,7 +15,7 @@ use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::lnrpc::{AddressType, GetInfoRequest};
 use tonic_lnd::Client;
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
@@ -206,6 +206,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
+            format!("--debuglevel=info,PEER=info"),
             format!("--bitcoind.rpcuser={}", connect_params.0.unwrap()),
             format!("--bitcoind.rpcpass={}", connect_params.1.unwrap()),
             format!(
@@ -395,5 +396,30 @@ impl LndNode {
             }
             sleep(Duration::from_secs(2)).await;
         }
+    }
+
+    // Create an on-chain bitcoin address to fund our LND node.
+    #[allow(dead_code)]
+    pub async fn new_address(&mut self) -> tonic_lnd::lnrpc::NewAddressResponse {
+        let addr_req = tonic_lnd::lnrpc::NewAddressRequest {
+            r#type: AddressType::TaprootPubkey.into(),
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .new_address(addr_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("new_address"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
     }
 }

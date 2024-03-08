@@ -5,8 +5,9 @@ use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
-use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
+use bitcoin::secp256k1::{self, Error as Secp256k1Error, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
+use lightning::blinded_path::BlindedPath;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
-use tonic_lnd::lnrpc::{LightningNode, ListPeersResponse};
+use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
@@ -209,4 +210,25 @@ pub trait PeerConnector {
     async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
     async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
     async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
+}
+
+/// InvoicePayer provides a layer of abstraction over the LND API for paying for a BOLT 12 invoice.
+#[async_trait]
+pub trait InvoicePayer {
+    async fn query_routes(
+        &mut self,
+        path: BlindedPath,
+        cltv_expiry_delta: u16,
+        fee_base_msat: u32,
+        msats: u64,
+    ) -> Result<QueryRoutesResponse, Status>;
+    async fn send_to_route(
+        &mut self,
+        payment_hash: [u8; 32],
+        route: Route,
+    ) -> Result<HtlcAttempt, Status>;
+    async fn track_payment(
+        &mut self,
+        payment_hash: [u8; 32],
+    ) -> Result<(), OfferError<Secp256k1Error>>;
 }

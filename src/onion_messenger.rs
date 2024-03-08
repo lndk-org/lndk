@@ -9,9 +9,10 @@ use bitcoin::secp256k1::PublicKey;
 use core::ops::Deref;
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
-use lightning::onion_message::{
-    CustomOnionMessageHandler, MessageRouter, OffersMessageHandler, OnionMessenger,
+use lightning::onion_message::messenger::{
+    CustomOnionMessageHandler, MessageRouter, OnionMessenger,
 };
+use lightning::onion_message::offers::OffersMessageHandler;
 use lightning::sign::EntropySource;
 use lightning::sign::NodeSigner;
 use lightning::util::logger::{Level, Logger, Record};
@@ -83,7 +84,7 @@ impl EntropySource for MessengerUtilities {
 }
 
 impl Logger for MessengerUtilities {
-    fn log(&self, record: &Record) {
+    fn log(&self, record: Record) {
         let args_str = record.args.to_string();
         match record.level {
             Level::Gossip => {}
@@ -719,6 +720,7 @@ mod tests {
     use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
+    use lightning::events::{EventHandler, EventsProvider};
     use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
     use lightning::util::ser::Readable;
@@ -762,9 +764,22 @@ mod tests {
                 fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
                 fn peer_connected(&self, their_node_id: &PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
                 fn peer_disconnected(&self, their_node_id: &PublicKey);
+                fn timer_tick_occurred(&self);
                 fn provided_node_features(&self) -> NodeFeatures;
                 fn provided_init_features(&self, their_node_id: &PublicKey) -> InitFeatures;
             }
+    }
+
+    // Mockall can't automatically produce a mock for EventsProvider since mockall requires generic parameters be
+    // 'static. See: https://docs.rs/mockall/latest/mockall/#generic-traits-and-structs. So we add the trait to our
+    // mock manually here.
+    impl EventsProvider for MockOnionHandler {
+        fn process_pending_events<H: Deref>(&self, _handler: H)
+        where
+            H::Target: EventHandler,
+        {
+            todo!()
+        }
     }
 
     mock! {
