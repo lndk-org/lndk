@@ -59,6 +59,8 @@ pub enum OfferError<Secp256k1Error> {
     TrackFailure(Status),
     /// Failed to send payment.
     PaymentFailure,
+    /// Failed to receive an invoice back from offer creator before the timeout.
+    InvoiceTimeout,
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -82,6 +84,7 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::RouteFailure(e) => write!(f, "Error routing payment: {e:?}"),
             OfferError::TrackFailure(e) => write!(f, "Error tracking payment: {e:?}"),
             OfferError::PaymentFailure => write!(f, "Failed to send payment"),
+            OfferError::InvoiceTimeout => write!(f, "Did not receive invoice in 100 seconds."),
         }
     }
 }

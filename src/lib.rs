@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
@@ -240,7 +240,13 @@ impl OfferHandler {
         let offer_id = cfg.offer.clone().to_string();
         let validated_amount = self.send_invoice_request(cfg, started).await?;
 
-        let invoice = self.wait_for_invoice().await;
+        let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
+            Ok(invoice) => invoice,
+            Err(_) => {
+                error!("Did not receive invoice in 100 seconds.");
+                return Err(OfferError::InvoiceTimeout);
+            }
+        };
         {
             let mut active_offers = self.active_offers.lock().unwrap();
             active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
