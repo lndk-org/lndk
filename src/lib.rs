@@ -28,7 +28,7 @@ use lightning::sign::{EntropySource, KeyMaterial};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender, Config as LogConfig, Root};
+use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -93,6 +93,11 @@ impl LndkOnionMessenger {
         let config = LogConfig::builder()
             .appender(Appender::builder().build("stdout", Box::new(stdout)))
             .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
+            .logger(Logger::builder().build("h2", LevelFilter::Info))
+            .logger(Logger::builder().build("hyper", LevelFilter::Info))
+            .logger(Logger::builder().build("rustls", LevelFilter::Info))
+            .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
+            .logger(Logger::builder().build("tracing", LevelFilter::Info))
             .build(
                 Root::builder()
                     .appender("stdout")
