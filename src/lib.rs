@@ -44,6 +44,7 @@ static INIT: Once = Once::new();
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+    pub log_level: LevelFilter,
     pub signals: LifecycleSignals,
 }
 
@@ -102,7 +103,7 @@ impl LndkOnionMessenger {
                 Root::builder()
                     .appender("stdout")
                     .appender("lndk_logs")
-                    .build(LevelFilter::Info),
+                    .build(args.log_level),
             )
             .unwrap();
 

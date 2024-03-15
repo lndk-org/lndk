@@ -25,3 +25,9 @@ doc = "The path to LND macaroon file. Note: the abosolute macaroon file path is 
 name = "log_dir"
 type = "String"
 doc = "The path to the lndk log file"
+
+[[param]]
+name = "log_level"
+type = "String"
+optional = true
+doc = "The log verbosity level. This can be set to either 'error', 'warn', 'info', 'debug' or 'trace'."
