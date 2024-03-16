@@ -12,6 +12,8 @@ mod internal {
 use internal::*;
 use lndk::lnd::LndCfg;
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use log::{error, LevelFilter};
+use std::str::FromStr;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -25,6 +27,20 @@ async fn main() -> Result<(), ()> {
         .0;
 
     let lnd_args = LndCfg::new(config.address, config.cert, config.macaroon);
+    let log_level = match config.log_level {
+        Some(level_str) => match LevelFilter::from_str(&level_str) {
+            Ok(level) => level,
+            Err(_) => {
+                error!(
+                        "User provided log level '{}' is invalid. Make sure it is set to either 'error',
+                        'warn', 'info', 'debug' or 'trace'",
+                        level_str
+                    );
+                return Err(());
+            }
+        },
+        None => LevelFilter::Info,
+    };
     let (shutdown, listener) = triggered::trigger();
     // Create the channel which will tell us when the onion messenger has finished starting up.
     let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
@@ -36,6 +52,7 @@ async fn main() -> Result<(), ()> {
     let args = Cfg {
         lnd: lnd_args,
         log_dir: config.log_dir,
+        log_level,
         signals,
     };
 
