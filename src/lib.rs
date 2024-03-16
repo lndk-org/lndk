@@ -28,13 +28,13 @@ use lightning::sign::{EntropySource, KeyMaterial};
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender, Config as LogConfig, Root};
+use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
@@ -44,6 +44,7 @@ static INIT: Once = Once::new();
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+    pub log_level: LevelFilter,
     pub signals: LifecycleSignals,
 }
 
@@ -93,11 +94,16 @@ impl LndkOnionMessenger {
         let config = LogConfig::builder()
             .appender(Appender::builder().build("stdout", Box::new(stdout)))
             .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
+            .logger(Logger::builder().build("h2", LevelFilter::Info))
+            .logger(Logger::builder().build("hyper", LevelFilter::Info))
+            .logger(Logger::builder().build("rustls", LevelFilter::Info))
+            .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
+            .logger(Logger::builder().build("tracing", LevelFilter::Info))
             .build(
                 Root::builder()
                     .appender("stdout")
                     .appender("lndk_logs")
-                    .build(LevelFilter::Info),
+                    .build(args.log_level),
             )
             .unwrap();
 
@@ -234,7 +240,13 @@ impl OfferHandler {
         let offer_id = cfg.offer.clone().to_string();
         let validated_amount = self.send_invoice_request(cfg, started).await?;
 
-        let invoice = self.wait_for_invoice().await;
+        let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
+            Ok(invoice) => invoice,
+            Err(_) => {
+                error!("Did not receive invoice in 100 seconds.");
+                return Err(OfferError::InvoiceTimeout);
+            }
+        };
         {
             let mut active_offers = self.active_offers.lock().unwrap();
             active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);

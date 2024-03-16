@@ -12,6 +12,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{LifecycleSignals, PayOfferParams};
+use log::LevelFilter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -93,6 +94,7 @@ async fn test_lndk_forwards_onion_message() {
                 .unwrap()
                 .to_string(),
         ),
+        log_level: LevelFilter::Info,
         signals,
     };
 
@@ -205,6 +207,7 @@ async fn test_lndk_send_invoice_request() {
                 .unwrap()
                 .to_string(),
         ),
+        log_level: LevelFilter::Info,
         signals,
     };
 
@@ -279,6 +282,7 @@ async fn test_lndk_send_invoice_request() {
                 .unwrap()
                 .to_string(),
         ),
+        log_level: LevelFilter::Info,
         signals,
     };
 
@@ -407,6 +411,7 @@ async fn test_lndk_pay_offer() {
                 .unwrap()
                 .to_string(),
         ),
+        log_level: LevelFilter::Info,
         signals,
     };
 

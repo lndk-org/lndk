@@ -26,7 +26,7 @@ const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
-pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
+pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
     block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
 }
 
@@ -49,9 +49,7 @@ impl LndCfg {
 }
 
 /// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
-pub(crate) fn features_support_onion_messages(
-    features: &HashMap<u32, tonic_lnd::lnrpc::Feature>,
-) -> bool {
+pub fn features_support_onion_messages(features: &HashMap<u32, tonic_lnd::lnrpc::Feature>) -> bool {
     features.contains_key(&ONION_MESSAGES_OPTIONAL)
         || features.contains_key(&ONION_MESSAGES_REQUIRED)
 }
@@ -162,7 +160,7 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
 
 #[derive(Debug)]
 /// Error when parsing provided configuration options.
-pub(crate) enum NetworkParseError {
+pub enum NetworkParseError {
     /// Invalid indicates an invalid network was provided.
     Invalid(String),
 }
@@ -177,7 +175,9 @@ impl fmt::Display for NetworkParseError {
     }
 }
 
-pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
+pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
+    let network_lowercase = String::from(network_str).to_lowercase();
+    let network_str = network_lowercase.as_str();
     match network_str {
         "mainnet" => Ok(Network::Bitcoin),
         "testnet" => Ok(Network::Testnet),

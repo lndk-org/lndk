@@ -15,7 +15,7 @@ spec = "config_spec.toml"
 [dependencies]
 async-trait = "0.1.66"
 bitcoin = { version = "0.30.2", features = ["rand"] }
-clap = { version = "4.4.6", features = ["derive"] }
+clap = { version = "4.4.6", features = ["derive", "string"] }
 futures = "0.3.26"
 home = "0.5.5"
 lightning = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "06f9dd7", features = ["max_level_trace", "_test_utils"] }
