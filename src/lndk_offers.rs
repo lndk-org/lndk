@@ -22,7 +22,7 @@ use std::str::FromStr;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tonic_lnd::lnrpc::{
-    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
+    ChannelGraph, GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
     QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
@@ -217,7 +217,7 @@ impl OfferHandler {
     /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
     /// invoice so they know where to send the invoice back to. We try to find a peer that we're
     /// connected to with onion messaging support that we can use to form a blinded path,
-    /// otherwise we creae a blinded path directly to ourselves.
+    /// otherwise we create a blinded path directly to ourselves.
     pub async fn create_reply_path(
         &self,
         mut connector: impl PeerConnector + std::marker::Send + 'static,
@@ -437,6 +437,17 @@ impl PeerConnector for Client {
             .get_node_info(req)
             .await
             .map(|resp| resp.into_inner().node)
+    }
+
+    async fn describe_graph(&mut self) -> Result<ChannelGraph, Status> {
+        let req = tonic_lnd::lnrpc::ChannelGraphRequest {
+            include_unannounced: false,
+        };
+
+        self.lightning()
+            .describe_graph(req)
+            .await
+            .map(|resp| resp.into_inner())
     }
 }
 
@@ -664,6 +675,7 @@ mod tests {
              async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
              async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+             async fn describe_graph(&mut self) -> Result<ChannelGraph, Status>;
          }
     }
 

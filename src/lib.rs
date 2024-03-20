@@ -9,7 +9,7 @@ use crate::lnd::{
     features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
-use crate::onion_messenger::MessengerUtilities;
+use crate::onion_messenger::{connect_to_onion_peers, MessengerUtilities};
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
 use home::home_dir;
@@ -41,9 +41,13 @@ use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
 
+/// The number of peers we'll target to connect to in auto connect mode.
+const NUM_PEER_TARGET: u8 = 3;
+
 pub struct Cfg {
     pub lnd: LndCfg,
     pub log_dir: Option<String>,
+    pub auto_connect: bool,
     pub signals: LifecycleSignals,
 }
 
@@ -151,6 +155,17 @@ impl LndkOnionMessenger {
             let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
             let onion_support = features_support_onion_messages(&peer.features);
             peer_support.insert(pubkey, onion_support);
+        }
+
+        // If the auto connect option is turned on and we aren't connected to the targeted number of peers
+        // that support onion messaging, we'll automatically connect to some.
+        if args.auto_connect && peer_support.len() < NUM_PEER_TARGET.into() {
+            let peer_num = NUM_PEER_TARGET - u8::try_from(peer_support.len()).unwrap();
+            connect_to_onion_peers(client.clone(), peer_num, peer_support.clone(), pubkey)
+                .await
+                .map_err(|e| {
+                    error!("Could not connect to peers: {e}.");
+                })?;
         }
 
         // Create an onion messenger that depends on LND's signer client and consume related events.

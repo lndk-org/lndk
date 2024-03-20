@@ -36,6 +36,7 @@ async fn main() -> Result<(), ()> {
     let args = Cfg {
         lnd: lnd_args,
         log_dir: config.log_dir,
+        auto_connect: config.auto_connect,
         signals,
     };
 

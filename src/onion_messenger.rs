@@ -1,5 +1,8 @@
 use crate::clock::TokioClock;
-use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
+use crate::lnd::{
+    features_support_onion_messages, PeerConnector, ONION_MESSAGES_OPTIONAL,
+    ONION_MESSAGES_REQUIRED,
+};
 use crate::rate_limit::{RateLimiter, TokenLimiter};
 use crate::{LifecycleSignals, LndkOnionMessenger};
 use async_trait::async_trait;
@@ -31,7 +34,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{select, time, time::Duration, time::Interval};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
-    lnrpc::CustomMessage, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
+    lnrpc::ChannelGraph, lnrpc::CustomMessage, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
     lnrpc::SendCustomMessageResponse, tonic::Status, LightningClient,
 };
 use triggered::Listener;
@@ -297,6 +300,65 @@ async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::Lightn
             false
         }
     }
+}
+
+/// connect_to_onion_peers picks a few random nodes from the network graph that support onion messenging, then
+/// connects to them.
+pub(crate) async fn connect_to_onion_peers(
+    mut connector: impl PeerConnector + std::marker::Send + 'static,
+    target_peers: u8,
+    current_peers: HashMap<PublicKey, bool>,
+    lnd_key: PublicKey,
+) -> Result<(), Status> {
+    let graph = connector.describe_graph().await?;
+
+    let onion_peers = get_onion_peers(graph, target_peers, current_peers, lnd_key).await;
+    //for i in 0..onion_peers.len() {
+    for peer in onion_peers.iter() {
+        connector
+            .connect_peer(peer.0.clone(), peer.1.clone())
+            .await?
+    }
+
+    Ok(())
+}
+
+/// get_onion_peers picks a few onion-messenging-supporting nodes from the network graph.
+async fn get_onion_peers(
+    graph: ChannelGraph,
+    target_peers: u8,
+    current_peers: HashMap<PublicKey, bool>,
+    lnd_key: PublicKey,
+) -> Vec<(String, String)> {
+    let mut onion_peers = Vec::new();
+    let mut num = 0;
+    for node in graph.nodes.iter() {
+        if node.features.contains_key(&ONION_MESSAGES_REQUIRED)
+            || node.features.contains_key(&ONION_MESSAGES_OPTIONAL)
+        {
+            // We don't want to connect to ourself.
+            if node.pub_key == lnd_key.to_string() {
+                continue;
+            }
+
+            if current_peers
+                .get(&PublicKey::from_str(&node.pub_key).unwrap())
+                .is_some()
+            {
+                continue;
+            }
+
+            if !node.addresses.is_empty() {
+                onion_peers.push((node.pub_key.clone(), node.addresses[0].addr.clone()));
+                num += 1;
+            }
+            if num >= target_peers {
+                break;
+            }
+        }
+    }
+
+    onion_peers
 }
 
 #[derive(Debug)]
@@ -589,14 +651,14 @@ async fn consume_messenger_events(
                     .map_err(|_| ConsumerError::OnionMessengerFailure)?;
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
-                // local version up to date so we send outgoing OMs all of our peers.
+                // local version up to date so we send outgoing onion messages to all of our peers.
                 rate_limiter.peer_connected(pubkey);
             }
             MessengerEvents::PeerDisconnected(pubkey) => {
                 onion_messenger.peer_disconnected(&pubkey);
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
-                // local version up to date so we send outgoing OMs to our correct peers.
+                // local version up to date so we send outgoing onion messages to our correct peers.
                 rate_limiter.peer_disconnected(pubkey);
             }
             MessengerEvents::IncomingMessage(pubkey, onion_message) => {
@@ -650,7 +712,7 @@ impl SendCustomMessage for CustomMessenger {
     }
 }
 
-/// produce_outgoing_message_events is produce for producing outgoing message events at a regular interval.
+/// produce_outgoing_message_events produces outgoing message events at a regular interval.
 ///
 /// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
 /// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
@@ -728,6 +790,7 @@ mod tests {
     use mockall::mock;
     use std::io::Cursor;
     use tokio::sync::mpsc::channel;
+    use tonic_lnd::lnrpc::{Feature, LightningNode, NodeAddress};
 
     /// Produces an OnionMessage that can be used for tests. We need to manually write individual bytes because onion
     /// messages in LDK can only be created using read/write impls that deal with raw bytes (since some other fields
@@ -1128,5 +1191,71 @@ mod tests {
         assert!(produce_outgoing_message_events(sender, listener, interval)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_onion_peers() {
+        let feature_value = Feature {
+            ..Default::default()
+        };
+        let mut features_optional = HashMap::new();
+        features_optional.insert(ONION_MESSAGES_OPTIONAL, feature_value.clone());
+        let mut features_required = HashMap::new();
+        features_required.insert(ONION_MESSAGES_REQUIRED, feature_value);
+
+        let address = NodeAddress {
+            network: String::from("tcp"),
+            addr: String::from("http://127.0.0.1:9735"),
+        };
+        let mut addresses = Vec::new();
+        addresses.push(address);
+
+        let mut nodes = Vec::new();
+        let node1 = LightningNode {
+            features: features_optional,
+            addresses: addresses.clone(),
+            pub_key: pubkey(2).to_string(),
+            ..Default::default()
+        };
+        let node2 = LightningNode {
+            features: features_required,
+            addresses: addresses.clone(),
+            pub_key: pubkey(3).to_string(),
+            ..Default::default()
+        };
+        let node3 = LightningNode {
+            features: HashMap::new(),
+            addresses: addresses,
+            ..Default::default()
+        };
+        nodes.push(node1);
+        nodes.push(node2.clone());
+        nodes.push(node3);
+
+        let graph = ChannelGraph {
+            nodes: nodes.clone(),
+            ..Default::default()
+        };
+
+        let current_peers = HashMap::new();
+        let pk_1 = pubkey(1);
+
+        // Make sure get_onion_peers correctly only identifies the two nodes that advertise onion messaging support.
+        let onion_peers = get_onion_peers(graph, 3, current_peers.clone(), pk_1.clone()).await;
+        assert!(onion_peers.len() == 2);
+
+        // Now let's add a couple more onion-message-supporting nodes to our graph. If there's four such nodes
+        // in the graph, make sure get_onion_peers only grabs three of them (since that's how many we request
+        // by default).
+        nodes.push(node2.clone());
+        nodes.push(node2);
+
+        let graph = ChannelGraph {
+            nodes: nodes,
+            ..Default::default()
+        };
+
+        let onion_peers = get_onion_peers(graph, 3, current_peers, pk_1).await;
+        assert!(onion_peers.len() == 3);
     }
 }
