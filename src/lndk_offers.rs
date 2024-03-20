@@ -217,7 +217,7 @@ impl OfferHandler {
     /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
     /// invoice so they know where to send the invoice back to. We try to find a peer that we're
     /// connected to with onion messaging support that we can use to form a blinded path,
-    /// otherwise we creae a blinded path directly to ourselves.
+    /// otherwise we create a blinded path directly to ourselves.
     pub async fn create_reply_path(
         &self,
         mut connector: impl PeerConnector + std::marker::Send + 'static,

@@ -651,14 +651,14 @@ async fn consume_messenger_events(
                     .map_err(|_| ConsumerError::OnionMessengerFailure)?;
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
-                // local version up to date so we send outgoing OMs all of our peers.
+                // local version up to date so we send outgoing onion messages to all of our peers.
                 rate_limiter.peer_connected(pubkey);
             }
             MessengerEvents::PeerDisconnected(pubkey) => {
                 onion_messenger.peer_disconnected(&pubkey);
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we need to keep our
-                // local version up to date so we send outgoing OMs to our correct peers.
+                // local version up to date so we send outgoing onion messages to our correct peers.
                 rate_limiter.peer_disconnected(pubkey);
             }
             MessengerEvents::IncomingMessage(pubkey, onion_message) => {
@@ -712,7 +712,7 @@ impl SendCustomMessage for CustomMessenger {
     }
 }
 
-/// produce_outgoing_message_events is produce for producing outgoing message events at a regular interval.
+/// produce_outgoing_message_events produces outgoing message events at a regular interval.
 ///
 /// Note that this function *must* send an exit error to the Sender provided on all exit-cases, so that upstream
 /// consumers know to exit as well. Failures related to sending events are an exception, as failure to send indicates
