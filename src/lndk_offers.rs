@@ -22,7 +22,7 @@ use std::str::FromStr;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tonic_lnd::lnrpc::{
-    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
+    ChannelGraph, GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
     QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
@@ -438,6 +438,17 @@ impl PeerConnector for Client {
             .await
             .map(|resp| resp.into_inner().node)
     }
+
+    async fn describe_graph(&mut self) -> Result<ChannelGraph, Status> {
+        let req = tonic_lnd::lnrpc::ChannelGraphRequest {
+            include_unannounced: false,
+        };
+
+        self.lightning()
+            .describe_graph(req)
+            .await
+            .map(|resp| resp.into_inner())
+    }
 }
 
 #[async_trait]
@@ -664,6 +675,7 @@ mod tests {
              async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
              async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+             async fn describe_graph(&mut self) -> Result<ChannelGraph, Status>;
          }
     }
 

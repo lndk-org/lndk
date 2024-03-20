@@ -17,12 +17,14 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
-use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
+use tonic_lnd::lnrpc::{
+    ChannelGraph, HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route,
+};
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
 
-const ONION_MESSAGES_REQUIRED: u32 = 38;
+pub(crate) const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
@@ -204,12 +206,14 @@ pub trait MessageSigner {
     ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>>;
 }
 
-/// PeerConnector provides a layer of abstraction over the LND API for connecting to a peer.
+/// PeerConnector provides a layer of abstraction over the LND API for browsing the network graph or connecting to
+/// a peer.
 #[async_trait]
 pub trait PeerConnector {
     async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
     async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
     async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
+    async fn describe_graph(&mut self) -> Result<ChannelGraph, Status>;
 }
 
 /// InvoicePayer provides a layer of abstraction over the LND API for paying for a BOLT 12 invoice.
