@@ -7,6 +7,7 @@ use bitcoind::{get_available_port, BitcoinD, Conf, ConnectParams};
 use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
+use ldk_sample::start_ldk;
 use lightning::util::logger::Level;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -67,8 +68,8 @@ pub async fn setup_test_infrastructure(
         node_num: 2,
     };
 
-    let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
-    let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
+    let ldk1 = start_ldk(ldk1_config, test_name).await;
+    let ldk2 = start_ldk(ldk2_config, test_name).await;
 
     (bitcoind, lnd, ldk1, ldk2, lndk_test_dir)
 }
@@ -352,6 +353,28 @@ impl LndNode {
                     .await
             };
             let resp = test_utils::retry_async(make_request, String::from("disconnect_peer"));
+            resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
+
+    pub async fn list_peers(&mut self) -> tonic_lnd::lnrpc::ListPeersResponse {
+        let list_req = tonic_lnd::lnrpc::ListPeersRequest {
+            ..Default::default()
+        };
+
+        let resp = if let Some(client) = self.client.clone() {
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .list_peers(list_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("list_peers"));
             resp.await.unwrap()
         } else {
             panic!("No client")

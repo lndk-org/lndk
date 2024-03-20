@@ -28,7 +28,7 @@ struct Lndk {
     shutdown: triggered::Trigger,
 }
 
-async fn setup_lndk(lnd_cfg: LndCfg, lndk_dir: PathBuf) -> Lndk {
+async fn setup_lndk(lnd_cfg: LndCfg, auto_connect: bool, lndk_dir: PathBuf) -> Lndk {
     let (shutdown, listener) = triggered::trigger();
     let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
 
@@ -40,7 +40,7 @@ async fn setup_lndk(lnd_cfg: LndCfg, lndk_dir: PathBuf) -> Lndk {
 
     let cfg = lndk::Cfg {
         lnd: lnd_cfg,
-        auto_connect: false,
+        auto_connect: auto_connect,
         log_dir: Some(
             lndk_dir
                 .join(format!("lndk-logs.txt"))
@@ -116,7 +116,7 @@ async fn test_lndk_forwards_onion_message() {
         PathBuf::from_str(&lnd.cert_path).unwrap(),
         PathBuf::from_str(&lnd.macaroon_path).unwrap(),
     );
-    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
+    let lndk = setup_lndk(lnd_cfg, false, lndk_dir).await;
     select! {
         val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
@@ -237,7 +237,7 @@ async fn test_lndk_send_invoice_request() {
     }
 
     // Make sure lndk successfully sends the invoice_request.
-    let lndk = setup_lndk(lnd_cfg.clone(), lndk_dir.clone()).await;
+    let lndk = setup_lndk(lnd_cfg.clone(), false, lndk_dir.clone()).await;
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
         amount: Some(20_000),
@@ -261,7 +261,7 @@ async fn test_lndk_send_invoice_request() {
     lnd.disconnect_peer(pubkey_2).await;
     lnd.wait_for_chain_sync().await;
 
-    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
+    let lndk = setup_lndk(lnd_cfg, false, lndk_dir).await;
     select! {
         val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
@@ -367,7 +367,7 @@ async fn test_lndk_pay_offer() {
         PathBuf::from_str(&lnd.cert_path).unwrap(),
         PathBuf::from_str(&lnd.macaroon_path).unwrap(),
     );
-    let lndk = setup_lndk(lnd_cfg, lndk_dir).await;
+    let lndk = setup_lndk(lnd_cfg, false, lndk_dir).await;
 
     let messenger_utils = MessengerUtilities::new();
     let client = lnd.client.clone().unwrap();
@@ -385,13 +385,114 @@ async fn test_lndk_pay_offer() {
         reply_path: Some(reply_path),
     };
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = lndk.messenger.run(lndk.cfg) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.pay_offer(pay_cfg, rx) => {
+        res = lndk.messenger.offer_handler.pay_offer(pay_cfg, lndk.rx) => {
             assert!(res.is_ok());
-            shutdown.trigger();
+            lndk.shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Tests that the auto connect option appropriately auto-connects to peers advertising onion messaging
+// support.
+async fn test_auto_connect() {
+    let test_name = "auto_connect";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    // To test this feature, we'll connect lnd to ldk1. We'll connect ldk1 to ldk2 with a channel.
+    // lnd <--- peer connection ---> ldk1 <--- channels ---> ldk2
+    // Lnd should then get a gossip message from ldk1 about its channel with ldk2 (we'll wait for gossip network sync)
+    let (pubkey, addr) = ldk1.get_node_info();
+    let (pubkey_2, addr_2) = ldk2.get_node_info();
+
+    lnd.connect_to_peer(pubkey, addr).await;
+    ldk1.connect_to_peer(pubkey_2, addr_2).await.unwrap();
+
+    let ldk1_fund_addr = ldk1.bitcoind_client.get_new_address().await;
+
+    // We need to convert funding addresses to the form that the bitcoincore_rpc library recognizes.
+    let ldk1_addr_string = ldk1_fund_addr.to_string();
+    let ldk1_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&ldk1_addr_string)
+        .unwrap()
+        .require_network(RpcNetwork::Regtest)
+        .unwrap();
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk1_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    ldk1.open_channel(pubkey_2, addr_2, 200000, 0, true)
+        .await
+        .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(10, &ldk1_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    let mut client = lnd.client.clone().unwrap();
+    let mut stream = client
+        .lightning()
+        .subscribe_channel_graph(tonic_lnd::lnrpc::GraphTopologySubscription {})
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Wait for ldk2's graph update to come through, otherwise we won't be able to auto-connect to
+    // it by looking at lnd's network graph.
+    'outer: while let Some(update) = stream.message().await.unwrap() {
+        for node in update.node_updates.iter() {
+            for node_addr in node.node_addresses.iter() {
+                if node_addr.addr == addr_2.to_string() {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    let lnd_cfg = LndCfg::new(
+        lnd.address.clone(),
+        PathBuf::from_str(&lnd.cert_path).unwrap(),
+        PathBuf::from_str(&lnd.macaroon_path).unwrap(),
+    );
+
+    let mut lndk = setup_lndk(lnd_cfg, true, lndk_dir).await;
+    select! {
+        val = lndk.messenger.run(lndk.cfg) => {
+            panic!("lndk should not have completed first {:?}", val);
+        },
+        // Wait for onion messenger to give us the signal that it started up.
+        _ = lndk.rx.recv() => {
+            // Now we can check that lndk successfully auto-connected to one more peer than before.
+            let resp = lnd.list_peers().await;
+            assert!(resp.peers.len() == 2);
+
+            // Check that we're connected to the peer we expected.
+            let mut connected = false;
+            for peer in resp.peers.iter() {
+                if PublicKey::from_str(&peer.pub_key).unwrap() == pubkey_2 {
+                    connected = true;
+                }
+            }
+            assert!(connected);
+
+            lndk.shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
         }
