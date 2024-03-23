@@ -4,6 +4,7 @@ use lndk::lndk_offers::{decode, get_destination};
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler, PayOfferParams};
 use log::LevelFilter;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -177,8 +178,8 @@ async fn main() -> Result<(), ()> {
                 signals,
             };
 
-            let handler = OfferHandler::new();
-            let messenger = LndkOnionMessenger::new(handler);
+            let handler = Arc::new(OfferHandler::new());
+            let messenger = LndkOnionMessenger::new();
             let pay_cfg = PayOfferParams {
                 offer: offer.clone(),
                 amount,
@@ -188,10 +189,10 @@ async fn main() -> Result<(), ()> {
                 reply_path: None,
             };
             select! {
-                _ = messenger.run(lndk_cfg) => {
+                _ = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
                     println!("ERROR: lndk stopped running before pay offer finished.");
                 },
-                res = messenger.offer_handler.pay_offer(pay_cfg, rx) => {
+                res = handler.pay_offer(pay_cfg, rx) => {
                     match res {
                         Ok(_) => println!("Successfully paid for offer!"),
                         Err(err) => println!("Error paying for offer: {err:?}"),

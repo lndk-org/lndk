@@ -17,6 +17,7 @@ use log::LevelFilter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -102,10 +103,10 @@ async fn test_lndk_forwards_onion_message() {
         signals,
     };
 
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
@@ -247,8 +248,8 @@ async fn test_lndk_send_invoice_request() {
     }
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
         amount: Some(20_000),
@@ -258,11 +259,11 @@ async fn test_lndk_send_invoice_request() {
         reply_path: Some(reply_path.clone()),
     };
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.send_invoice_request(pay_cfg.clone(), rx) => {
+        res = handler.send_invoice_request(pay_cfg.clone(), rx) => {
             assert!(res.is_ok());
         }
     }
@@ -293,14 +294,14 @@ async fn test_lndk_send_invoice_request() {
         signals,
     };
 
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.send_invoice_request(pay_cfg, rx) => {
+        res = handler.send_invoice_request(pay_cfg, rx) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
@@ -433,8 +434,8 @@ async fn test_lndk_pay_offer() {
         BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = lndk::OfferHandler::new();
-    let messenger = lndk::LndkOnionMessenger::new(handler);
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
     let pay_cfg = PayOfferParams {
         offer,
         amount: Some(20_000),
@@ -444,11 +445,11 @@ async fn test_lndk_pay_offer() {
         reply_path: Some(reply_path),
     };
     select! {
-        val = messenger.run(lndk_cfg) => {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = messenger.offer_handler.pay_offer(pay_cfg, rx) => {
+        res = handler.pay_offer(pay_cfg, rx) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;

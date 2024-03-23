@@ -32,7 +32,7 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Mutex, Once};
+use std::sync::{Arc, Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
@@ -63,16 +63,18 @@ pub fn init_logger(config: LogConfig) {
     });
 }
 
-pub struct LndkOnionMessenger {
-    pub offer_handler: OfferHandler,
-}
+pub struct LndkOnionMessenger {}
 
 impl LndkOnionMessenger {
-    pub fn new(offer_handler: OfferHandler) -> Self {
-        LndkOnionMessenger { offer_handler }
+    pub fn new() -> Self {
+        LndkOnionMessenger {}
     }
 
-    pub async fn run(&self, args: Cfg) -> Result<(), ()> {
+    pub async fn run(
+        &self,
+        args: Cfg,
+        offer_handler: Arc<impl OffersMessageHandler>,
+    ) -> Result<(), ()> {
         let log_dir = args.log_dir.unwrap_or_else(|| {
             home_dir()
                 .unwrap()
@@ -170,7 +172,7 @@ impl LndkOnionMessenger {
             &node_signer,
             &messenger_utils,
             message_router,
-            &self.offer_handler,
+            offer_handler,
             IgnoringMessageHandler {},
         );
 
@@ -183,6 +185,12 @@ impl LndkOnionMessenger {
             args.signals,
         )
         .await
+    }
+}
+
+impl Default for LndkOnionMessenger {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

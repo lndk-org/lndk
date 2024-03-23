@@ -14,6 +14,7 @@ use lndk::lnd::{validate_lnd_creds, LndCfg};
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use log::LevelFilter;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -68,7 +69,7 @@ async fn main() -> Result<(), ()> {
         signals,
     };
 
-    let handler = OfferHandler::new();
-    let messenger = LndkOnionMessenger::new(handler);
-    messenger.run(args).await
+    let handler = Arc::new(OfferHandler::new());
+    let messenger = LndkOnionMessenger::new();
+    messenger.run(args, Arc::clone(&handler)).await
 }
