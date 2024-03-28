@@ -220,6 +220,7 @@ pub trait InvoicePayer {
         path: BlindedPath,
         cltv_expiry_delta: u16,
         fee_base_msat: u32,
+        fee_ppm: u32,
         msats: u64,
     ) -> Result<QueryRoutesResponse, Status>;
     async fn send_to_route(

@@ -271,6 +271,7 @@ impl OfferHandler {
                 params.path,
                 params.cltv_expiry_delta,
                 params.fee_base_msat,
+                params.fee_ppm,
                 params.msats,
             )
             .await
@@ -298,6 +299,7 @@ pub struct PayInvoiceParams {
     pub path: BlindedPath,
     pub cltv_expiry_delta: u16,
     pub fee_base_msat: u32,
+    pub fee_ppm: u32,
     pub payment_hash: [u8; 32],
     pub msats: u64,
     pub offer_id: String,
@@ -498,6 +500,7 @@ impl InvoicePayer for Client {
         path: BlindedPath,
         cltv_expiry_delta: u16,
         fee_base_msat: u32,
+        fee_ppm: u32,
         msats: u64,
     ) -> Result<QueryRoutesResponse, Status> {
         let mut blinded_hops = vec![];
@@ -519,6 +522,7 @@ impl InvoicePayer for Client {
             blinded_path,
             total_cltv_delta: u32::from(cltv_expiry_delta) + 120,
             base_fee_msat: u64::from(fee_base_msat),
+            proportional_fee_msat: u64::from(fee_ppm),
             ..Default::default()
         };
 
@@ -672,7 +676,7 @@ mod tests {
 
         #[async_trait]
         impl InvoicePayer for TestInvoicePayer{
-            async fn query_routes(&mut self, path: BlindedPath, cltv_expiry_delta: u16, fee_base_msat: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
+            async fn query_routes(&mut self, path: BlindedPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
             async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<(), OfferError<Secp256k1Error>>;
         }
@@ -929,7 +933,7 @@ mod tests {
     async fn test_pay_invoice() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
-        payer_mock.expect_query_routes().returning(|_, _, _, _| {
+        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
             let route = Route {
                 ..Default::default()
             };
@@ -954,6 +958,7 @@ mod tests {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
+            fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
@@ -967,7 +972,7 @@ mod tests {
 
         payer_mock
             .expect_query_routes()
-            .returning(|_, _, _, _| Err(Status::unknown("unknown error")));
+            .returning(|_, _, _, _, _| Err(Status::unknown("unknown error")));
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
@@ -976,6 +981,7 @@ mod tests {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
+            fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
@@ -987,7 +993,7 @@ mod tests {
     async fn test_pay_invoice_send_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
-        payer_mock.expect_query_routes().returning(|_, _, _, _| {
+        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
             let route = Route {
                 ..Default::default()
             };
@@ -1008,6 +1014,7 @@ mod tests {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
+            fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
