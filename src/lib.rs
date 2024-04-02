@@ -253,6 +253,7 @@ impl OfferHandler {
             path: path_info.1,
             cltv_expiry_delta: path_info.0.cltv_expiry_delta,
             fee_base_msat: path_info.0.fee_base_msat,
+            fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
             msats: validated_amount,
             offer_id,
