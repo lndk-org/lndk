@@ -20,7 +20,6 @@ use lightning::util::ser::{Readable, Writeable};
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -50,19 +49,11 @@ const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait implementations for LDK’s
 /// OnionMessenger.
-///
-/// A refcell is used for entropy_source to provide interior mutability for ChaCha20Rng. We need a mutable reference
-/// to be able to use the chacha library’s fill_bytes method, but the EntropySource interface in LDK is for an
-/// immutable reference.
-pub struct MessengerUtilities {
-    entropy_source: RefCell<ChaCha20Rng>,
-}
+pub struct MessengerUtilities {}
 
 impl MessengerUtilities {
     pub fn new() -> Self {
-        MessengerUtilities {
-            entropy_source: RefCell::new(ChaCha20Rng::from_entropy()),
-        }
+        MessengerUtilities {}
     }
 }
 
@@ -75,10 +66,9 @@ impl Default for MessengerUtilities {
 impl EntropySource for MessengerUtilities {
     // TODO: surface LDK's EntropySource and use instead.
     fn get_secure_random_bytes(&self) -> [u8; 32] {
+        let mut entropy_source = ChaCha20Rng::from_entropy();
         let mut chacha_bytes: [u8; 32] = [0; 32];
-        self.entropy_source
-            .borrow_mut()
-            .fill_bytes(&mut chacha_bytes);
+        entropy_source.fill_bytes(&mut chacha_bytes);
         chacha_bytes
     }
 }
