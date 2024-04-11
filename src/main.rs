@@ -11,9 +11,7 @@ mod internal {
 
 use internal::*;
 use lndk::lnd::{validate_lnd_creds, LndCfg};
-use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
-use log::LevelFilter;
-use std::str::FromStr;
+use lndk::{setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -26,22 +24,6 @@ async fn main() -> Result<(), ()> {
     let config = Config::including_optional_config_files(&["./lndk.conf"])
         .unwrap_or_exit()
         .0;
-
-    let log_level = match config.log_level {
-        Some(level_str) => match LevelFilter::from_str(&level_str) {
-            Ok(level) => level,
-            Err(_) => {
-                // Since the logger isn't set up yet, we use a println just this once.
-                println!(
-                    "User provided log level '{}' is invalid. Make sure it is set to either 'error',
-                    'warn', 'info', 'debug' or 'trace'",
-                    level_str
-                );
-                return Err(());
-            }
-        },
-        None => LevelFilter::Info,
-    };
 
     let creds = validate_lnd_creds(
         config.cert_path,
@@ -64,12 +46,12 @@ async fn main() -> Result<(), ()> {
     };
     let args = Cfg {
         lnd: lnd_args,
-        log_dir: config.log_dir,
-        log_level,
         signals,
     };
 
     let handler = Arc::new(OfferHandler::new());
+    setup_logger(config.log_level, config.log_dir)?;
+
     let messenger = LndkOnionMessenger::new();
     messenger.run(args, Arc::clone(&handler)).await
 }

@@ -41,10 +41,71 @@ use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
 
+pub fn init_logger(config: LogConfig) {
+    INIT.call_once(|| {
+        log4rs::init_config(config).expect("failed to initialize logger");
+    });
+}
+
+#[allow(clippy::result_unit_err)]
+pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
+    let log_level = match log_level {
+        Some(level_str) => match LevelFilter::from_str(&level_str) {
+            Ok(level) => level,
+            Err(_) => {
+                // Since the logger isn't set up yet, we use a println just this once.
+                println!(
+                    "User provided log level '{}' is invalid. Make sure it is set to either 'error',
+                    'warn', 'info', 'debug' or 'trace'",
+                    level_str
+                );
+                return Err(());
+            }
+        },
+        None => LevelFilter::Info,
+    };
+
+    let log_dir = log_dir.unwrap_or_else(|| {
+        home_dir()
+            .unwrap()
+            .join(".lndk")
+            .join("lndk.log")
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string()
+    });
+
+    // Log both to stdout and a log file.
+    let stdout = ConsoleAppender::builder().build();
+    let lndk_logs = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
+        .build(log_dir)
+        .unwrap();
+
+    let config = LogConfig::builder()
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
+        .logger(Logger::builder().build("h2", LevelFilter::Info))
+        .logger(Logger::builder().build("hyper", LevelFilter::Info))
+        .logger(Logger::builder().build("rustls", LevelFilter::Info))
+        .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
+        .logger(Logger::builder().build("tracing", LevelFilter::Info))
+        .build(
+            Root::builder()
+                .appender("stdout")
+                .appender("lndk_logs")
+                .build(log_level),
+        )
+        .unwrap();
+
+    init_logger(config);
+
+    Ok(())
+}
+
 pub struct Cfg {
     pub lnd: LndCfg,
-    pub log_dir: Option<String>,
-    pub log_level: LevelFilter,
     pub signals: LifecycleSignals,
 }
 
@@ -55,12 +116,6 @@ pub struct LifecycleSignals {
     pub listener: Listener,
     // Used to signal when the onion messenger has started up.
     pub started: Sender<u32>,
-}
-
-pub fn init_logger(config: LogConfig) {
-    INIT.call_once(|| {
-        log4rs::init_config(config).expect("failed to initialize logger");
-    });
 }
 
 pub struct LndkOnionMessenger {}
@@ -75,42 +130,6 @@ impl LndkOnionMessenger {
         args: Cfg,
         offer_handler: Arc<impl OffersMessageHandler>,
     ) -> Result<(), ()> {
-        let log_dir = args.log_dir.unwrap_or_else(|| {
-            home_dir()
-                .unwrap()
-                .join(".lndk")
-                .join("lndk.log")
-                .as_path()
-                .to_str()
-                .unwrap()
-                .to_string()
-        });
-
-        // Log both to stdout and a log file.
-        let stdout = ConsoleAppender::builder().build();
-        let lndk_logs = FileAppender::builder()
-            .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
-            .build(log_dir)
-            .unwrap();
-
-        let config = LogConfig::builder()
-            .appender(Appender::builder().build("stdout", Box::new(stdout)))
-            .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
-            .logger(Logger::builder().build("h2", LevelFilter::Info))
-            .logger(Logger::builder().build("hyper", LevelFilter::Info))
-            .logger(Logger::builder().build("rustls", LevelFilter::Info))
-            .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
-            .logger(Logger::builder().build("tracing", LevelFilter::Info))
-            .build(
-                Root::builder()
-                    .appender("stdout")
-                    .appender("lndk_logs")
-                    .build(args.log_level),
-            )
-            .unwrap();
-
-        init_logger(config);
-
         let mut client = get_lnd_client(args.lnd).expect("failed to connect");
 
         let info = client

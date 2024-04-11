@@ -2,7 +2,6 @@ use clap::{Parser, Subcommand};
 use lndk::lnd::{get_lnd_client, string_to_network, validate_lnd_creds, LndCfg};
 use lndk::lndk_offers::{decode, get_destination};
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler, PayOfferParams};
-use log::LevelFilter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::select;
@@ -173,8 +172,6 @@ async fn main() -> Result<(), ()> {
             };
             let lndk_cfg = Cfg {
                 lnd: lnd_cfg,
-                log_dir: None,
-                log_level: LevelFilter::Info,
                 signals,
             };
 
