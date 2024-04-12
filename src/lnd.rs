@@ -1,3 +1,4 @@
+use crate::lndk_offers::RetryClient;
 use crate::OfferError;
 use async_trait::async_trait;
 use bitcoin::bech32::u5;
@@ -17,7 +18,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
-use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
+use tonic_lnd::lnrpc::{
+    GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route,
+};
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
@@ -26,8 +29,9 @@ const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
-pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
-    block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
+pub(crate) fn get_lnd_client(cfg: LndCfg) -> Result<RetryClient<Client>, ConnectError> {
+    let client = block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))?;
+    Ok(RetryClient::new(client))
 }
 
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
@@ -185,6 +189,12 @@ pub(crate) fn string_to_network(network_str: &str) -> Result<Network, NetworkPar
         "regtest" => Ok(Network::Regtest),
         _ => Err(NetworkParseError::Invalid(network_str.to_string())),
     }
+}
+
+/// Informer provides a layer of abstraction over the LND API for getting node information.
+#[async_trait]
+pub trait Informer {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
 }
 
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.

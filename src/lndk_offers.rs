@@ -1,6 +1,9 @@
-use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
+use crate::lnd::{
+    features_support_onion_messages, Informer, InvoicePayer, MessageSigner, PeerConnector,
+};
 use crate::{OfferHandler, OfferState, PayOfferParams};
 use async_trait::async_trait;
+use backon::{BlockingRetryableWithContext, ConstantBuilder, RetryableWithContext};
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::schnorr::Signature;
@@ -15,6 +18,7 @@ use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
 use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
+use lightning::util::ser::Writeable;
 use log::error;
 use std::error::Error;
 use std::fmt::Display;
@@ -22,8 +26,8 @@ use std::str::FromStr;
 use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tonic_lnd::lnrpc::{
-    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
-    QueryRoutesResponse, Route,
+    GetInfoRequest, GetInfoResponse, HtlcAttempt, LightningNode, ListPeersRequest,
+    ListPeersResponse, QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
@@ -400,6 +404,16 @@ pub async fn connect_to_peer(
 }
 
 #[async_trait]
+impl Informer for Client {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status> {
+        self.lightning()
+            .get_info(GetInfoRequest {})
+            .await
+            .map(|resp| resp.into_inner())
+    }
+}
+
+#[async_trait]
 impl PeerConnector for Client {
     async fn list_peers(&mut self) -> Result<ListPeersResponse, Status> {
         let list_req = ListPeersRequest {
@@ -579,6 +593,194 @@ impl InvoicePayer for Client {
         }
 
         Err(OfferError::PaymentFailure)
+    }
+}
+
+pub struct RetryClient<T> {
+    client: T,
+    backoff: ConstantBuilder,
+}
+
+impl<T: Clone> RetryClient<T> {
+    pub fn new(client: T) -> Self {
+        let backoff = ConstantBuilder::default().with_max_times(5).with_jitter();
+        RetryClient { client, backoff }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.client
+    }
+}
+
+#[async_trait]
+impl<T: Informer + Clone + Send + Sync> Informer for RetryClient<T> {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut v: T| async {
+            let res = v.get_info().await;
+            (v, res)
+        })
+        .retry(&self.backoff)
+        .context(client)
+        .await;
+
+        result
+    }
+}
+
+#[async_trait]
+impl<T: PeerConnector + Send + Clone + Sync> PeerConnector for RetryClient<T> {
+    async fn list_peers(&mut self) -> Result<ListPeersResponse, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut v: T| async {
+            let res = v.list_peers().await;
+            (v, res)
+        })
+        .retry(&self.backoff)
+        .context(client)
+        .await;
+
+        result
+    }
+
+    async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, String, String)| async {
+            let res = ctx.0.connect_peer(ctx.1.clone(), ctx.2.clone()).await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, node_id, addr))
+        .await;
+
+        result
+    }
+
+    async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, String)| async {
+            let res = ctx.0.get_node_info(ctx.1.clone()).await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, pub_key))
+        .await;
+
+        result
+    }
+}
+
+#[async_trait]
+impl<T: MessageSigner + Send + Clone + Sync> MessageSigner for RetryClient<T> {
+    async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, KeyLocator)| async {
+            let res = ctx.0.derive_key(ctx.1.clone()).await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, key_loc))
+        .await;
+
+        result
+    }
+
+    async fn sign_message(
+        &mut self,
+        key_loc: KeyLocator,
+        merkle_hash: Hash,
+        tag: String,
+    ) -> Result<Vec<u8>, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, KeyLocator, Hash, String)| async {
+            let res = ctx
+                .0
+                .sign_message(ctx.1.clone(), ctx.2.clone(), ctx.3.clone())
+                .await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, key_loc, merkle_hash, tag))
+        .await;
+
+        result
+    }
+
+    fn sign_uir(
+        &mut self,
+        key_loc: KeyLocator,
+        unsigned_invoice_req: UnsignedInvoiceRequest,
+    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, KeyLocator, UnsignedInvoiceRequest)| {
+            let encoded_unsigned = ctx.2.encode();
+            let cloned_unsigned = UnsignedInvoiceRequest::try_from(encoded_unsigned).unwrap();
+            let res = ctx.0.sign_uir(ctx.1.clone(), cloned_unsigned);
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, key_loc, unsigned_invoice_req))
+        .call();
+
+        result
+    }
+}
+
+#[async_trait]
+impl<T: InvoicePayer + Send + Clone + Sync> InvoicePayer for RetryClient<T> {
+    async fn query_routes(
+        &mut self,
+        path: BlindedPath,
+        cltv_expiry_delta: u16,
+        fee_base_msat: u32,
+        msats: u64,
+    ) -> Result<QueryRoutesResponse, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, BlindedPath, u16, u32, u64)| async {
+            let res = ctx
+                .0
+                .query_routes(ctx.1.clone(), ctx.2.clone(), ctx.3.clone(), ctx.4.clone())
+                .await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, path, cltv_expiry_delta, fee_base_msat, msats))
+        .await;
+
+        result
+    }
+
+    async fn send_to_route(
+        &mut self,
+        payment_hash: [u8; 32],
+        route: Route,
+    ) -> Result<HtlcAttempt, Status> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, [u8; 32], Route)| async {
+            let res = ctx.0.send_to_route(ctx.1.clone(), ctx.2.clone()).await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, payment_hash, route))
+        .await;
+
+        result
+    }
+
+    async fn track_payment(
+        &mut self,
+        payment_hash: [u8; 32],
+    ) -> Result<(), OfferError<Secp256k1Error>> {
+        let client = self.client.clone();
+        let (_, result) = (|mut ctx: (T, [u8; 32])| async {
+            let res = ctx.0.track_payment(ctx.1.clone()).await;
+            (ctx, res)
+        })
+        .retry(&self.backoff)
+        .context((client, payment_hash))
+        .await;
+
+        result
     }
 }
 
