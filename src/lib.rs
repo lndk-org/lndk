@@ -6,7 +6,8 @@ pub mod onion_messenger;
 mod rate_limit;
 
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
+    features_support_onion_messages, get_lnd_client, string_to_network, Informer, LndCfg,
+    LndNodeSigner, PeerConnector,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
@@ -35,7 +36,6 @@ use std::str::FromStr;
 use std::sync::{Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
-use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
@@ -105,12 +105,7 @@ impl LndkOnionMessenger {
 
         let mut client = get_lnd_client(args.lnd).expect("failed to connect");
 
-        let info = client
-            .lightning()
-            .get_info(GetInfoRequest {})
-            .await
-            .expect("failed to get info")
-            .into_inner();
+        let info = client.get_info().await.expect("failed to get info");
 
         let mut network_str = None;
         #[allow(deprecated)]
@@ -136,22 +131,18 @@ impl LndkOnionMessenger {
 
         // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
         // connected. This sets up our "start state" for the messenger correctly.
-        let current_peers = client
-            .lightning()
-            .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
-                latest_error: false,
-            })
-            .await
-            .map_err(|e| {
-                error!("Could not lookup current peers: {e}.");
-            })?;
+        let current_peers = client.list_peers().await.map_err(|e| {
+            error!("Could not lookup current peers: {e}.");
+        })?;
 
         let mut peer_support = HashMap::new();
-        for peer in current_peers.into_inner().peers {
+        for peer in current_peers.peers {
             let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
             let onion_support = features_support_onion_messages(&peer.features);
             peer_support.insert(pubkey, onion_support);
         }
+
+        let mut client = client.into_inner();
 
         // Create an onion messenger that depends on LND's signer client and consume related events.
         let mut node_client = client.signer().clone();
