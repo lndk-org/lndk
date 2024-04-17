@@ -46,6 +46,14 @@ protocol.custom-nodeann=39
 protocol.custom-init=39
 ```
 
+#### Two options for LNDK
+
+Now that we have LND set up properly, there are two key things you can do with LNDK: 
+1) Forward onion messages. By increasing the number of Lightning nodes out there that can forward onion messages, this increases the anonymity set and helps to bootstrap BOLT 12 for more private payments.
+2) Pay BOLT 12 offers, a more private standard for receiving payments over Lightning, which also allows for static invoices.
+
+To accomplish #1, follow the instructions below to get the LNDK binary up and running. For #2, you can [use the CLI](https://github.com/lndk-org/lndk/blob/master/docs/cli_commands.md).
+
 #### Running LNDK
 
 Now we need to set up LNDK. To start:
