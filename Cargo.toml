@@ -1,8 +1,11 @@
 [package]
 name = "lndk"
+authors = ["The LNDK Contributors"]
 version = "0.0.1"
 edition = "2021"
 repository = "https://github.com/lndk-org/lndk"
+description = "A standalone daemon that externally implements BOLT 12 functionality for LND using LDK"
+license = "MIT"
 
 [[bin]]
 name = "lndk-cli"
