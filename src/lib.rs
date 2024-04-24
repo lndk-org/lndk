@@ -6,7 +6,7 @@ pub mod onion_messenger;
 mod rate_limit;
 
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
+    features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
@@ -138,20 +138,7 @@ impl LndkOnionMessenger {
             .await
             .expect("failed to get info")
             .into_inner();
-
-        let mut network_str = None;
-        #[allow(deprecated)]
-        for chain in info.chains {
-            if chain.chain == "bitcoin" {
-                network_str = Some(chain.network.clone())
-            }
-        }
-        if network_str.is_none() {
-            error!("lnd node is not connected to bitcoin network as expected");
-            return Err(());
-        }
-        let network = string_to_network(&network_str.unwrap());
-        let network = network.unwrap();
+        let network = get_network(info.clone()).await?;
 
         let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
         info!("Starting lndk on {network} network for node: {pubkey}.");
