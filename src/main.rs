@@ -13,8 +13,6 @@ use internal::*;
 use lndk::lnd::{validate_lnd_creds, LndCfg};
 use lndk::{setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
 
 #[macro_use]
 extern crate configure_me;
@@ -37,13 +35,7 @@ async fn main() -> Result<(), ()> {
     let lnd_args = LndCfg::new(config.address, creds);
 
     let (shutdown, listener) = triggered::trigger();
-    // Create the channel which will tell us when the onion messenger has finished starting up.
-    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-    let signals = LifecycleSignals {
-        shutdown,
-        listener,
-        started: tx,
-    };
+    let signals = LifecycleSignals { shutdown, listener };
     let args = Cfg {
         lnd: lnd_args,
         signals,

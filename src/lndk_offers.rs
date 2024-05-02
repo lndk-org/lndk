@@ -19,7 +19,6 @@ use log::error;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
-use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tonic_lnd::lnrpc::{
     GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
@@ -100,14 +99,7 @@ impl OfferHandler {
     pub async fn send_invoice_request(
         &self,
         mut cfg: PayOfferParams,
-        mut started: Receiver<u32>,
     ) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
-        // Wait for onion messenger to give us the signal that it's ready. Once the onion messenger drops
-        // the channel sender, recv will return None and we'll stop blocking here.
-        if started.recv().await.is_some() {
-            error!("Error: we shouldn't receive any messages on this channel");
-        }
-
         let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
 
         // For now we connect directly to the introduction node of the blinded path so we don't need any

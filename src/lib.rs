@@ -33,7 +33,6 @@ use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::Client;
@@ -114,8 +113,6 @@ pub struct LifecycleSignals {
     pub shutdown: Trigger,
     // Used to listen for the signal to shutdown.
     pub listener: Listener,
-    // Used to signal when the onion messenger has started up.
-    pub started: Sender<u32>,
 }
 
 pub struct LndkOnionMessenger {}
@@ -245,14 +242,10 @@ impl OfferHandler {
     }
 
     /// Adds an offer to be paid with the amount specified. May only be called once for a single offer.
-    pub async fn pay_offer(
-        &self,
-        cfg: PayOfferParams,
-        started: Receiver<u32>,
-    ) -> Result<(), OfferError<Secp256k1Error>> {
+    pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<(), OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let validated_amount = self.send_invoice_request(cfg, started).await?;
+        let validated_amount = self.send_invoice_request(cfg).await?;
 
         let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
             Ok(invoice) => invoice,

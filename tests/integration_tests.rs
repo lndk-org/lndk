@@ -18,8 +18,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::select;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
 
 async fn wait_to_receive_onion_message(
@@ -82,11 +80,9 @@ async fn test_lndk_forwards_onion_message() {
     .unwrap();
     let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
 
-    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
         listener,
-        started: tx,
     };
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg,
@@ -181,6 +177,7 @@ async fn test_lndk_send_invoice_request() {
 
     // Now we'll spin up lndk, which should forward the invoice request to ldk2.
     let (shutdown, listener) = triggered::trigger();
+
     let creds = validate_lnd_creds(
         Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
         None,
@@ -189,11 +186,10 @@ async fn test_lndk_send_invoice_request() {
     )
     .unwrap();
     let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
+
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
         listener,
-        started: tx,
     };
 
     let lndk_cfg = lndk::Cfg {
@@ -254,7 +250,7 @@ async fn test_lndk_send_invoice_request() {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = handler.send_invoice_request(pay_cfg.clone(), rx) => {
+        res = handler.send_invoice_request(pay_cfg.clone()) => {
             assert!(res.is_ok());
         }
     }
@@ -265,11 +261,9 @@ async fn test_lndk_send_invoice_request() {
     lnd.wait_for_chain_sync().await;
 
     let (shutdown, listener) = triggered::trigger();
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
         listener,
-        started: tx,
     };
 
     let lndk_cfg = lndk::Cfg {
@@ -284,7 +278,7 @@ async fn test_lndk_send_invoice_request() {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = handler.send_invoice_request(pay_cfg, rx) => {
+        res = handler.send_invoice_request(pay_cfg) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
@@ -388,12 +382,10 @@ async fn test_lndk_pay_offer() {
     )
     .unwrap();
     let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
-    let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
 
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
         listener,
-        started: tx,
     };
 
     let lndk_cfg = lndk::Cfg {
@@ -432,7 +424,7 @@ async fn test_lndk_pay_offer() {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = handler.pay_offer(pay_cfg, rx) => {
+        res = handler.pay_offer(pay_cfg) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
