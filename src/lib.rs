@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::lnrpc::{GetInfoRequest, Payment};
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
@@ -242,7 +242,10 @@ impl OfferHandler {
     }
 
     /// Adds an offer to be paid with the amount specified. May only be called once for a single offer.
-    pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<(), OfferError<Secp256k1Error>> {
+    pub async fn pay_offer(
+        &self,
+        cfg: PayOfferParams,
+    ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
         let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
