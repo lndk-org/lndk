@@ -4,7 +4,7 @@ LNDK is a standalone daemon that connects to [LND](https://github.com/lightningn
 
 Project Milestones:
 - [x] [v0.1.0](https://github.com/lndk-org/lndk/milestone/1): Onion message forwarding for LND.
-- [ ] [v0.2.0](https://github.com/lndk-org/lndk/milestone/2): Payment to offers with blinded paths.
+- [x] [v0.2.0](https://github.com/lndk-org/lndk/milestone/2): Payment to offers with blinded paths.
 
 *Please note that this project is still experimental.*
 
@@ -52,7 +52,8 @@ Now that we have LND set up properly, there are two key things you can do with L
 1) Forward onion messages. By increasing the number of Lightning nodes out there that can forward onion messages, this increases the anonymity set and helps to bootstrap BOLT 12 for more private payments.
 2) Pay BOLT 12 offers, a more private standard for receiving payments over Lightning, which also allows for static invoices.
 
-To accomplish #1, follow the instructions below to get the LNDK binary up and running. For #2, you can [use the CLI](https://github.com/lndk-org/lndk/blob/master/docs/cli_commands.md).
+To accomplish #1, follow the instructions below to get the LNDK binary up and running. Once you have LNDK up and running, you can accomplish #2
+[here](https://github.com/lndk-org/lndk/blob/master/docs/cli_commands.md) with either `lndk-cli` or setting up your own gRPC client.
 
 #### Running LNDK
 
