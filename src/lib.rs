@@ -245,12 +245,18 @@ impl OfferHandler {
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<(), OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let validated_amount = self.send_invoice_request(cfg).await?;
+        let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.remove(&offer_id.clone());
+            e
+        })?;
 
         let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
             Ok(invoice) => invoice,
             Err(_) => {
                 error!("Did not receive invoice in 100 seconds.");
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id.clone());
                 return Err(OfferError::InvoiceTimeout);
             }
         };
@@ -269,10 +275,21 @@ impl OfferHandler {
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
             msats: validated_amount,
-            offer_id,
+            offer_id: offer_id.clone(),
         };
 
-        self.pay_invoice(client_clone, params).await
+        self.pay_invoice(client_clone, params)
+            .await
+            .map(|payment| {
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id);
+                payment
+            })
+            .map_err(|e| {
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id);
+                e
+            })
     }
 
     /// wait_for_invoice waits for the offer creator to respond with an invoice.
