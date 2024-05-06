@@ -51,6 +51,7 @@ pub fn init_logger(config: LogConfig) {
     });
 }
 
+pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
 
 #[allow(clippy::result_unit_err)]
@@ -68,7 +69,7 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
                 return Err(());
             }
         },
-        None => LevelFilter::Info,
+        None => LevelFilter::Trace,
     };
 
     let log_dir = log_dir.unwrap_or_else(|| {

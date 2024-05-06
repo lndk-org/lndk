@@ -14,7 +14,7 @@ use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
 use lndk::server::LNDKServer;
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
-    DEFAULT_SERVER_PORT,
+    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
@@ -63,11 +63,17 @@ async fn main() -> Result<(), ()> {
         .expect("failed to get info")
         .into_inner();
 
-    let addr = format!("[::1]:{DEFAULT_SERVER_PORT}")
-        .parse()
-        .map_err(|e| {
-            error!("Error parsing API address: {e}");
-        })?;
+    let grpc_host = match config.grpc_host {
+        Some(host) => host,
+        None => DEFAULT_SERVER_HOST.to_string(),
+    };
+    let grpc_port = match config.grpc_port {
+        Some(port) => port,
+        None => DEFAULT_SERVER_PORT,
+    };
+    let addr = format!("{grpc_host}:{grpc_port}").parse().map_err(|e| {
+        error!("Error parsing API address: {e}");
+    })?;
 
     let tls_str = creds.get_certificate_string()?;
     let server = LNDKServer::new(
@@ -81,6 +87,8 @@ async fn main() -> Result<(), ()> {
     let server_fut = Server::builder()
         .add_service(OffersServer::new(server))
         .serve(addr);
+
+    info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
 
     select! {
        _ = messenger.run(args, Arc::clone(&handler)) => {

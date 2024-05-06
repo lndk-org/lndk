@@ -44,3 +44,15 @@ name = "log_level"
 type = "String"
 optional = true
 doc = "The log verbosity level. This can be set to either 'error', 'warn', 'info', 'debug' or 'trace'."
+
+[[param]]
+name = "grpc_host"
+type = "String"
+optional = true
+doc = "The host the grpc server will run on. Defaults to 127.0.0.1."
+
+[[param]]
+name = "grpc_port"
+type = "u16"
+optional = true
+doc = "The port the grpc server will run on. Defaults to 7000."

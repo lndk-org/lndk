@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
 use lndk::lndkrpc::PayOfferRequest;
-use lndk::DEFAULT_SERVER_PORT;
+use lndk::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
@@ -37,6 +37,12 @@ struct Cli {
     /// A hex-encoded macaroon string to pass in directly to the cli.
     #[arg(long, global = true, required = false)]
     macaroon_hex: Option<String>,
+
+    #[arg(long, global = true, required = false, default_value = format!("http://{DEFAULT_SERVER_HOST}"))]
+    grpc_host: String,
+
+    #[arg(long, global = true, required = false, default_value = DEFAULT_SERVER_PORT.to_string())]
+    grpc_port: u16,
 
     #[command(subcommand)]
     command: Commands,
@@ -86,7 +92,9 @@ async fn main() -> Result<(), ()> {
             ref offer_string,
             amount,
         } => {
-            let mut client = OffersClient::connect(format!("http://[::1]:{DEFAULT_SERVER_PORT}"))
+            let grpc_host = args.grpc_host;
+            let grpc_port = args.grpc_port;
+            let mut client = OffersClient::connect(format!("{grpc_host}:{grpc_port}"))
                 .await
                 .map_err(|e| {
                     println!("ERROR: connecting to server {:?}.", e);
