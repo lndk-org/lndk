@@ -1,5 +1,5 @@
-#[allow(unused_imports)]
 mod internal {
+    #![allow(unused_imports)]
     #![allow(clippy::enum_variant_names)]
     #![allow(clippy::unnecessary_lazy_evaluations)]
     #![allow(clippy::useless_conversion)]
