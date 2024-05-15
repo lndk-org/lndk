@@ -10,7 +10,7 @@ mod internal {
 }
 
 use internal::*;
-use lndk::lnd::LndCfg;
+use lndk::lnd::{validate_lnd_creds, LndCfg};
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use log::LevelFilter;
 use std::str::FromStr;
@@ -26,7 +26,6 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
 
-    let lnd_args = LndCfg::new(config.address, config.cert, config.macaroon);
     let log_level = match config.log_level {
         Some(level_str) => match LevelFilter::from_str(&level_str) {
             Ok(level) => level,
@@ -42,6 +41,18 @@ async fn main() -> Result<(), ()> {
         },
         None => LevelFilter::Info,
     };
+
+    let creds = validate_lnd_creds(
+        config.cert_path,
+        config.cert_pem,
+        config.macaroon_path,
+        config.macaroon_hex,
+    )
+    .map_err(|e| {
+        println!("Error validating config: {e}.");
+    })?;
+    let lnd_args = LndCfg::new(config.address, creds);
+
     let (shutdown, listener) = triggered::trigger();
     // Create the channel which will tell us when the onion messenger has finished starting up.
     let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
