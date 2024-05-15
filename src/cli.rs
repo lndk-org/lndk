@@ -17,11 +17,11 @@ fn get_cert_path_default() -> OsString {
         .into_os_string()
 }
 
-fn get_macaroon_path_default() -> OsString {
+fn get_macaroon_path_default(network: &str) -> OsString {
     home::home_dir()
         .unwrap()
         .as_path()
-        .join(".lnd/data/chain/bitcoin/regtest/admin.macaroon")
+        .join(format!(".lnd/data/chain/bitcoin/{network}/admin.macaroon"))
         .into_os_string()
 }
 
@@ -43,8 +43,8 @@ struct Cli {
     #[arg(short, long, global = true, required = false, default_value = get_cert_path_default())]
     tls_cert: String,
 
-    #[arg(short, long, global = true, required = false, default_value = get_macaroon_path_default())]
-    macaroon: String,
+    #[arg(short, long, global = true, required = false)]
+    macaroon_path: Option<OsString>,
 
     #[arg(
         short,
@@ -116,6 +116,10 @@ async fn main() -> Result<(), ()> {
             };
 
             let destination = get_destination(&offer).await;
+            let macaroon_path = match args.macaroon_path {
+                Some(path) => path,
+                None => get_macaroon_path_default(&args.network),
+            };
             let network = string_to_network(&args.network).map_err(|e| {
                 println!("ERROR: invalid network string: {}", e);
             })?;
