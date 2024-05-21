@@ -20,10 +20,16 @@ use std::path::PathBuf;
 use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
+use tonic_lnd::verrpc::Version;
 use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
+const MIN_LND_MAJOR_VER: u32 = 0;
+const MIN_LND_MINOR_VER: u32 = 18;
+const MIN_LND_PATCH_VER: u32 = 0;
+const MIN_LND_PRE_RELEASE_VER: &str = "beta";
+const BUILD_TAGS_REQUIRED: [&str; 4] = ["peersrpc", "signrpc", "walletrpc", "dev"];
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
 pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
@@ -48,10 +54,55 @@ impl LndCfg {
     }
 }
 
+pub struct VersionRequirement {
+    major: u32,
+    minor: u32,
+    patch: u32,
+    pre_release: String,
+}
+
+pub struct BuildTagsRequirement {
+    tags: Vec<&'static str>,
+}
+
 /// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
 pub fn features_support_onion_messages(features: &HashMap<u32, tonic_lnd::lnrpc::Feature>) -> bool {
     features.contains_key(&ONION_MESSAGES_OPTIONAL)
         || features.contains_key(&ONION_MESSAGES_REQUIRED)
+}
+
+pub fn has_version(version: &Version, requirement: Option<VersionRequirement>) -> bool {
+    let requirement = requirement.unwrap_or(VersionRequirement {
+        major: MIN_LND_MAJOR_VER,
+        minor: MIN_LND_MINOR_VER,
+        patch: MIN_LND_PATCH_VER,
+        pre_release: MIN_LND_PRE_RELEASE_VER.to_string(),
+    });
+    if version.app_major != requirement.major {
+        return version.app_major > requirement.major;
+    }
+    if version.app_minor != requirement.minor {
+        return version.app_minor > requirement.minor;
+    }
+    if version.app_patch != requirement.patch {
+        return version.app_patch > requirement.patch;
+    }
+    if version.app_pre_release != requirement.pre_release {
+        return *version.app_pre_release > *requirement.pre_release;
+    }
+    true
+}
+
+pub fn has_build_tags(version: &Version, requirement: Option<BuildTagsRequirement>) -> bool {
+    let requirement = requirement.unwrap_or(BuildTagsRequirement {
+        tags: BUILD_TAGS_REQUIRED.to_vec(),
+    });
+    for tag in requirement.tags {
+        if !version.build_tags.contains(&tag.to_string()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// LndNodeSigner provides signing operations using LND's signer subserver.
@@ -232,4 +283,167 @@ pub trait InvoicePayer {
         &mut self,
         payment_hash: [u8; 32],
     ) -> Result<(), OfferError<Secp256k1Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic_lnd::verrpc::Version;
+
+    fn get_version_requirement() -> VersionRequirement {
+        VersionRequirement {
+            major: 1,
+            minor: 1,
+            patch: 1,
+            pre_release: "beta".to_string(),
+        }
+    }
+
+    fn get_build_tags_requirement() -> BuildTagsRequirement {
+        BuildTagsRequirement {
+            tags: vec!["peersrpc", "signrpc"],
+        }
+    }
+
+    #[test]
+    fn test_has_version_same_version() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 1,
+            app_patch: 1,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_major_is_greater() {
+        let version = Version {
+            app_major: 2,
+            app_minor: 1,
+            app_patch: 1,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_minor_is_greater() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 2,
+            app_patch: 1,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_patch_is_greater() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 1,
+            app_patch: 2,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_pre_release_is_greater() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 1,
+            app_patch: 1,
+            app_pre_release: "rc".to_string(),
+            ..Default::default()
+        };
+        assert!(has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_major_is_less() {
+        let version = Version {
+            app_major: 0,
+            app_minor: 1,
+            app_patch: 1,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(!has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_minor_is_less() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 0,
+            app_patch: 1,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(!has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_patch_is_less() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 1,
+            app_patch: 0,
+            app_pre_release: "beta".to_string(),
+            ..Default::default()
+        };
+        assert!(!has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_version_pre_release_is_less() {
+        let version = Version {
+            app_major: 1,
+            app_minor: 1,
+            app_patch: 1,
+            app_pre_release: "alpha".to_string(),
+            ..Default::default()
+        };
+        assert!(!has_version(&version, Some(get_version_requirement())))
+    }
+
+    #[test]
+    fn test_has_build_tags_same_tags() {
+        let version = Version {
+            build_tags: vec![String::from("peersrpc"), String::from("signrpc")],
+            ..Default::default()
+        };
+        assert!(has_build_tags(&version, Some(get_build_tags_requirement())))
+    }
+
+    #[test]
+    fn test_has_build_tags_missing_tags() {
+        let version = Version {
+            build_tags: vec![String::from("peersrpc")],
+            ..Default::default()
+        };
+        assert!(!has_build_tags(
+            &version,
+            Some(get_build_tags_requirement())
+        ))
+    }
+
+    #[test]
+    fn test_has_build_tags_unnecessary_tags_are_ok() {
+        let version = Version {
+            build_tags: vec![
+                String::from("peersrpc"),
+                String::from("signrpc"),
+                String::from("additional"),
+            ],
+            ..Default::default()
+        };
+        assert!(has_build_tags(&version, Some(get_build_tags_requirement())))
+    }
 }
