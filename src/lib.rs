@@ -6,7 +6,8 @@ pub mod onion_messenger;
 mod rate_limit;
 
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
+    features_support_onion_messages, get_lnd_client, has_build_tags, has_version,
+    string_to_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
@@ -36,6 +37,7 @@ use std::sync::{Mutex, Once};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::verrpc::VersionRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
@@ -137,6 +139,23 @@ impl LndkOnionMessenger {
 
         if !features_support_onion_messages(&info.features) {
             error!("LND must support onion messaging to run LNDK.");
+            return Err(());
+        }
+
+        let version = client
+            .versioner()
+            .get_version(VersionRequest {})
+            .await
+            .expect("failed to get version")
+            .into_inner();
+
+        if !has_version(&version, None) {
+            error!("The LND version is not compatible with LNDK.");
+            return Err(());
+        }
+
+        if !has_build_tags(&version, None) {
+            error!("LND build tags are not compatible with LNDK.");
             return Err(());
         }
 
