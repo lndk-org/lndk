@@ -580,7 +580,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 [[package]]
 name = "fedimint-tonic-lnd"
 version = "0.1.3"
-source = "git+https://github.com/orbitalturtle/tonic_lnd?branch=update-signer-and-lightning#60ad239b092336db02110dc85397004731b451c6"
+source = "git+https://github.com/orbitalturtle/tonic_lnd?rev=afb0187621bca604f606cacfe3cb2aedf5d2fc89#afb0187621bca604f606cacfe3cb2aedf5d2fc89"
 dependencies = [
  "hex",
  "http-body",

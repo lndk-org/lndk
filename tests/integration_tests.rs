@@ -10,6 +10,7 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::blinded_path::BlindedPath;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
+use lndk::lnd::validate_lnd_creds;
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{LifecycleSignals, PayOfferParams};
 use log::LevelFilter;
@@ -72,11 +73,14 @@ async fn test_lndk_forwards_onion_message() {
     // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that lndk
     // successfully helps lnd forward the onion message from ldk1 to ldk2.
     let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
-        lnd.address,
-        PathBuf::from_str(&lnd.cert_path).unwrap(),
-        PathBuf::from_str(&lnd.macaroon_path).unwrap(),
-    );
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
     let now_timestamp = Utc::now();
     let timestamp = now_timestamp.format("%d-%m-%Y-%H%M");
     let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
@@ -186,11 +190,14 @@ async fn test_lndk_send_invoice_request() {
 
     // Now we'll spin up lndk, which should forward the invoice request to ldk2.
     let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
-        lnd.address.clone(),
-        PathBuf::from_str(&lnd.cert_path).unwrap(),
-        PathBuf::from_str(&lnd.macaroon_path).unwrap(),
-    );
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
     let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
@@ -389,11 +396,14 @@ async fn test_lndk_pay_offer() {
         .expect("should create offer");
 
     let (shutdown, listener) = triggered::trigger();
-    let lnd_cfg = lndk::lnd::LndCfg::new(
-        lnd.address.clone(),
-        PathBuf::from_str(&lnd.cert_path).unwrap(),
-        PathBuf::from_str(&lnd.macaroon_path).unwrap(),
-    );
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
     let (tx, rx): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
 
     let signals = LifecycleSignals {

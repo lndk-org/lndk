@@ -133,7 +133,7 @@ impl LndkOnionMessenger {
         let network = network.unwrap();
 
         let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-        info!("Starting lndk for node: {pubkey}.");
+        info!("Starting lndk on {network} network for node: {pubkey}.");
 
         if !features_support_onion_messages(&info.features) {
             error!("LND must support onion messaging to run LNDK.");

@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::fmt::Display;
 use std::path::PathBuf;
 use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
 use tonic_lnd::signrpc::KeyLocator;
@@ -27,25 +28,133 @@ pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
 pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
-    block_on(tonic_lnd::connect(cfg.address, cfg.cert, cfg.macaroon))
+    match cfg.creds {
+        Creds::Path { macaroon, cert } => block_on(tonic_lnd::connect(cfg.address, cert, macaroon)),
+        Creds::String { macaroon, cert } => {
+            block_on(tonic_lnd::connect_from_memory(cfg.address, cert, macaroon))
+        }
+    }
 }
 
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
 #[derive(Clone)]
 pub struct LndCfg {
     address: String,
-    cert: PathBuf,
-    macaroon: PathBuf,
+    creds: Creds,
 }
 
 impl LndCfg {
-    pub fn new(address: String, cert: PathBuf, macaroon: PathBuf) -> LndCfg {
-        LndCfg {
-            address,
-            cert,
-            macaroon,
+    pub fn new(address: String, creds: Creds) -> LndCfg {
+        Self { address, creds }
+    }
+}
+
+pub fn validate_lnd_creds(
+    cert_path: Option<PathBuf>,
+    cert_pem: Option<String>,
+    macaroon_path: Option<PathBuf>,
+    macaroon_hex: Option<String>,
+) -> Result<Creds, ValidationError> {
+    if cert_path.is_none() && cert_pem.is_none() {
+        return Err(ValidationError::CertRequired);
+    }
+    if cert_path.is_some() && cert_pem.is_some() {
+        return Err(ValidationError::CertOnlyOne);
+    }
+    if macaroon_path.is_none() && macaroon_hex.is_none() {
+        return Err(ValidationError::MacaroonRequired);
+    }
+    if macaroon_path.is_some() && macaroon_hex.is_some() {
+        return Err(ValidationError::MacaroonOnlyOne);
+    }
+
+    let creds = match cert_path {
+        Some(cert_path) => {
+            let macaroon_path = match macaroon_path {
+                Some(path) => path,
+                None => return Err(ValidationError::CredMismatch),
+            };
+
+            Creds::Path {
+                macaroon: macaroon_path,
+                cert: cert_path,
+            }
+        }
+        // If the cert_path wasn't provided, the credentials must have been loaded directly
+        // instead.
+        None => {
+            let macaroon_hex = match macaroon_hex {
+                Some(path) => path,
+                None => return Err(ValidationError::CredMismatch),
+            };
+
+            Creds::String {
+                cert: cert_pem.unwrap(),
+                macaroon: macaroon_hex,
+            }
+        }
+    };
+
+    Ok(creds)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationError {
+    CertOnlyOne,
+    MacaroonOnlyOne,
+    CertRequired,
+    MacaroonRequired,
+    CredMismatch,
+}
+
+impl Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::CertOnlyOne => {
+                write!(f, "Only one of `cert_path` or `cert_pem` should be set.")
+            }
+            ValidationError::MacaroonOnlyOne => {
+                write!(
+                    f,
+                    "Only one of `macaroon_path` or `macaroon_hex` should be set."
+                )
+            }
+            ValidationError::CertRequired => {
+                write!(
+                    f,
+                    "Cert config option is required. Please set either `cert_path` or `cert_pem`."
+                )
+            }
+            ValidationError::MacaroonRequired => {
+                write!(
+                    f,
+                    "Macaroon config option is required. Please set either `macaroon_path`
+                    or `macaroon_hex`."
+                )
+            }
+            ValidationError::CredMismatch => {
+                write!(
+                    f,
+                    "There are two options for loading credentials: either both `cert_path` and `macaroon_path`
+                    must be set or both `cert_pem` and `macaroon_hex` must be set. It's not possible to
+                    mismatch them."
+                )
+            }
         }
     }
+}
+
+impl Error for ValidationError {}
+
+#[derive(Clone, Debug)]
+pub enum Creds {
+    // Absolute paths to the macaroon and certificate.
+    Path { macaroon: PathBuf, cert: PathBuf },
+
+    // If the credentials are passed into lndk directly:
+    // The certificate is a pem-encoded string.
+    // The macaroon is a hex-encoded string.
+    String { macaroon: String, cert: String },
 }
 
 /// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
@@ -232,4 +341,103 @@ pub trait InvoicePayer {
         &mut self,
         payment_hash: [u8; 32],
     ) -> Result<(), OfferError<Secp256k1Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_tls_cert_string() -> String {
+        "-----BEGIN CERTIFICATE-----
+        MIICPjCCAeWgAwIBAgIRAOVUb/egQpSY8dEepkODgfMwCgYIKoZIzj0EAwIwMTEf
+        MB0GA1UEChMWbG5kIGF1dG9nZW5lcmF0ZWQgY2VydDEOMAwGA1UEAxMFYWxpY2Uw
+        HhcNMjQwNTIwMDQzNjMxWhcNMjUwNzE1MDQzNjMxWjAxMR8wHQYDVQQKExZsbmQg
+        YXV0b2dlbmVyYXRlZCBjZXJ0MQ4wDAYDVQQDEwVhbGljZTBZMBMGByqGSM49AgEG
+        CCqGSM49AwEHA0IABBO9DVcCiVsQrD/E/jVcsYIM22pgm2nE9ZSRqBKqo5SiNfla
+        ghZS5TUKFwZx1++PcNOscRvIoWHCgYTfVB1Kcomjgd0wgdowDgYDVR0PAQH/BAQD
+        AgKkMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0O
+        BBYEFE+5VBJNicj149sOPIUB6nlExxoUMIGCBgNVHREEezB5ggVhbGljZYIJbG9j
+        YWxob3N0ggVhbGljZYIPcG9sYXItbjE4LWFsaWNlghRob3N0LmRvY2tlci5pbnRl
+        cm5hbIIEdW5peIIKdW5peHBhY2tldIIHYnVmY29ubocEfwAAAYcQAAAAAAAAAAAA
+        AAAAAAAAAYcErBIAAjAKBggqhkjOPQQDAgNHADBEAiB3g1IM7JN8naboohBpY38k
+        R1QvG3K8RVfshyPlTqIBagIgY+3ZNX/bffOtMQxhx5+E8csKI6LZ3e6UeEEauiZE
+        aUI=
+        -----END CERTIFICATE-----"
+            .to_string()
+    }
+
+    fn get_macaroon_string() -> String {
+        "0201036c6e6402f801030a103b7a55a2bb5810a264429f9ecf7dbdd51201301a160a0761646472657373120472656164120577726974651a130a04696e666f120472656164120577726974651a170a08696e766f69636573120472656164120577726974651a210a086d616361726f6f6e120867656e6572617465120472656164120577726974651a160a076d657373616765120472656164120577726974651a170a086f6666636861696e120472656164120577726974651a160a076f6e636861696e120472656164120577726974651a140a057065657273120472656164120577726974651a180a067369676e6572120867656e6572617465120472656164000006203ad31d52e046455bae5c3343fa4753dc1659065e8fc4e8f56aec4dbd309d4463".to_string()
+    }
+
+    #[tokio::test]
+    async fn test_validate_lnd_creds_path_option() {
+        let cert_path = Some(PathBuf::new());
+        let macaroon_path = Some(PathBuf::new());
+
+        assert!(validate_lnd_creds(cert_path, None, macaroon_path, None).is_ok())
+    }
+
+    #[tokio::test]
+    async fn test_validate_lnd_creds_directly_option() {
+        let cert_pem = Some(get_tls_cert_string());
+        let macaroon_hex = Some(get_macaroon_string());
+
+        assert!(validate_lnd_creds(None, cert_pem, None, macaroon_hex).is_ok())
+    }
+
+    // Test that when the provided credentials are mismatched, we get the correct error.
+    #[tokio::test]
+    async fn test_validate_lnd_creds_mismatch() {
+        let cert_pem = Some(get_tls_cert_string());
+        let macaroon_path = Some(PathBuf::new());
+
+        assert_eq!(
+            validate_lnd_creds(None, cert_pem, macaroon_path, None).unwrap_err(),
+            ValidationError::CredMismatch
+        );
+
+        let cert_path = Some(PathBuf::new());
+        let macaroon_hex = Some(get_macaroon_string());
+
+        assert_eq!(
+            validate_lnd_creds(cert_path, None, None, macaroon_hex).unwrap_err(),
+            ValidationError::CredMismatch
+        )
+    }
+
+    // Test that when none or too few credentials are provided, we get the correct error.
+    #[tokio::test]
+    async fn test_validate_lnd_creds_required_error() {
+        let cert_pem = Some(get_tls_cert_string());
+        assert_eq!(
+            validate_lnd_creds(None, cert_pem, None, None).unwrap_err(),
+            ValidationError::MacaroonRequired
+        );
+
+        let macaroon_hex = Some(get_macaroon_string());
+        assert_eq!(
+            validate_lnd_creds(None, None, None, macaroon_hex).unwrap_err(),
+            ValidationError::CertRequired
+        )
+    }
+
+    #[tokio::test]
+    async fn test_validate_lnd_creds_only_one() {
+        let cert_path = Some(PathBuf::new());
+        let cert_pem = Some(get_tls_cert_string());
+        let macaroon_path = Some(PathBuf::new());
+        let macaroon_hex = Some(get_macaroon_string());
+
+        assert_eq!(
+            validate_lnd_creds(cert_path.clone(), cert_pem, macaroon_path.clone(), None)
+                .unwrap_err(),
+            ValidationError::CertOnlyOne
+        );
+
+        assert_eq!(
+            validate_lnd_creds(cert_path, None, macaroon_path, macaroon_hex).unwrap_err(),
+            ValidationError::MacaroonOnlyOne
+        )
+    }
 }

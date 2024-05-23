@@ -1,28 +1,26 @@
 use clap::{Parser, Subcommand};
-use lndk::lnd::{get_lnd_client, string_to_network, LndCfg};
+use lndk::lnd::{get_lnd_client, string_to_network, validate_lnd_creds, LndCfg};
 use lndk::lndk_offers::{decode, get_destination};
 use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler, PayOfferParams};
 use log::LevelFilter;
-use std::ffi::OsString;
+use std::path::PathBuf;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-fn get_cert_path_default() -> OsString {
+fn get_cert_path_default() -> PathBuf {
     home::home_dir()
         .unwrap()
         .as_path()
         .join(".lnd")
         .join("tls.cert")
-        .into_os_string()
 }
 
-fn get_macaroon_path_default() -> OsString {
+fn get_macaroon_path_default(network: &str) -> PathBuf {
     home::home_dir()
         .unwrap()
         .as_path()
-        .join(".lnd/data/chain/bitcoin/regtest/admin.macaroon")
-        .into_os_string()
+        .join(format!(".lnd/data/chain/bitcoin/{network}/admin.macaroon"))
 }
 
 /// A cli for interacting with lndk.
@@ -40,11 +38,21 @@ struct Cli {
     )]
     network: String,
 
-    #[arg(short, long, global = true, required = false, default_value = get_cert_path_default())]
-    tls_cert: String,
+    #[arg(short, long, global = true, required = false)]
+    cert_path: Option<PathBuf>,
 
-    #[arg(short, long, global = true, required = false, default_value = get_macaroon_path_default())]
-    macaroon: String,
+    #[arg(short, long, global = true, required = false)]
+    macaroon_path: Option<PathBuf>,
+
+    /// A pem-encoded tls certificate to pass in directly to the cli. If cert_pem is set,
+    /// macaroon_hex must also be set.
+    #[arg(long, global = true, required = false)]
+    cert_pem: Option<String>,
+
+    /// A hex-encoded macaroon string to pass in directly to the cli. If macaroon_hex is set,
+    /// cert_pem also must also be set.
+    #[arg(long, global = true, required = false)]
+    macaroon_hex: Option<String>,
 
     #[arg(
         short,
@@ -116,10 +124,41 @@ async fn main() -> Result<(), ()> {
             };
 
             let destination = get_destination(&offer).await;
+            // If macaroon_path, macaroon_hex, and cert_pem are not set, use the default macaroon
+            // path.
+            let macaroon_path = match args.macaroon_path {
+                Some(path) => Some(path),
+                None => match args.macaroon_hex {
+                    Some(_) => None,
+                    None => match args.cert_pem {
+                        Some(_) => None,
+                        None => Some(get_macaroon_path_default(&args.network)),
+                    },
+                },
+            };
+            // If cert_path, cert_pem, and macaroon_hex are not set, use the default cert path.
+            let cert_path = match args.cert_path {
+                Some(path) => Some(path),
+                None => match args.cert_pem {
+                    Some(_) => None,
+                    None => match args.macaroon_hex {
+                        Some(_) => None,
+                        None => Some(get_cert_path_default()),
+                    },
+                },
+            };
+
             let network = string_to_network(&args.network).map_err(|e| {
                 println!("ERROR: invalid network string: {}", e);
             })?;
-            let lnd_cfg = LndCfg::new(args.address, args.tls_cert.into(), args.macaroon.into());
+
+            let creds =
+                validate_lnd_creds(cert_path, args.cert_pem, macaroon_path, args.macaroon_hex)
+                    .map_err(|e| {
+                        println!("ERROR with user-provided credentials: {}", e);
+                    })?;
+            let lnd_cfg = LndCfg::new(args.address, creds);
+
             let client = get_lnd_client(lnd_cfg.clone()).map_err(|e| {
                 println!("ERROR: failed to connect to lnd: {}", e);
             })?;
