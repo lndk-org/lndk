@@ -56,6 +56,9 @@ pub const DEFAULT_SERVER_PORT: u16 = 7000;
 pub const LDK_LOGGER_NAME: &str = "ldk";
 pub const DEFAULT_DATA_DIR: &str = ".lndk";
 
+pub const TLS_CERT_FILENAME: &str = "tls-cert.pem";
+pub const TLS_KEY_FILENAME: &str = "tls-key.pem";
+
 #[allow(clippy::result_unit_err)]
 pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
     let log_level = match log_level {
