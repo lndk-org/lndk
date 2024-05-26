@@ -2,11 +2,12 @@ use clap::{Parser, Subcommand};
 use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
 use lndk::lndkrpc::PayOfferRequest;
-use lndk::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use lndk::{DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, TLS_CERT_FILENAME};
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::PathBuf;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
 
 fn get_macaroon_path_default(network: &str) -> PathBuf {
@@ -38,7 +39,7 @@ struct Cli {
     #[arg(long, global = true, required = false)]
     macaroon_hex: Option<String>,
 
-    #[arg(long, global = true, required = false, default_value = format!("http://{DEFAULT_SERVER_HOST}"))]
+    #[arg(long, global = true, required = false, default_value = format!("https://{DEFAULT_SERVER_HOST}"))]
     grpc_host: String,
 
     #[arg(long, global = true, required = false, default_value = DEFAULT_SERVER_PORT.to_string())]
@@ -92,13 +93,26 @@ async fn main() -> Result<(), ()> {
             ref offer_string,
             amount,
         } => {
+            let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
+            let pem = std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
+                .map_err(|e| println!("ERROR reading cert: {e:?}"))?;
+            let cert = Certificate::from_pem(pem);
+
+            let tls = ClientTlsConfig::new()
+                .ca_certificate(cert)
+                .domain_name("localhost");
+
             let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
-            let mut client = OffersClient::connect(format!("{grpc_host}:{grpc_port}"))
+            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}")) //
+                .map_err(|e| println!("ERROR creating endpoint: {e:?}"))?
+                .tls_config(tls)
+                .map_err(|e| println!("ERROR tls config: {e:?}"))?
+                .connect()
                 .await
-                .map_err(|e| {
-                    println!("ERROR: connecting to server {:?}.", e);
-                })?;
+                .map_err(|e| println!("ERROR connecting: {e:?}"))?;
+
+            let mut client = OffersClient::new(channel);
 
             let offer = match decode(offer_string.to_owned()) {
                 Ok(offer) => offer,
