@@ -37,7 +37,7 @@ doc = "The hex encoded macaroon to pass directly into LNDK"
 [[param]]
 name = "log_dir"
 type = "String"
-doc = "The path to the lndk log file"
+doc = "The path to the lndk log file. By default this is stored in ~/.lndk"
 
 [[param]]
 name = "log_level"
