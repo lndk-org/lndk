@@ -39,6 +39,12 @@ struct Cli {
     #[arg(long, global = true, required = false)]
     macaroon_hex: Option<String>,
 
+    /// This option is for passing a pem-encoded TLS certificate string to establish a connection
+    /// with the LNDK server. If this isn't set, the cli will look for the TLS file in the default
+    /// location (~.lndk).
+    #[arg(long, global = true, required = false)]
+    cert_pem: Option<String>,
+
     #[arg(long, global = true, required = false, default_value = format!("https://{DEFAULT_SERVER_HOST}"))]
     grpc_host: String,
 
@@ -94,10 +100,16 @@ async fn main() -> Result<(), ()> {
             amount,
         } => {
             let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
-            let pem = std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
-                .map_err(|e| println!("ERROR reading cert: {e:?}"))?;
+            let pem = match args.cert_pem {
+                Some(pem) => pem,
+                None => {
+                    // If no cert pem string is provided, we'll look for the tls certificate in the
+                    // default location.
+                    std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
+                        .map_err(|e| println!("ERROR reading cert: {e:?}"))?
+                }
+            };
             let cert = Certificate::from_pem(pem);
-
             let tls = ClientTlsConfig::new()
                 .ca_certificate(cert)
                 .domain_name("localhost");
