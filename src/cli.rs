@@ -1,18 +1,13 @@
 use clap::{Parser, Subcommand};
-use lndk::lnd::{get_lnd_client, string_to_network, validate_lnd_creds, LndCfg};
-use lndk::lndk_offers::{decode, get_destination};
-use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler, PayOfferParams};
+use lndk::lndk_offers::decode;
+use lndk::lndkrpc::offers_client::OffersClient;
+use lndk::lndkrpc::PayOfferRequest;
+use lndk::DEFAULT_SERVER_PORT;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::Read;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::select;
-
-fn get_cert_path_default() -> PathBuf {
-    home::home_dir()
-        .unwrap()
-        .as_path()
-        .join(".lnd")
-        .join("tls.cert")
-}
+use tonic::Request;
 
 fn get_macaroon_path_default(network: &str) -> PathBuf {
     home::home_dir()
@@ -37,29 +32,11 @@ struct Cli {
     network: String,
 
     #[arg(short, long, global = true, required = false)]
-    cert_path: Option<PathBuf>,
-
-    #[arg(short, long, global = true, required = false)]
     macaroon_path: Option<PathBuf>,
 
-    /// A pem-encoded tls certificate to pass in directly to the cli. If cert_pem is set,
-    /// macaroon_hex must also be set.
-    #[arg(long, global = true, required = false)]
-    cert_pem: Option<String>,
-
-    /// A hex-encoded macaroon string to pass in directly to the cli. If macaroon_hex is set,
-    /// cert_pem also must also be set.
+    /// A hex-encoded macaroon string to pass in directly to the cli.
     #[arg(long, global = true, required = false)]
     macaroon_hex: Option<String>,
-
-    #[arg(
-        short,
-        long,
-        global = true,
-        required = false,
-        default_value = "https://localhost:10009"
-    )]
-    address: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -106,10 +83,16 @@ async fn main() -> Result<(), ()> {
             }
         }
         Commands::PayOffer {
-            offer_string,
+            ref offer_string,
             amount,
         } => {
-            let offer = match decode(offer_string) {
+            let mut client = OffersClient::connect(format!("http://[::1]:{DEFAULT_SERVER_PORT}"))
+                .await
+                .map_err(|e| {
+                    println!("ERROR: connecting to server {:?}.", e);
+                })?;
+
+            let offer = match decode(offer_string.to_owned()) {
                 Ok(offer) => offer,
                 Err(e) => {
                     println!(
@@ -121,81 +104,57 @@ async fn main() -> Result<(), ()> {
                 }
             };
 
-            let destination = get_destination(&offer).await;
-            // If macaroon_path, macaroon_hex, and cert_pem are not set, use the default macaroon
-            // path.
-            let macaroon_path = match args.macaroon_path {
-                Some(path) => Some(path),
-                None => match args.macaroon_hex {
-                    Some(_) => None,
-                    None => match args.cert_pem {
-                        Some(_) => None,
-                        None => Some(get_macaroon_path_default(&args.network)),
-                    },
-                },
-            };
-            // If cert_path, cert_pem, and macaroon_hex are not set, use the default cert path.
-            let cert_path = match args.cert_path {
-                Some(path) => Some(path),
-                None => match args.cert_pem {
-                    Some(_) => None,
-                    None => match args.macaroon_hex {
-                        Some(_) => None,
-                        None => Some(get_cert_path_default()),
-                    },
-                },
-            };
-
-            let network = string_to_network(&args.network).map_err(|e| {
-                println!("ERROR: invalid network string: {}", e);
-            })?;
-
-            let creds =
-                validate_lnd_creds(cert_path, args.cert_pem, macaroon_path, args.macaroon_hex)
-                    .map_err(|e| {
-                        println!("ERROR with user-provided credentials: {}", e);
-                    })?;
-            let lnd_cfg = LndCfg::new(args.address, creds);
-
-            let client = get_lnd_client(lnd_cfg.clone()).map_err(|e| {
-                println!("ERROR: failed to connect to lnd: {}", e);
-            })?;
-
-            let (shutdown, listener) = triggered::trigger();
-            let signals = LifecycleSignals {
-                shutdown: shutdown.clone(),
-                listener,
-            };
-            let lndk_cfg = Cfg {
-                lnd: lnd_cfg,
-                signals,
-            };
-
-            let handler = Arc::new(OfferHandler::new());
-            let messenger = LndkOnionMessenger::new();
-            let pay_cfg = PayOfferParams {
-                offer: offer.clone(),
-                amount,
-                network,
-                client,
-                destination,
-                reply_path: None,
-            };
-            select! {
-                _ = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
-                    println!("ERROR: lndk stopped running before pay offer finished.");
-                },
-                res = handler.pay_offer(pay_cfg) => {
-                    match res {
-                        Ok(_) => println!("Successfully paid for offer!"),
-                        Err(err) => println!("Error paying for offer: {err:?}"),
-                    }
-
-                    shutdown.trigger();
-                }
+            // Make sure both macaroon options are not set.
+            if args.macaroon_path.is_some() && args.macaroon_hex.is_some() {
+                println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
+                return Err(());
             }
+
+            // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are set, use the
+            // default macaroon path.
+            let macaroon = match args.macaroon_path {
+                Some(path) => read_macaroon_from_file(path)
+                    .map_err(|e| println!("ERROR reading macaroon from file {e:?}"))?,
+                None => match args.macaroon_hex {
+                    Some(macaroon) => macaroon,
+                    None => {
+                        let path = get_macaroon_path_default(&args.network);
+                        read_macaroon_from_file(path)
+                            .map_err(|e| println!("ERROR reading macaroon from file {e:?}"))?
+                    }
+                },
+            };
+
+            let mut request = Request::new(PayOfferRequest {
+                offer: offer.to_string(),
+                amount,
+            });
+            add_metadata(&mut request, macaroon).map_err(|_| ())?;
+
+            match client.pay_offer(request).await {
+                Ok(_) => println!("Successfully paid for offer!"),
+                Err(err) => println!("Error paying for offer: {err:?}"),
+            };
 
             Ok(())
         }
     }
+}
+
+fn add_metadata(request: &mut Request<PayOfferRequest>, macaroon: String) -> Result<(), ()> {
+    let macaroon = macaroon.parse().map_err(|e| {
+        println!("Error parsing provided macaroon string into tonic metadata {e:?}")
+    })?;
+    request.metadata_mut().insert("macaroon", macaroon);
+
+    Ok(())
+}
+
+fn read_macaroon_from_file(path: PathBuf) -> Result<String, std::io::Error> {
+    let file = File::open(path)?;
+    let mut mac_contents = BufReader::new(file);
+    let mut buffer = Vec::new();
+    mac_contents.read_to_end(&mut buffer)?;
+
+    Ok(hex::encode(buffer))
 }
