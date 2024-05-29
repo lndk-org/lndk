@@ -10,9 +10,18 @@ mod internal {
 }
 
 use internal::*;
-use lndk::lnd::{validate_lnd_creds, LndCfg};
-use lndk::{setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
+use lndk::server::LNDKServer;
+use lndk::{
+    lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
+    DEFAULT_SERVER_PORT,
+};
+use lndkrpc::offers_server::OffersServer;
+use log::{error, info};
 use std::sync::Arc;
+use tokio::select;
+use tonic::transport::Server;
+use tonic_lnd::lnrpc::GetInfoRequest;
 
 #[macro_use]
 extern crate configure_me;
@@ -32,7 +41,8 @@ async fn main() -> Result<(), ()> {
     .map_err(|e| {
         println!("Error validating config: {e}.");
     })?;
-    let lnd_args = LndCfg::new(config.address, creds);
+    let address = config.address.clone();
+    let lnd_args = LndCfg::new(config.address, creds.clone());
 
     let (shutdown, listener) = triggered::trigger();
     let signals = LifecycleSignals { shutdown, listener };
@@ -42,8 +52,47 @@ async fn main() -> Result<(), ()> {
     };
 
     let handler = Arc::new(OfferHandler::new());
+    let messenger = LndkOnionMessenger::new();
     setup_logger(config.log_level, config.log_dir)?;
 
-    let messenger = LndkOnionMessenger::new();
-    messenger.run(args, Arc::clone(&handler)).await
+    let mut client = get_lnd_client(args.lnd.clone()).expect("failed to connect to lnd");
+    let info = client
+        .lightning()
+        .get_info(GetInfoRequest {})
+        .await
+        .expect("failed to get info")
+        .into_inner();
+
+    let addr = format!("[::1]:{DEFAULT_SERVER_PORT}")
+        .parse()
+        .map_err(|e| {
+            error!("Error parsing API address: {e}");
+        })?;
+
+    let tls_str = creds.get_certificate_string()?;
+    let server = LNDKServer::new(
+        Arc::clone(&handler),
+        &info.identity_pubkey,
+        tls_str,
+        address,
+    )
+    .await;
+
+    let server_fut = Server::builder()
+        .add_service(OffersServer::new(server))
+        .serve(addr);
+
+    select! {
+       _ = messenger.run(args, Arc::clone(&handler)) => {
+           info!("Onion messenger completed");
+       },
+       result2 = server_fut => {
+            match result2 {
+                Ok(_) => info!("API completed"),
+                Err(e) => error!("Error running API: {}", e),
+            };
+       },
+    }
+
+    Ok(())
 }

@@ -4,6 +4,11 @@ pub mod lnd;
 pub mod lndk_offers;
 pub mod onion_messenger;
 mod rate_limit;
+pub mod server;
+
+pub mod lndkrpc {
+    tonic::include_proto!("lndkrpc");
+}
 
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
@@ -45,6 +50,8 @@ pub fn init_logger(config: LogConfig) {
         log4rs::init_config(config).expect("failed to initialize logger");
     });
 }
+
+pub const DEFAULT_SERVER_PORT: u16 = 7000;
 
 #[allow(clippy::result_unit_err)]
 pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
@@ -128,7 +135,6 @@ impl LndkOnionMessenger {
         offer_handler: Arc<impl OffersMessageHandler>,
     ) -> Result<(), ()> {
         let mut client = get_lnd_client(args.lnd).expect("failed to connect");
-
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})

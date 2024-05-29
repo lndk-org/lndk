@@ -53,7 +53,7 @@ async fn check_for_message(ldk: LdkNode) -> LdkNode {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_lndk_forwards_onion_message() {
     let test_name = "lndk_forwards_onion_message";
-    let (_bitcoind, mut lnd, ldk1, ldk2, _lndk_dir) =
+    let (_bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
     // Here we'll produce a little path of two channels. Both ldk nodes are connected to lnd like so:
@@ -88,6 +88,15 @@ async fn test_lndk_forwards_onion_message() {
         lnd: lnd_cfg,
         signals,
     };
+
+    let log_dir = Some(
+        lndk_dir
+            .join(format!("lndk-logs.txt"))
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    setup_logger(None, log_dir).unwrap();
 
     let handler = Arc::new(lndk::OfferHandler::new());
     let messenger = lndk::LndkOnionMessenger::new();
@@ -270,6 +279,15 @@ async fn test_lndk_send_invoice_request() {
         lnd: lnd_cfg,
         signals,
     };
+
+    let log_dir = Some(
+        lndk_dir
+            .join(format!("lndk-logs.txt"))
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    setup_logger(None, log_dir).unwrap();
 
     let handler = Arc::new(lndk::OfferHandler::new());
     let messenger = lndk::LndkOnionMessenger::new();

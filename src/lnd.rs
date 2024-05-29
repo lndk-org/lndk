@@ -16,9 +16,9 @@ use log::error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
 use std::fmt::Display;
 use std::path::PathBuf;
+use std::{fmt, fs};
 use tonic_lnd::lnrpc::{
     GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse, Payment, QueryRoutesResponse,
     Route,
@@ -43,8 +43,8 @@ pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
 #[derive(Clone)]
 pub struct LndCfg {
-    address: String,
-    creds: Creds,
+    pub address: String,
+    pub creds: Creds,
 }
 
 impl LndCfg {
@@ -159,6 +159,18 @@ pub enum Creds {
     // The certificate is a pem-encoded string.
     // The macaroon is a hex-encoded string.
     String { macaroon: String, cert: String },
+}
+
+impl Creds {
+    #[allow(clippy::result_unit_err)]
+    pub fn get_certificate_string(&self) -> Result<String, ()> {
+        let cert = match self {
+            Creds::Path { macaroon: _, cert } => fs::read_to_string(cert)
+                .map_err(|e| error!("Error reading tls certificate from file {e:?}"))?,
+            Creds::String { macaroon: _, cert } => cert.clone(),
+        };
+        Ok(cert)
+    }
 }
 
 /// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
