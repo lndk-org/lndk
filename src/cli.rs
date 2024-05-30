@@ -118,8 +118,8 @@ async fn main() -> Result<(), ()> {
                 return Err(());
             }
 
-            // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are set, use the
-            // default macaroon path.
+            // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
+            // set, use the default macaroon path.
             let macaroon = match args.macaroon_path {
                 Some(path) => read_macaroon_from_file(path)
                     .map_err(|e| println!("ERROR reading macaroon from file {e:?}"))?,

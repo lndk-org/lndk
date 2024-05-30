@@ -28,19 +28,20 @@ pub(crate) trait RateLimiter {
     fn query_peer(&mut self, peer_key: PublicKey) -> bool;
 }
 
-/// TokenLimiter keeps track of our set of peers, and provides token bucket rate limiting on a per-peer basis.
-/// Rate limiting is expressed using two parameters:
-/// - call_frequency: a period of time during which peers are limited to a number of "hits" (ie, the operation that is
-///   being rate limited).
+/// TokenLimiter keeps track of our set of peers, and provides token bucket rate limiting on a
+/// per-peer basis. Rate limiting is expressed using two parameters:
+/// - call_frequency: a period of time during which peers are limited to a number of "hits" (ie, the
+///   operation that is being rate limited).
 /// - call_count: the number of a calls allowed during the period of time.
 ///
-/// Tracking and updating of call counts is lazily implemented. Each time we get an incoming hit, TokenLimiter will
-/// check whether it's reached a new "period" and update each peer's allocation accordingly.
+/// Tracking and updating of call counts is lazily implemented. Each time we get an incoming hit,
+/// TokenLimiter will check whether it's reached a new "period" and update each peer's allocation
+/// accordingly.
 ///
-/// When a peer disconnects it is still tracked by the TokenLimiter until the next period elapses. This prevents peers
-/// from disconnecting and reconnecting to cheat our rate limiting. Once a single period has elapsed after disconnect,
-/// we can safely remove the peer because there's nothing left to game (they would have gotten a fresh allocation
-/// anyway).
+/// When a peer disconnects it is still tracked by the TokenLimiter until the next period elapses.
+/// This prevents peers from disconnecting and reconnecting to cheat our rate limiting. Once a
+/// single period has elapsed after disconnect, we can safely remove the peer because there's
+/// nothing left to game (they would have gotten a fresh allocation anyway).
 pub(crate) struct TokenLimiter<C: Clock> {
     peer_map: HashMap<PublicKey, PeerRecord>,
     clock: C,
@@ -50,8 +51,8 @@ pub(crate) struct TokenLimiter<C: Clock> {
 }
 
 impl<C: Clock> TokenLimiter<C> {
-    /// new creates a TokenLimiter initialized with the clock's current time and loads the set of peers provided with
-    /// each allocated call_count hits for the current period.
+    /// new creates a TokenLimiter initialized with the clock's current time and loads the set of
+    /// peers provided with each allocated call_count hits for the current period.
     pub(crate) fn new(
         peers: impl Iterator<Item = PublicKey>,
         call_count: u8,
@@ -73,16 +74,17 @@ impl<C: Clock> TokenLimiter<C> {
         }
     }
 
-    /// needs_update returns a boolean indicating whether TokenLimiter's call count per peer needs updating. This will
-    /// be true if the time since last_update is >= call_frequency, as this indicates that our call frequency has
-    /// elapsed, and it's time to fill up each peer's "bucket" again.
+    /// needs_update returns a boolean indicating whether TokenLimiter's call count per peer needs
+    /// updating. This will be true if the time since last_update is >= call_frequency, as this
+    /// indicates that our call frequency has elapsed, and it's time to fill up each peer's
+    /// "bucket" again.
     fn needs_update(&self) -> bool {
         self.clock.now().duration_since(self.last_update) >= self.call_frequency
     }
 
-    /// update performs an update on the call allocation of the current set of peers, refreshing each online peer's
-    /// allowed quota of calls to the TokenLimiter's call_count and refreshing the last_update time to reflect the
-    /// new rate limiting period.
+    /// update performs an update on the call allocation of the current set of peers, refreshing
+    /// each online peer's allowed quota of calls to the TokenLimiter's call_count and
+    /// refreshing the last_update time to reflect the new rate limiting period.
     fn update(&mut self) {
         // We can safely delete offline peers because they would have their call count updated at
         // this point anyway. We want to delete so that we don't allow an infinitely growing queue.
@@ -96,9 +98,9 @@ impl<C: Clock> TokenLimiter<C> {
         self.last_update = self.clock.now();
     }
 
-    /// hit returns a boolean indicating whether a peer should be permitted another call of the rate limited operation.
-    /// It will return true if the peer is known and has remaining calls allowed (and decrement their call count), and
-    /// false otherwise.
+    /// hit returns a boolean indicating whether a peer should be permitted another call of the rate
+    /// limited operation. It will return true if the peer is known and has remaining calls
+    /// allowed (and decrement their call count), and false otherwise.
     fn hit(&mut self, peer_key: PublicKey) -> bool {
         match self.peer_map.get_mut(&peer_key) {
             Some(v) => {
@@ -115,9 +117,9 @@ impl<C: Clock> TokenLimiter<C> {
 }
 
 impl<C: Clock> RateLimiter for TokenLimiter<C> {
-    /// peer_connected updates the TokenLimiter's internal peer_map to indicate that a peer is online. If it is already
-    /// present in the map, its online state is updated. New peers are added to the map with a fresh allocation of
-    /// calls.
+    /// peer_connected updates the TokenLimiter's internal peer_map to indicate that a peer is
+    /// online. If it is already present in the map, its online state is updated. New peers are
+    /// added to the map with a fresh allocation of calls.
     fn peer_connected(&mut self, peer_key: PublicKey) {
         self.peer_map
             .entry(peer_key)
@@ -125,8 +127,8 @@ impl<C: Clock> RateLimiter for TokenLimiter<C> {
             .or_insert(PeerRecord::new(true, self.call_count));
     }
 
-    /// peer_disconnected updates the TokenLimiter's internal state to reflect that a peer is offline. If the peer
-    /// is not tracked in peer_map then this operation is a no-op.
+    /// peer_disconnected updates the TokenLimiter's internal state to reflect that a peer is
+    /// offline. If the peer is not tracked in peer_map then this operation is a no-op.
     fn peer_disconnected(&mut self, peer_key: PublicKey) {
         self.peer_map
             .entry(peer_key)
@@ -143,8 +145,9 @@ impl<C: Clock> RateLimiter for TokenLimiter<C> {
             .collect::<Vec<PublicKey>>()
     }
 
-    /// query_peer returns a boolean indicating whether a peer has any calls of the rate limited operation remaining.
-    /// It performs lazy, just-in-time update of peer quotas if required to update the TokenLimiter's current state.
+    /// query_peer returns a boolean indicating whether a peer has any calls of the rate limited
+    /// operation remaining. It performs lazy, just-in-time update of peer quotas if required to
+    /// update the TokenLimiter's current state.
     fn query_peer(&mut self, peer_key: PublicKey) -> bool {
         if self.needs_update() {
             self.update();
@@ -212,14 +215,15 @@ mod tests {
             TokenLimiter::new(vec![pk_0].into_iter(), TEST_COUNT, TEST_FREQUENCY, clock);
         assert_eq!(rate_limiter.peers(), vec![pk_0]);
 
-        // Exhaust our allowed call count in this period, then assert that we're no longer allowed to query further.
+        // Exhaust our allowed call count in this period, then assert that we're no longer allowed
+        // to query further.
         for _ in 0..TEST_COUNT {
             assert!(rate_limiter.query_peer(pk_0));
         }
         assert!(!rate_limiter.query_peer(pk_0));
 
-        // Connect a new peer, use some calls, then flip our connection off and on and assert that they aren't allowed
-        // more calls by virtue of having disconnected.
+        // Connect a new peer, use some calls, then flip our connection off and on and assert that
+        // they aren't allowed more calls by virtue of having disconnected.
         rate_limiter.peer_connected(pk_1);
         assert!(rate_limiter.query_peer(pk_1));
 
@@ -229,14 +233,15 @@ mod tests {
         assert!(rate_limiter.query_peer(pk_1));
         assert!(!rate_limiter.query_peer(pk_1));
 
-        // Disconnect one peer so that they'll be cleaned up and update the rate limiter's time so that we'll refresh
-        // our buckets.
+        // Disconnect one peer so that they'll be cleaned up and update the rate limiter's time so
+        // that we'll refresh our buckets.
         rate_limiter.peer_disconnected(pk_1);
 
         // Update our clock to a time which reflects that we need an update.
         rate_limiter.last_update.sub_assign(TEST_FREQUENCY);
 
-        // The disconnected peer should not be allowed any queries (they're currently unknown to us).
+        // The disconnected peer should not be allowed any queries (they're currently unknown to
+        // us).
         assert!(!rate_limiter.query_peer(pk_1));
 
         // Our original peer should be allowed the full quota of peers again.
@@ -245,8 +250,8 @@ mod tests {
         }
         assert!(!rate_limiter.query_peer(pk_0));
 
-        // When we reconnect a previously disconnected peer, they should once again have access to the full quota of
-        // calls.
+        // When we reconnect a previously disconnected peer, they should once again have access to
+        // the full quota of calls.
         rate_limiter.peer_connected(pk_1);
         for _ in 0..TEST_COUNT {
             assert!(rate_limiter.query_peer(pk_1));

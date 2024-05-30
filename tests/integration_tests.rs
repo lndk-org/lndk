@@ -56,7 +56,8 @@ async fn test_lndk_forwards_onion_message() {
     let (_bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
-    // Here we'll produce a little path of two channels. Both ldk nodes are connected to lnd like so:
+    // Here we'll produce a little path of two channels. Both ldk nodes are connected to lnd like
+    // so:
     //
     // ldk1 <-> lnd <-> ldk2
     //
@@ -67,8 +68,8 @@ async fn test_lndk_forwards_onion_message() {
     lnd.connect_to_peer(pubkey_2, addr_2).await;
     let lnd_info = lnd.get_info().await;
 
-    // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that lndk
-    // successfully helps lnd forward the onion message from ldk1 to ldk2.
+    // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that
+    // lndk successfully helps lnd forward the onion message from ldk1 to ldk2.
     let (shutdown, listener) = triggered::trigger();
 
     let creds = validate_lnd_creds(
@@ -264,8 +265,8 @@ async fn test_lndk_send_invoice_request() {
         }
     }
 
-    // Let's try again, but, make sure we can request the invoice when the LND node is not already connected
-    // to the introduction node (LDK2).
+    // Let's try again, but, make sure we can request the invoice when the LND node is not already
+    // connected to the introduction node (LDK2).
     lnd.disconnect_peer(pubkey_2).await;
     lnd.wait_for_chain_sync().await;
 

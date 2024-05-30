@@ -152,8 +152,9 @@ impl LndkOnionMessenger {
             return Err(());
         }
 
-        // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are
-        // connected. This sets up our "start state" for the messenger correctly.
+        // On startup, we want to get a list of our currently online peers to notify the onion
+        // messenger that they are connected. This sets up our "start state" for the
+        // messenger correctly.
         let current_peers = client
             .lightning()
             .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
@@ -229,7 +230,8 @@ pub struct PayOfferParams {
     pub client: Client,
     /// The destination the offer creator provided, which we will use to send the invoice request.
     pub destination: Destination,
-    /// The path we will send back to the offer creator, so it knows where to send back the invoice.
+    /// The path we will send back to the offer creator, so it knows where to send back the
+    /// invoice.
     pub reply_path: Option<BlindedPath>,
 }
 
@@ -248,7 +250,8 @@ impl OfferHandler {
         }
     }
 
-    /// Adds an offer to be paid with the amount specified. May only be called once for a single offer.
+    /// Adds an offer to be paid with the amount specified. May only be called once for a single
+    /// offer.
     pub async fn pay_offer(
         &self,
         cfg: PayOfferParams,
@@ -333,10 +336,10 @@ impl OffersMessageHandler for OfferHandler {
                 let secp_ctx = &Secp256k1::new();
                 // We verify that this invoice is a response to the invoice request we just sent.
                 match invoice.verify(&self.expanded_key, secp_ctx) {
-                    // TODO: Eventually when we allow for multiple payments in flight, we can use the
-                    // returned payment id below to check if we already processed an invoice for
-                    // this payment. Right now it's safe to let this be because we won't try to pay
-                    // a second invoice (if it comes through).
+                    // TODO: Eventually when we allow for multiple payments in flight, we can use
+                    // the returned payment id below to check if we already processed an invoice
+                    // for this payment. Right now it's safe to let this be because we won't try to
+                    // pay a second invoice (if it comes through).
                     Ok(_payment_id) => {
                         let mut active_invoices = self.active_invoices.lock().unwrap();
                         active_invoices.push(invoice.clone());
