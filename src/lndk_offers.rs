@@ -102,9 +102,9 @@ impl OfferHandler {
     ) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
         let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
 
-        // For now we connect directly to the introduction node of the blinded path so we don't need any
-        // intermediate nodes here. In the future we'll query for a full path to the introduction node for
-        // better sender privacy.
+        // For now we connect directly to the introduction node of the blinded path so we don't need
+        // any intermediate nodes here. In the future we'll query for a full path to the
+        // introduction node for better sender privacy.
         match cfg.destination {
             Destination::Node(pubkey) => connect_to_peer(cfg.client.clone(), pubkey).await?,
             Destination::BlindedPath(ref path) => {
@@ -157,7 +157,8 @@ impl OfferHandler {
         Ok(validated_amount)
     }
 
-    // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12 process of paying an offer.
+    // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12
+    // process of paying an offer.
     pub async fn create_invoice_request(
         &self,
         mut signer: impl MessageSigner + std::marker::Send + 'static,
@@ -182,10 +183,10 @@ impl OfferHandler {
 
         // Generate a new payment id for this payment.
         let bytes = self.messenger_utils.get_secure_random_bytes();
-        // We need to add some metadata to the invoice request to help with verification of the invoice
-        // once returned from the offer maker. Once we get an invoice back, this metadata will help us
-        // to determine: 1) That the invoice is truly for the invoice request we sent. 2) We don't pay
-        // duplicate invoices.
+        // We need to add some metadata to the invoice request to help with verification of the
+        // invoice once returned from the offer maker. Once we get an invoice back, this
+        // metadata will help us to determine: 1) That the invoice is truly for the invoice
+        // request we sent. 2) We don't pay duplicate invoices.
         let unsigned_invoice_req = offer
             .request_invoice_deriving_metadata(
                 pubkey,
