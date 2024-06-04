@@ -7,7 +7,8 @@ mod rate_limit;
 
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, has_build_tags, has_version,
-    string_to_network, LndCfg, LndNodeSigner,
+    string_to_network, LndCfg, LndNodeSigner, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER,
+    MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
@@ -26,6 +27,7 @@ use lightning::onion_message::messenger::{
 use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::{EntropySource, KeyMaterial};
+use lnd::BUILD_TAGS_REQUIRED;
 use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -150,12 +152,19 @@ impl LndkOnionMessenger {
             .into_inner();
 
         if !has_version(&version, None) {
-            error!("The LND version is not compatible with LNDK.");
+            error!(
+                "The LND version {} is not compatible with LNDK. Please updates to version {}.{}.{}-{}",
+                &version.version, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER
+            );
             return Err(());
         }
 
         if !has_build_tags(&version, None) {
-            error!("LND build tags are not compatible with LNDK.");
+            error!(
+                "LND build tags '{}' are not compatible with LNDK. Make sure '{}' are enabled.",
+                &version.build_tags.join(", "),
+                BUILD_TAGS_REQUIRED.join(", ")
+            );
             return Err(());
         }
 

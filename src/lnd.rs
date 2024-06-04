@@ -25,11 +25,11 @@ use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
-const MIN_LND_MAJOR_VER: u32 = 0;
-const MIN_LND_MINOR_VER: u32 = 18;
-const MIN_LND_PATCH_VER: u32 = 0;
-const MIN_LND_PRE_RELEASE_VER: &str = "beta";
-const BUILD_TAGS_REQUIRED: [&str; 4] = ["peersrpc", "signrpc", "walletrpc", "dev"];
+pub(crate) const MIN_LND_MAJOR_VER: u32 = 0;
+pub(crate) const MIN_LND_MINOR_VER: u32 = 18;
+pub(crate) const MIN_LND_PATCH_VER: u32 = 0;
+pub(crate) const MIN_LND_PRE_RELEASE_VER: &str = "beta";
+pub(crate) const BUILD_TAGS_REQUIRED: [&str; 3] = ["peersrpc", "signrpc", "walletrpc"];
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection is established.
 pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
