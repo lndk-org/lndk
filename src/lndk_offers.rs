@@ -15,7 +15,7 @@ use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
 use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
-use log::error;
+use log::{debug, error};
 use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt::Display;
@@ -128,6 +128,14 @@ impl OfferHandler {
             let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
             reply_path = Some(self.create_reply_path(client.clone(), pubkey).await?)
         };
+
+        if let Some(ref reply_path) = reply_path {
+            debug!(
+                "In invoice request, we chose {} as the introduction node of the reply path",
+                reply_path.introduction_node_id
+            );
+        };
+
         let contents = OffersMessage::InvoiceRequest(invoice_request);
         let pending_message = PendingOnionMessage {
             contents,
@@ -266,6 +274,11 @@ impl OfferHandler {
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
         params: PayInvoiceParams,
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
+        debug!(
+            "Attempting to pay invoice with introduction node {}",
+            params.path.introduction_node_id
+        );
+
         let resp = payer
             .query_routes(
                 params.path,
