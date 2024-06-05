@@ -341,13 +341,17 @@ impl OffersMessageHandler for OfferHandler {
                     // for this payment. Right now it's safe to let this be because we won't try to
                     // pay a second invoice (if it comes through).
                     Ok(_payment_id) => {
+                        info!("Received an invoice: {invoice:?}");
                         let mut active_invoices = self.active_invoices.lock().unwrap();
                         active_invoices.push(invoice.clone());
                         Some(OffersMessage::Invoice(invoice))
                     }
-                    Err(()) => Some(OffersMessage::InvoiceError(InvoiceError::from_string(
-                        String::from("invoice verification failure"),
-                    ))),
+                    Err(()) => {
+                        error!("Invoice verification failed for invoice: {invoice:?}");
+                        Some(OffersMessage::InvoiceError(InvoiceError::from_string(
+                            String::from("invoice verification failure"),
+                        )))
+                    }
                 }
             }
             OffersMessage::InvoiceError(error) => {
