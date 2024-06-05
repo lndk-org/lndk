@@ -4,9 +4,14 @@ pub mod lnd;
 pub mod lndk_offers;
 pub mod onion_messenger;
 mod rate_limit;
+pub mod server;
+
+pub mod lndkrpc {
+    tonic::include_proto!("lndkrpc");
+}
 
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, string_to_network, LndCfg, LndNodeSigner,
+    features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::MessengerUtilities;
@@ -32,19 +37,82 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Mutex, Once};
-use tokio::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex, Once};
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_lnd::lnrpc::{GetInfoRequest, Payment};
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
 
+pub fn init_logger(config: LogConfig) {
+    INIT.call_once(|| {
+        log4rs::init_config(config).expect("failed to initialize logger");
+    });
+}
+
+pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
+pub const DEFAULT_SERVER_PORT: u16 = 7000;
+
+#[allow(clippy::result_unit_err)]
+pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
+    let log_level = match log_level {
+        Some(level_str) => match LevelFilter::from_str(&level_str) {
+            Ok(level) => level,
+            Err(_) => {
+                // Since the logger isn't set up yet, we use a println just this once.
+                println!(
+                    "User provided log level '{}' is invalid. Make sure it is set to either 'error',
+                    'warn', 'info', 'debug' or 'trace'",
+                    level_str
+                );
+                return Err(());
+            }
+        },
+        None => LevelFilter::Trace,
+    };
+
+    let log_dir = log_dir.unwrap_or_else(|| {
+        home_dir()
+            .unwrap()
+            .join(".lndk")
+            .join("lndk.log")
+            .as_path()
+            .to_str()
+            .unwrap()
+            .to_string()
+    });
+
+    // Log both to stdout and a log file.
+    let stdout = ConsoleAppender::builder().build();
+    let lndk_logs = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
+        .build(log_dir)
+        .unwrap();
+
+    let config = LogConfig::builder()
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
+        .logger(Logger::builder().build("h2", LevelFilter::Info))
+        .logger(Logger::builder().build("hyper", LevelFilter::Info))
+        .logger(Logger::builder().build("rustls", LevelFilter::Info))
+        .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
+        .logger(Logger::builder().build("tracing", LevelFilter::Info))
+        .build(
+            Root::builder()
+                .appender("stdout")
+                .appender("lndk_logs")
+                .build(log_level),
+        )
+        .unwrap();
+
+    init_logger(config);
+
+    Ok(())
+}
+
 pub struct Cfg {
     pub lnd: LndCfg,
-    pub log_dir: Option<String>,
-    pub log_level: LevelFilter,
     pub signals: LifecycleSignals,
 }
 
@@ -53,84 +121,28 @@ pub struct LifecycleSignals {
     pub shutdown: Trigger,
     // Used to listen for the signal to shutdown.
     pub listener: Listener,
-    // Used to signal when the onion messenger has started up.
-    pub started: Sender<u32>,
 }
 
-pub fn init_logger(config: LogConfig) {
-    INIT.call_once(|| {
-        log4rs::init_config(config).expect("failed to initialize logger");
-    });
-}
-
-pub struct LndkOnionMessenger {
-    pub offer_handler: OfferHandler,
-}
+pub struct LndkOnionMessenger {}
 
 impl LndkOnionMessenger {
-    pub fn new(offer_handler: OfferHandler) -> Self {
-        LndkOnionMessenger { offer_handler }
+    pub fn new() -> Self {
+        LndkOnionMessenger {}
     }
 
-    pub async fn run(&self, args: Cfg) -> Result<(), ()> {
-        let log_dir = args.log_dir.unwrap_or_else(|| {
-            home_dir()
-                .unwrap()
-                .join(".lndk")
-                .join("lndk.log")
-                .as_path()
-                .to_str()
-                .unwrap()
-                .to_string()
-        });
-
-        // Log both to stdout and a log file.
-        let stdout = ConsoleAppender::builder().build();
-        let lndk_logs = FileAppender::builder()
-            .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
-            .build(log_dir)
-            .unwrap();
-
-        let config = LogConfig::builder()
-            .appender(Appender::builder().build("stdout", Box::new(stdout)))
-            .appender(Appender::builder().build("lndk_logs", Box::new(lndk_logs)))
-            .logger(Logger::builder().build("h2", LevelFilter::Info))
-            .logger(Logger::builder().build("hyper", LevelFilter::Info))
-            .logger(Logger::builder().build("rustls", LevelFilter::Info))
-            .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
-            .logger(Logger::builder().build("tracing", LevelFilter::Info))
-            .build(
-                Root::builder()
-                    .appender("stdout")
-                    .appender("lndk_logs")
-                    .build(args.log_level),
-            )
-            .unwrap();
-
-        init_logger(config);
-
+    pub async fn run(
+        &self,
+        args: Cfg,
+        offer_handler: Arc<impl OffersMessageHandler>,
+    ) -> Result<(), ()> {
         let mut client = get_lnd_client(args.lnd).expect("failed to connect");
-
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
             .await
             .expect("failed to get info")
             .into_inner();
-
-        let mut network_str = None;
-        #[allow(deprecated)]
-        for chain in info.chains {
-            if chain.chain == "bitcoin" {
-                network_str = Some(chain.network.clone())
-            }
-        }
-        if network_str.is_none() {
-            error!("lnd node is not connected to bitcoin network as expected");
-            return Err(());
-        }
-        let network = string_to_network(&network_str.unwrap());
-        let network = network.unwrap();
+        let network = get_network(info.clone()).await?;
 
         let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
         info!("Starting lndk on {network} network for node: {pubkey}.");
@@ -170,7 +182,7 @@ impl LndkOnionMessenger {
             &node_signer,
             &messenger_utils,
             message_router,
-            &self.offer_handler,
+            offer_handler,
             IgnoringMessageHandler {},
         );
 
@@ -183,6 +195,12 @@ impl LndkOnionMessenger {
             args.signals,
         )
         .await
+    }
+}
+
+impl Default for LndkOnionMessenger {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -234,16 +252,21 @@ impl OfferHandler {
     pub async fn pay_offer(
         &self,
         cfg: PayOfferParams,
-        started: Receiver<u32>,
-    ) -> Result<(), OfferError<Secp256k1Error>> {
+    ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let validated_amount = self.send_invoice_request(cfg, started).await?;
+        let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.remove(&offer_id.clone());
+            e
+        })?;
 
         let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
             Ok(invoice) => invoice,
             Err(_) => {
                 error!("Did not receive invoice in 100 seconds.");
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id.clone());
                 return Err(OfferError::InvoiceTimeout);
             }
         };
@@ -262,10 +285,21 @@ impl OfferHandler {
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
             msats: validated_amount,
-            offer_id,
+            offer_id: offer_id.clone(),
         };
 
-        self.pay_invoice(client_clone, params).await
+        self.pay_invoice(client_clone, params)
+            .await
+            .map(|payment| {
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id);
+                payment
+            })
+            .map_err(|e| {
+                let mut active_offers = self.active_offers.lock().unwrap();
+                active_offers.remove(&offer_id);
+                e
+            })
     }
 
     /// wait_for_invoice waits for the offer creator to respond with an invoice.

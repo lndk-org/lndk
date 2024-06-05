@@ -19,10 +19,9 @@ use log::error;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
-use tokio::sync::mpsc::Receiver;
 use tokio::task;
 use tonic_lnd::lnrpc::{
-    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse,
+    GetInfoRequest, HtlcAttempt, LightningNode, ListPeersRequest, ListPeersResponse, Payment,
     QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
@@ -100,14 +99,7 @@ impl OfferHandler {
     pub async fn send_invoice_request(
         &self,
         mut cfg: PayOfferParams,
-        mut started: Receiver<u32>,
     ) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
-        // Wait for onion messenger to give us the signal that it's ready. Once the onion messenger drops
-        // the channel sender, recv will return None and we'll stop blocking here.
-        if started.recv().await.is_some() {
-            error!("Error: we shouldn't receive any messages on this channel");
-        }
-
         let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
 
         // For now we connect directly to the introduction node of the blinded path so we don't need any
@@ -268,7 +260,7 @@ impl OfferHandler {
         &self,
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
         params: PayInvoiceParams,
-    ) -> Result<(), OfferError<Secp256k1Error>> {
+    ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let resp = payer
             .query_routes(
                 params.path,
@@ -557,7 +549,7 @@ impl InvoicePayer for Client {
     async fn track_payment(
         &mut self,
         payment_hash: [u8; 32],
-    ) -> Result<(), OfferError<Secp256k1Error>> {
+    ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let req = TrackPaymentRequest {
             payment_hash: payment_hash.to_vec(),
             no_inflight_updates: true,
@@ -573,7 +565,7 @@ impl InvoicePayer for Client {
         // Wait for a failed or successful payment.
         while let Some(payment) = stream.message().await.map_err(OfferError::TrackFailure)? {
             if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Succeeded {
-                return Ok(());
+                return Ok(payment);
             } else if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Failed {
                 return Err(OfferError::PaymentFailure);
             } else {
@@ -597,7 +589,7 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::time::{Duration, SystemTime};
-    use tonic_lnd::lnrpc::NodeAddress;
+    use tonic_lnd::lnrpc::{NodeAddress, Payment};
 
     fn get_offer() -> String {
         "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
@@ -681,7 +673,7 @@ mod tests {
         impl InvoicePayer for TestInvoicePayer{
             async fn query_routes(&mut self, path: BlindedPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
-            async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<(), OfferError<Secp256k1Error>>;
+            async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError<Secp256k1Error>>;
         }
     }
 
@@ -952,7 +944,11 @@ mod tests {
             })
         });
 
-        payer_mock.expect_track_payment().returning(|_| Ok(()));
+        payer_mock.expect_track_payment().returning(|_| {
+            Ok(Payment {
+                ..Default::default()
+            })
+        });
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();

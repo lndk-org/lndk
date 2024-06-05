@@ -10,12 +10,18 @@ mod internal {
 }
 
 use internal::*;
-use lndk::lnd::{validate_lnd_creds, LndCfg};
-use lndk::{Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler};
-use log::LevelFilter;
-use std::str::FromStr;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
+use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
+use lndk::server::LNDKServer;
+use lndk::{
+    lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
+    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+};
+use lndkrpc::offers_server::OffersServer;
+use log::{error, info};
+use std::sync::Arc;
+use tokio::select;
+use tonic::transport::Server;
+use tonic_lnd::lnrpc::GetInfoRequest;
 
 #[macro_use]
 extern crate configure_me;
@@ -26,22 +32,6 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
 
-    let log_level = match config.log_level {
-        Some(level_str) => match LevelFilter::from_str(&level_str) {
-            Ok(level) => level,
-            Err(_) => {
-                // Since the logger isn't set up yet, we use a println just this once.
-                println!(
-                    "User provided log level '{}' is invalid. Make sure it is set to either 'error',
-                    'warn', 'info', 'debug' or 'trace'",
-                    level_str
-                );
-                return Err(());
-            }
-        },
-        None => LevelFilter::Info,
-    };
-
     let creds = validate_lnd_creds(
         config.cert_path,
         config.cert_pem,
@@ -51,24 +41,66 @@ async fn main() -> Result<(), ()> {
     .map_err(|e| {
         println!("Error validating config: {e}.");
     })?;
-    let lnd_args = LndCfg::new(config.address, creds);
+    let address = config.address.clone();
+    let lnd_args = LndCfg::new(config.address, creds.clone());
 
     let (shutdown, listener) = triggered::trigger();
-    // Create the channel which will tell us when the onion messenger has finished starting up.
-    let (tx, _): (Sender<u32>, Receiver<u32>) = mpsc::channel(1);
-    let signals = LifecycleSignals {
-        shutdown,
-        listener,
-        started: tx,
-    };
+    let signals = LifecycleSignals { shutdown, listener };
     let args = Cfg {
         lnd: lnd_args,
-        log_dir: config.log_dir,
-        log_level,
         signals,
     };
 
-    let handler = OfferHandler::new();
-    let messenger = LndkOnionMessenger::new(handler);
-    messenger.run(args).await
+    let handler = Arc::new(OfferHandler::new());
+    let messenger = LndkOnionMessenger::new();
+    setup_logger(config.log_level, config.log_dir)?;
+
+    let mut client = get_lnd_client(args.lnd.clone()).expect("failed to connect to lnd");
+    let info = client
+        .lightning()
+        .get_info(GetInfoRequest {})
+        .await
+        .expect("failed to get info")
+        .into_inner();
+
+    let grpc_host = match config.grpc_host {
+        Some(host) => host,
+        None => DEFAULT_SERVER_HOST.to_string(),
+    };
+    let grpc_port = match config.grpc_port {
+        Some(port) => port,
+        None => DEFAULT_SERVER_PORT,
+    };
+    let addr = format!("{grpc_host}:{grpc_port}").parse().map_err(|e| {
+        error!("Error parsing API address: {e}");
+    })?;
+
+    let tls_str = creds.get_certificate_string()?;
+    let server = LNDKServer::new(
+        Arc::clone(&handler),
+        &info.identity_pubkey,
+        tls_str,
+        address,
+    )
+    .await;
+
+    let server_fut = Server::builder()
+        .add_service(OffersServer::new(server))
+        .serve(addr);
+
+    info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
+
+    select! {
+       _ = messenger.run(args, Arc::clone(&handler)) => {
+           info!("Onion messenger completed");
+       },
+       result2 = server_fut => {
+            match result2 {
+                Ok(_) => info!("API completed"),
+                Err(e) => error!("Error running API: {}", e),
+            };
+       },
+    }
+
+    Ok(())
 }

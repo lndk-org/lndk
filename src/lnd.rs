@@ -12,13 +12,17 @@ use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
+use log::error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt;
 use std::fmt::Display;
 use std::path::PathBuf;
-use tonic_lnd::lnrpc::{HtlcAttempt, LightningNode, ListPeersResponse, QueryRoutesResponse, Route};
+use std::{fmt, fs};
+use tonic_lnd::lnrpc::{
+    GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse, Payment, QueryRoutesResponse,
+    Route,
+};
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::{Client, ConnectError};
@@ -39,8 +43,8 @@ pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
 #[derive(Clone)]
 pub struct LndCfg {
-    address: String,
-    creds: Creds,
+    pub address: String,
+    pub creds: Creds,
 }
 
 impl LndCfg {
@@ -155,6 +159,18 @@ pub enum Creds {
     // The certificate is a pem-encoded string.
     // The macaroon is a hex-encoded string.
     String { macaroon: String, cert: String },
+}
+
+impl Creds {
+    #[allow(clippy::result_unit_err)]
+    pub fn get_certificate_string(&self) -> Result<String, ()> {
+        let cert = match self {
+            Creds::Path { macaroon: _, cert } => fs::read_to_string(cert)
+                .map_err(|e| error!("Error reading tls certificate from file {e:?}"))?,
+            Creds::String { macaroon: _, cert } => cert.clone(),
+        };
+        Ok(cert)
+    }
 }
 
 /// features_support_onion_messages returns a boolean indicating whether a feature set supports onion messaging.
@@ -284,6 +300,22 @@ impl fmt::Display for NetworkParseError {
     }
 }
 
+// get_network grabs what network lnd is running on from the LND API.
+pub async fn get_network(info: GetInfoResponse) -> Result<Network, ()> {
+    let mut network_str = None;
+    #[allow(deprecated)]
+    for chain in info.chains {
+        if chain.chain == "bitcoin" {
+            network_str = Some(chain.network.clone())
+        }
+    }
+    if network_str.is_none() {
+        error!("lnd node is not connected to bitcoin network as expected");
+        return Err(());
+    }
+    Ok(string_to_network(&network_str.unwrap()).unwrap())
+}
+
 pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
     let network_lowercase = String::from(network_str).to_lowercase();
     let network_str = network_lowercase.as_str();
@@ -340,7 +372,7 @@ pub trait InvoicePayer {
     async fn track_payment(
         &mut self,
         payment_hash: [u8; 32],
-    ) -> Result<(), OfferError<Secp256k1Error>>;
+    ) -> Result<Payment, OfferError<Secp256k1Error>>;
 }
 
 #[cfg(test)]
