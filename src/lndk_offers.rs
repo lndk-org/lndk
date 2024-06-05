@@ -124,7 +124,7 @@ impl OfferHandler {
         let invoice_request = self
             .create_invoice_request(
                 cfg.client.clone(),
-                cfg.offer,
+                cfg.offer.clone(),
                 vec![],
                 cfg.network,
                 validated_amount,
@@ -141,7 +141,10 @@ impl OfferHandler {
                 .into_inner();
 
             let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-            cfg.reply_path = Some(self.create_reply_path(cfg.client.clone(), pubkey).await?)
+            cfg.reply_path = Some(
+                self.create_reply_path(cfg.client.clone(), pubkey, cfg.offer.signing_pubkey())
+                    .await?,
+            )
         };
 
         if let Some(ref reply_path) = cfg.reply_path {
@@ -226,6 +229,7 @@ impl OfferHandler {
         &self,
         mut connector: impl PeerConnector + std::marker::Send + 'static,
         node_id: PublicKey,
+        offer_node_id: PublicKey,
     ) -> Result<BlindedPath, OfferError<Secp256k1Error>> {
         // Find an introduction node for our blinded path.
         let current_peers = connector.list_peers().await.map_err(|e| {
@@ -233,16 +237,30 @@ impl OfferHandler {
             OfferError::ListPeersFailure(e)
         })?;
 
+        let secp_ctx = Secp256k1::new();
+        // If we're connected to the node we're trying to pay, then we don't need to create a
+        // blinded path.
+        for peer in current_peers.peers.clone() {
+            let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+            if pubkey == offer_node_id {
+                return BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
+                    .map_err(|_| {
+                        error!("Could not create blinded path.");
+                        OfferError::BuildBlindedPathFailure
+                    });
+            }
+        }
+
         let mut intro_node = None;
         for peer in current_peers.peers {
             let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
             let onion_support = features_support_onion_messages(&peer.features);
+            // We don't want to make the node we're trying to pay the introduction node.
             if onion_support {
                 intro_node = Some(pubkey);
             }
         }
 
-        let secp_ctx = Secp256k1::new();
         if intro_node.is_none() {
             Ok(
                 BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
@@ -902,9 +920,10 @@ mod tests {
         });
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_ok())
     }
@@ -919,9 +938,10 @@ mod tests {
             .returning(|| Ok(ListPeersResponse { peers: vec![] }));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_ok())
     }
@@ -935,9 +955,10 @@ mod tests {
             .returning(|| Err(Status::unknown("unknown error")));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_err())
     }

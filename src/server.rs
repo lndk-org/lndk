@@ -63,7 +63,7 @@ impl Offers for LNDKServer {
         let destination = get_destination(&offer).await;
         let reply_path = match self
             .offer_handler
-            .create_reply_path(client.clone(), self.node_id)
+            .create_reply_path(client.clone(), self.node_id, offer.signing_pubkey())
             .await
         {
             Ok(reply_path) => reply_path,
