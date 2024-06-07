@@ -75,7 +75,6 @@ impl EntropySource for MessengerUtilities {
 
 impl Logger for MessengerUtilities {
     fn log(&self, record: Record) {
-        //println!("ARE WE GETTING ANY LDK LOGS??? {record:?}");
         let args_str = record.args.to_string();
         match record.level {
             Level::Gossip => {}
