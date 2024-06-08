@@ -4,10 +4,11 @@ use std::ops::FnMut;
 use tokio::time::{sleep, Duration};
 use tonic_lnd::tonic::{Response, Status};
 
-// If a grpc call returns an error, retry_async will retry the grpc function call in case lnd is still in
-// the process of starting up. A note on implementation: We can't pass in a future directly to a function
-// because futures cannot be cloned/copied in order to retry the future. Instead retry_async takes in an
-// async closure that is able to "copy" the function for us so we can call it multiple times for retries.
+// If a grpc call returns an error, retry_async will retry the grpc function call in case lnd is
+// still in the process of starting up. A note on implementation: We can't pass in a future directly
+// to a function because futures cannot be cloned/copied in order to retry the future. Instead
+// retry_async takes in an async closure that is able to "copy" the function for us so we can call
+// it multiple times for retries.
 pub(crate) async fn retry_async<F, Fut, D>(mut f: F, func_name: String) -> Result<D, ()>
 where
     F: FnMut() -> Fut + std::marker::Copy,

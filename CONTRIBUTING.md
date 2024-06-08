@@ -35,7 +35,7 @@ General guidelines for code contribution:
 
 #### Conventions
 The following conventions are use for code style (and enforced by the CI): 
-1. Rust format: `cargo fmt`
+1. Rust format: `cargo fmt -- --config unstable_features=true --config wrap_comments=true --config comment_width=100`. We require a few config parameters when formatting to enforce a maximum comment length per-line.
 2. Clippy: 
 ```
 rustup component add clippy

@@ -187,8 +187,8 @@ impl LndNode {
         let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
         let key_path = lnd_dir.to_str().unwrap().to_string() + "/tls.key";
 
-        // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd node, they won't
-        // clash.
+        // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd
+        // node, they won't clash.
         let port = bitcoind::get_available_port().unwrap();
         let rpc_addr = format!("localhost:{}", port);
         let lnd_port = bitcoind::get_available_port().unwrap();
@@ -243,7 +243,8 @@ impl LndNode {
 
     // Setup the client we need to interact with the LND node.
     async fn setup_client(&mut self) {
-        // We need to give lnd some time to start up before we'll be able to interact with it via the client.
+        // We need to give lnd some time to start up before we'll be able to interact with it via
+        // the client.
         let mut retry = false;
         let mut retry_num = 0;
         while retry_num == 0 || retry {
