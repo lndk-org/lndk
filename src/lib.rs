@@ -53,6 +53,7 @@ pub fn init_logger(config: LogConfig) {
 
 pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
+pub const LDK_LOGGER_NAME: &str = "ldk";
 
 #[allow(clippy::result_unit_err)]
 pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
@@ -98,6 +99,7 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
         .logger(Logger::builder().build("rustls", LevelFilter::Info))
         .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
         .logger(Logger::builder().build("tracing", LevelFilter::Info))
+        .logger(Logger::builder().build(LDK_LOGGER_NAME, log_level))
         .build(
             Root::builder()
                 .appender("stdout")
