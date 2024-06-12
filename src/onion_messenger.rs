@@ -27,7 +27,8 @@ use std::io::Cursor;
 use std::marker::Copy;
 use std::str::FromStr;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::{select, time, time::Duration, time::Interval};
+use tokio::time::{sleep, timeout, Duration};
+use tokio::{select, time, time::Interval};
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
     lnrpc::CustomMessage, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
@@ -282,7 +283,25 @@ async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::Lightn
                     continue;
                 }
 
-                return features_support_onion_messages(&peer.features);
+                // Sometimes if the connection to the peer is very new, we have to wait for the
+                // features to pop up.
+                let features = match timeout(
+                    Duration::from_secs(20),
+                    check_empty_features(pubkey, client.clone()),
+                )
+                .await
+                {
+                    Ok(features) => features,
+                    Err(_) => {
+                        warn!(
+                            "Did not get non-empty feature from peer {} set in 20 seconds.",
+                            peer.pub_key
+                        );
+                        peer.features
+                    }
+                };
+
+                return features_support_onion_messages(&features);
             }
 
             warn!("Peer {pubkey} not found in current set of peers, assuming no onion support.");
@@ -292,6 +311,39 @@ async fn lookup_onion_support(pubkey: &PublicKey, client: &mut tonic_lnd::Lightn
             warn!("Could not lookup peers for {pubkey}: {e}, assuming no onion message support.");
             false
         }
+    }
+}
+
+// check_empty_features keeps looking up the peer's feature set until it returns a non-empty
+// value.
+async fn check_empty_features(
+    pubkey: &PublicKey,
+    mut client: LightningClient,
+) -> HashMap<u32, tonic_lnd::lnrpc::Feature> {
+    loop {
+        match client
+            .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+                latest_error: false,
+            })
+            .await
+        {
+            Ok(peers) => {
+                for peer in peers.into_inner().peers {
+                    if peer.pub_key != pubkey.to_string() {
+                        continue;
+                    }
+
+                    if !peer.features.is_empty() {
+                        return peer.features;
+                    }
+                }
+            }
+            Err(_) => {
+                warn!("error connecting to listpeers");
+                continue;
+            }
+        };
+        sleep(Duration::from_millis(500)).await;
     }
 }
 
