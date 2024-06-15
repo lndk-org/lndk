@@ -55,6 +55,7 @@ async fn main() -> Result<(), ()> {
         log_dir: config.log_dir,
         log_level,
         signals,
+        skip_version_check: config.skip_version_check
     };
 
     let handler = OfferHandler::new();

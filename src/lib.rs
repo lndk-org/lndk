@@ -50,6 +50,7 @@ pub struct Cfg {
     pub log_dir: Option<String>,
     pub log_level: LevelFilter,
     pub signals: LifecycleSignals,
+    pub skip_version_check: bool,
 }
 
 pub struct LifecycleSignals {
@@ -144,28 +145,30 @@ impl LndkOnionMessenger {
             return Err(());
         }
 
-        let version = client
-            .versioner()
-            .get_version(VersionRequest {})
-            .await
-            .expect("failed to get version")
-            .into_inner();
-
-        if !has_version(&version, None) {
-            error!(
-                "The LND version {} is not compatible with LNDK. Please updates to version {}.{}.{}-{}",
-                &version.version, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER
-            );
-            return Err(());
-        }
-
-        if !has_build_tags(&version, None) {
-            error!(
-                "LND build tags '{}' are not compatible with LNDK. Make sure '{}' are enabled.",
-                &version.build_tags.join(", "),
-                BUILD_TAGS_REQUIRED.join(", ")
-            );
-            return Err(());
+        if !args.skip_version_check {
+            let version = client
+                .versioner()
+                .get_version(VersionRequest {})
+                .await
+                .expect("failed to get version")
+                .into_inner();
+    
+            if !has_version(&version, None) {
+                error!(
+                    "The LND version {} is not compatible with LNDK. Please updates to version {}.{}.{}-{}",
+                    &version.version, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER
+                );
+                return Err(());
+            }
+    
+            if !has_build_tags(&version, None) {
+                error!(
+                    "LND build tags '{}' are not compatible with LNDK. Make sure '{}' are enabled.",
+                    &version.build_tags.join(", "),
+                    BUILD_TAGS_REQUIRED.join(", ")
+                );
+                return Err(());
+            }
         }
 
         // On startup, we want to get a list of our currently online peers to notify the onion messenger that they are

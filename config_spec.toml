@@ -31,3 +31,9 @@ name = "log_level"
 type = "String"
 optional = true
 doc = "The log verbosity level. This can be set to either 'error', 'warn', 'info', 'debug' or 'trace'."
+
+[[param]]
+name = "skip_version_check"
+type = "bool"
+default = "false"
+doc = "Skip checking the LND version. Otherwise, LNDK checks that the LND version and build tags are compatible with LNDK."
