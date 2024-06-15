@@ -14,11 +14,11 @@ use crate::lnd::{
     features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
-use crate::onion_messenger::MessengerUtilities;
+use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use home::home_dir;
-use lightning::blinded_path::BlindedPath;
+use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
@@ -31,7 +31,7 @@ use lightning::onion_message::messenger::{
 use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::{EntropySource, KeyMaterial};
-use log::{error, info, LevelFilter};
+use log::{debug, error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::{GetInfoRequest, Payment};
+use tonic_lnd::lnrpc::{ChanInfoRequest, GetInfoRequest, Payment};
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
@@ -186,11 +186,13 @@ impl LndkOnionMessenger {
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::new();
         let network_graph = &NetworkGraph::new(network, &messenger_utils);
-        let message_router = &DefaultMessageRouter::new(network_graph);
+        let message_router = &DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let node_id_lookup = LndkNodeIdLookUp::new(client.clone(), pubkey);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,
             &node_signer,
             &messenger_utils,
+            &node_id_lookup,
             message_router,
             offer_handler,
             IgnoringMessageHandler {},
@@ -267,10 +269,7 @@ impl OfferHandler {
 
     /// Adds an offer to be paid with the amount specified. May only be called once for a single
     /// offer.
-    pub async fn pay_offer(
-        &self,
-        cfg: PayOfferParams,
-    ) -> Result<Payment, OfferError<Secp256k1Error>> {
+    pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
         let (invoice_request, payment_id, validated_amount) = self
@@ -326,6 +325,29 @@ impl OfferHandler {
             offer_id: offer_id.clone(),
             payment_id,
         };
+
+        let intro_node_id = match params.path.introduction_node {
+            IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
+            IntroductionNode::DirectedShortChannelId(direction, scid) => {
+                let get_chan_info_request = ChanInfoRequest { chan_id: scid };
+                let chan_info = cfg
+                    .client
+                    .clone()
+                    .lightning_read_only()
+                    .get_chan_info(get_chan_info_request)
+                    .await
+                    .map_err(OfferError::GetChannelInfo)?
+                    .into_inner();
+                match direction {
+                    Direction::NodeOne => Some(chan_info.node1_pub),
+                    Direction::NodeTwo => Some(chan_info.node2_pub),
+                }
+            }
+        };
+        debug!(
+            "Attempting to pay invoice with introduction node {:?}",
+            intro_node_id
+        );
 
         self.pay_invoice(client_clone, params)
             .await
