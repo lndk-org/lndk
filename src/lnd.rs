@@ -5,7 +5,7 @@ use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
-use bitcoin::secp256k1::{self, Error as Secp256k1Error, PublicKey, Scalar, Secp256k1};
+use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use futures::executor::block_on;
 use lightning::blinded_path::BlindedPath;
 use lightning::ln::msgs::UnsignedGossipMessage;
@@ -344,7 +344,7 @@ pub trait MessageSigner {
         &mut self,
         key_loc: KeyLocator,
         unsigned_invoice_req: UnsignedInvoiceRequest,
-    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>>;
+    ) -> Result<InvoiceRequest, OfferError>;
 }
 
 /// PeerConnector provides a layer of abstraction over the LND API for connecting to a peer.
@@ -371,10 +371,7 @@ pub trait InvoicePayer {
         payment_hash: [u8; 32],
         route: Route,
     ) -> Result<HtlcAttempt, Status>;
-    async fn track_payment(
-        &mut self,
-        payment_hash: [u8; 32],
-    ) -> Result<Payment, OfferError<Secp256k1Error>>;
+    async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
 }
 
 #[cfg(test)]

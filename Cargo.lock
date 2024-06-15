@@ -271,27 +271,16 @@ checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
 
 [[package]]
 name = "bitcoin"
-version = "0.29.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0694ea59225b0c5f3cb405ff3f670e4828358ed26aec49dc352f730f0cb1a8a3"
-dependencies = [
- "bech32 0.9.1",
- "bitcoin_hashes 0.11.0",
- "secp256k1 0.24.3",
-]
-
-[[package]]
-name = "bitcoin"
 version = "0.30.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1945a5048598e4189e239d3f809b19bdad4845c4b2ba400d304d2dcf26d2c462"
 dependencies = [
  "bech32 0.9.1",
  "bitcoin-private",
- "bitcoin_hashes 0.12.0",
+ "bitcoin_hashes",
  "bitcoinconsensus",
  "hex_lit",
- "secp256k1 0.27.0",
+ "secp256k1",
  "serde",
 ]
 
@@ -309,12 +298,6 @@ name = "bitcoin-private"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73290177011694f38ec25e165d0387ab7ea749a4b81cd4c80dae5988229f7a57"
-
-[[package]]
-name = "bitcoin_hashes"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90064b8dee6815a6470d60bad07bbbaee885c0e12d04177138fa3291a01b7bc4"
 
 [[package]]
 name = "bitcoin_hashes"
@@ -343,7 +326,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e4a98e66bb7c1f81abf4f8d992e1839fc0f9cbc627effbff122aae7d5e493a0"
 dependencies = [
  "anyhow",
- "bitcoin_hashes 0.12.0",
+ "bitcoin_hashes",
  "core-rpc",
  "flate2",
  "log",
@@ -550,7 +533,7 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "581898ed9a83f31c64731b1d8ca2dfffcfec14edf1635afacd5234cddbde3a41"
 dependencies = [
- "bitcoin 0.30.2",
+ "bitcoin",
  "bitcoin-private",
  "serde",
  "serde_json",
@@ -665,7 +648,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 [[package]]
 name = "fedimint-tonic-lnd"
 version = "0.1.3"
-source = "git+https://github.com/orbitalturtle/tonic_lnd?rev=afb0187621bca604f606cacfe3cb2aedf5d2fc89#afb0187621bca604f606cacfe3cb2aedf5d2fc89"
+source = "git+https://github.com/orbitalturtle/tonic_lnd?rev=18c5a71084886024a6b90307bfb8822288c5daea#18c5a71084886024a6b90307bfb8822288c5daea"
 dependencies = [
  "hex",
  "http-body",
@@ -1104,15 +1087,15 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/lndk-org/ldk-sample?branch=offer-handling-send-payment#fdc9b2905dff4b9f293f91a6fd13e9f084812567"
+source = "git+https://github.com/lndk-org/ldk-sample?rev=57b5e50c8dc306ece28654777b1cfc4792b35df0#57b5e50c8dc306ece28654777b1cfc4792b35df0"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
- "bitcoin 0.30.2",
+ "bitcoin",
  "bitcoin-bech32",
  "chrono",
  "libc",
- "lightning 0.0.120",
+ "lightning",
  "lightning-background-processor",
  "lightning-block-sync",
  "lightning-invoice",
@@ -1134,88 +1117,82 @@ checksum = "9c198f91728a82281a64e1f4f9eeb25d82cb32a5de251c6bd1b5154d63a8e7bd"
 
 [[package]]
 name = "lightning"
-version = "0.0.117"
+version = "0.0.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb0cb32c79c42444453bfabed7bd4f4ef64dfdd2e35e191fa8f3b9099ad2a186"
+checksum = "5fd92d4aa159374be430c7590e169b4a6c0fb79018f5bc4ea1bffde536384db3"
 dependencies = [
- "bitcoin 0.29.2",
-]
-
-[[package]]
-name = "lightning"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
-dependencies = [
- "bitcoin 0.30.2",
+ "bitcoin",
  "hex-conservative",
- "musig2",
  "regex",
 ]
 
 [[package]]
 name = "lightning-background-processor"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb1c2c64050e37cee7c3b6b022106523784055ac3ee572d360780a1d6fe8062c"
 dependencies = [
- "bitcoin 0.30.2",
- "lightning 0.0.120",
+ "bitcoin",
+ "lightning",
  "lightning-rapid-gossip-sync",
 ]
 
 [[package]]
 name = "lightning-block-sync"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61e1e70fa351daccede0c366cf16320b16a3e42b05ae3c7ec9c0df6b5d3a3e18"
 dependencies = [
- "bitcoin 0.30.2",
+ "bitcoin",
  "chunked_transfer",
  "hex-conservative",
- "lightning 0.0.120",
+ "lightning",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "lightning-invoice"
-version = "0.25.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d2380d053673c467c5f0be992cd4685e40d141d075647d74b64aba1b9c0b1ae"
+checksum = "26d07d01cf197bf2184b929b7dc94aa70d935aac6df896c256a3a9475b7e9d40"
 dependencies = [
  "bech32 0.9.1",
- "bitcoin 0.29.2",
- "bitcoin_hashes 0.11.0",
- "lightning 0.0.117",
- "num-traits",
- "secp256k1 0.24.3",
+ "bitcoin",
+ "lightning",
+ "secp256k1",
 ]
 
 [[package]]
 name = "lightning-net-tokio"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9e6a4d49c50a1344916d080dc8c012ce3a778cdd45de8def75350b2b40fe018"
 dependencies = [
- "bitcoin 0.30.2",
- "lightning 0.0.120",
+ "bitcoin",
+ "lightning",
  "tokio",
 ]
 
 [[package]]
 name = "lightning-persister"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a8dd33971815fa074b05678e09a6d4b15c78225ea34d66ed4f17c35a53467a9"
 dependencies = [
- "bitcoin 0.30.2",
- "lightning 0.0.120",
+ "bitcoin",
+ "lightning",
  "windows-sys 0.48.0",
 ]
 
 [[package]]
 name = "lightning-rapid-gossip-sync"
-version = "0.0.120"
-source = "git+https://github.com/lightningdevkit/rust-lightning?rev=06f9dd7#06f9dd7e83ae8ba5b5ecac3cffa404e16d06d4e4"
+version = "0.0.123"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d861b0f0cd5f8fe8c63760023c4fd4fd32c384881b41780b62ced2a8a619f91"
 dependencies = [
- "bitcoin 0.30.2",
- "lightning 0.0.120",
+ "bitcoin",
+ "lightning",
 ]
 
 [[package]]
@@ -1235,7 +1212,7 @@ name = "lndk"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "bitcoin 0.30.2",
+ "bitcoin",
  "bitcoind",
  "bytes",
  "chrono",
@@ -1248,7 +1225,7 @@ dependencies = [
  "hex",
  "home",
  "ldk-sample",
- "lightning 0.0.120",
+ "lightning",
  "log",
  "log4rs",
  "mockall",
@@ -1412,14 +1389,6 @@ name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
-
-[[package]]
-name = "musig2"
-version = "0.1.0"
-source = "git+https://github.com/arik-so/rust-musig2?rev=cff11e3#cff11e3b1af1691f721a120dc6acb921afa31f89"
-dependencies = [
- "bitcoin 0.30.2",
-]
 
 [[package]]
 name = "nom"
@@ -2000,33 +1969,14 @@ dependencies = [
 
 [[package]]
 name = "secp256k1"
-version = "0.24.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b1629c9c557ef9b293568b338dddfc8208c98a18c59d722a9d53f859d9c9b62"
-dependencies = [
- "bitcoin_hashes 0.11.0",
- "secp256k1-sys 0.6.1",
-]
-
-[[package]]
-name = "secp256k1"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25996b82292a7a57ed3508f052cfff8640d38d32018784acd714758b43da9c8f"
 dependencies = [
- "bitcoin_hashes 0.12.0",
+ "bitcoin_hashes",
  "rand 0.8.5",
- "secp256k1-sys 0.8.1",
+ "secp256k1-sys",
  "serde",
-]
-
-[[package]]
-name = "secp256k1-sys"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83080e2c2fc1006e625be82e5d1eb6a43b7fd9578b617fcc55814daf286bba4b"
-dependencies = [
- "cc",
 ]
 
 [[package]]

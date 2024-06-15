@@ -14,9 +14,9 @@ use crate::lnd::{
     features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
-use crate::onion_messenger::MessengerUtilities;
+use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use home::home_dir;
 use lightning::blinded_path::BlindedPath;
 use lightning::ln::inbound_payment::ExpandedKey;
@@ -183,11 +183,13 @@ impl LndkOnionMessenger {
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::new();
         let network_graph = &NetworkGraph::new(network, &messenger_utils);
-        let message_router = &DefaultMessageRouter::new(network_graph);
+        let message_router = &DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let node_id_lookup = LndkNodeIdLookUp::new(client.clone(), pubkey);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,
             &node_signer,
             &messenger_utils,
+            &node_id_lookup,
             message_router,
             offer_handler,
             IgnoringMessageHandler {},
@@ -258,10 +260,7 @@ impl OfferHandler {
 
     /// Adds an offer to be paid with the amount specified. May only be called once for a single
     /// offer.
-    pub async fn pay_offer(
-        &self,
-        cfg: PayOfferParams,
-    ) -> Result<Payment, OfferError<Secp256k1Error>> {
+    pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
         let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
