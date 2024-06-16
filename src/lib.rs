@@ -123,11 +123,15 @@ pub struct LifecycleSignals {
     pub listener: Listener,
 }
 
-pub struct LndkOnionMessenger {}
+pub struct LndkOnionMessenger {
+    current_peers: Mutex<HashMap<PublicKey, bool>>
+}
 
 impl LndkOnionMessenger {
     pub fn new() -> Self {
-        LndkOnionMessenger {}
+        LndkOnionMessenger {
+            current_peers: Mutex::new(HashMap::new())
+        }
     }
 
     pub async fn run(
@@ -171,6 +175,11 @@ impl LndkOnionMessenger {
             let onion_support = features_support_onion_messages(&peer.features);
             peer_support.insert(pubkey, onion_support);
         }
+        {
+            // THIS IS A WEIRD EXTRA STEP... FIX IT 
+            let mut current_peers_mut = self.current_peers.lock().unwrap();
+            *current_peers_mut = peer_support.clone();
+        }
 
         // Create an onion messenger that depends on LND's signer client and consume related events.
         let mut node_client = client.signer().clone();
@@ -189,7 +198,6 @@ impl LndkOnionMessenger {
 
         let mut peers_client = client.lightning().clone();
         self.run_onion_messenger(
-            peer_support,
             &mut peers_client,
             onion_messenger,
             network,
