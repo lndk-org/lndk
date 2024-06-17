@@ -547,7 +547,7 @@ impl InvoicePayer for Client {
 
         let blinded_payment_paths = tonic_lnd::lnrpc::BlindedPaymentPath {
             blinded_path,
-            total_cltv_delta: u32::from(cltv_expiry_delta) + 120,
+            total_cltv_delta: u32::from(cltv_expiry_delta),
             base_fee_msat: u64::from(fee_base_msat),
             proportional_fee_msat: u64::from(fee_ppm),
             ..Default::default()
