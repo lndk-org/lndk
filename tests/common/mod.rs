@@ -187,7 +187,7 @@ pub async fn setup_lndk(
     };
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
 
     let log_dir = Some(

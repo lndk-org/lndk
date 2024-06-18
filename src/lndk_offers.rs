@@ -63,7 +63,7 @@ pub enum OfferError {
     /// Failed to send payment.
     PaymentFailure,
     /// Failed to receive an invoice back from offer creator before the timeout.
-    InvoiceTimeout,
+    InvoiceTimeout(u32),
     /// Failed to find introduction node for blinded path.
     IntroductionNodeNotFound,
     /// Cannot fetch channel info.
@@ -94,7 +94,7 @@ impl Display for OfferError {
             OfferError::RouteFailure(e) => write!(f, "Error routing payment: {e:?}"),
             OfferError::TrackFailure(e) => write!(f, "Error tracking payment: {e:?}"),
             OfferError::PaymentFailure => write!(f, "Failed to send payment"),
-            OfferError::InvoiceTimeout => write!(f, "Did not receive invoice in 100 seconds."),
+            OfferError::InvoiceTimeout(e) => write!(f, "Did not receive invoice in {e:?} seconds."),
             OfferError::IntroductionNodeNotFound => write!(f, "Could not find introduction node."),
             OfferError::GetChannelInfo(e) => write!(f, "Could not fetch channel info: {e:?}"),
         }
@@ -803,7 +803,7 @@ mod tests {
             .returning(move |_, _| Ok(get_invoice_request(offer.clone(), amount)));
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         let resp = handler
             .create_invoice_request(
                 signer_mock,
@@ -829,7 +829,7 @@ mod tests {
             .returning(move |_, _| Ok(get_invoice_request(decode(get_offer()).unwrap(), 10000)));
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         assert!(handler
             .create_invoice_request(
                 signer_mock,
@@ -858,7 +858,7 @@ mod tests {
             .returning(move |_, _| Err(OfferError::SignError(SignError::Signing)));
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         assert!(handler
             .create_invoice_request(
                 signer_mock,
@@ -1005,7 +1005,7 @@ mod tests {
         });
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -1022,7 +1022,7 @@ mod tests {
             .returning(|| Ok(ListPeersResponse { peers: vec![] }));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -1038,7 +1038,7 @@ mod tests {
             .returning(|| Err(Status::unknown("unknown error")));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -1073,7 +1073,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let params = SendPaymentParams {
             path: blinded_path,
@@ -1098,7 +1098,7 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
@@ -1132,7 +1132,7 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::default();
         let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
