@@ -99,7 +99,7 @@ async fn test_lndk_forwards_onion_message() {
     );
     setup_logger(None, log_dir).unwrap();
 
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::new_default());
     let messenger = lndk::LndkOnionMessenger::new();
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
@@ -245,7 +245,7 @@ async fn test_lndk_send_invoice_request() {
     setup_logger(None, log_dir).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::new_default());
     let messenger = lndk::LndkOnionMessenger::new();
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
@@ -254,6 +254,7 @@ async fn test_lndk_send_invoice_request() {
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: Some(reply_path.clone()),
+        response_invoice_timeout: None,
     };
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
@@ -290,7 +291,7 @@ async fn test_lndk_send_invoice_request() {
     );
     setup_logger(None, log_dir).unwrap();
 
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::new_default());
     let messenger = lndk::LndkOnionMessenger::new();
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
@@ -420,7 +421,7 @@ async fn test_lndk_pay_offer() {
         BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::new_default());
     let messenger = lndk::LndkOnionMessenger::new();
     let pay_cfg = PayOfferParams {
         offer,
@@ -429,6 +430,7 @@ async fn test_lndk_pay_offer() {
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: Some(reply_path),
+        response_invoice_timeout: None,
     };
     let log_dir = Some(
         lndk_dir

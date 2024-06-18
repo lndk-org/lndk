@@ -56,3 +56,9 @@ name = "grpc_port"
 type = "u16"
 optional = true
 doc = "The port the grpc server will run on. Defaults to 7000."
+
+[[param]]
+name = "response_invoice_timeout"
+type = "u32"
+optional = true
+doc = "Amount of time in seconds that server waits for an offer creator to respond with an invoice. Defaults to 30s."

@@ -71,6 +71,11 @@ enum Commands {
         /// whatever the offer amount is.
         #[arg(required = false)]
         amount: Option<u64>,
+
+        /// The amount of time in seconds that the user would like to wait for an invoice to
+        /// arrive. If this isn't set, we'll use the default value.
+        #[arg(long, global = false, required = false)]
+        response_invoice_timeout: Option<u32>,
     },
 }
 
@@ -98,6 +103,7 @@ async fn main() -> Result<(), ()> {
         Commands::PayOffer {
             ref offer_string,
             amount,
+            response_invoice_timeout,
         } => {
             let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
             let pem = match args.cert_pem {
@@ -162,6 +168,7 @@ async fn main() -> Result<(), ()> {
             let mut request = Request::new(PayOfferRequest {
                 offer: offer.to_string(),
                 amount,
+                response_invoice_timeout,
             });
             add_metadata(&mut request, macaroon).map_err(|_| ())?;
 
