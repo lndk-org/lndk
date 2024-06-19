@@ -1,7 +1,7 @@
 use crate::clock::TokioClock;
 use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
 use crate::rate_limit::{RateLimiter, TokenLimiter};
-use crate::{LifecycleSignals, LndkOnionMessenger};
+use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::network::constants::Network;
@@ -78,11 +78,11 @@ impl Logger for MessengerUtilities {
         let args_str = record.args.to_string();
         match record.level {
             Level::Gossip => {}
-            Level::Trace => trace!("{}", args_str),
-            Level::Debug => debug!("{}", args_str),
-            Level::Info => info!("{}", args_str),
-            Level::Warn => warn!("{}", args_str),
-            Level::Error => error!("{}", args_str),
+            Level::Trace => trace!(target: LDK_LOGGER_NAME, "{}", args_str),
+            Level::Debug => debug!(target: LDK_LOGGER_NAME, "{}", args_str),
+            Level::Info => info!(target: LDK_LOGGER_NAME, "{}", args_str),
+            Level::Warn => warn!(target: LDK_LOGGER_NAME, "{}", args_str),
+            Level::Error => error!(target: LDK_LOGGER_NAME, "{}", args_str),
         }
     }
 }
