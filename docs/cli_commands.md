@@ -55,3 +55,9 @@ which you can do in [most languages](https://grpc.io/docs/languages/).
 
 Again, since LNDK needs to connect to LND, you'll need to pass in your LND macaroon to establish a connection. Note that:
 - The client must pass in this data via gRPC metadata. You can find an example of this in the [Rust client](https://github.com/lndk-org/lndk/blob/master/src/cli.rs) used to connect `lndk-cli` to the server.
+
+## TLS: Running `lndk-cli` remotely
+
+When `LNDK` is started up, self-signed TLS credentials are automatically generated and stored in `~/.lndk`. If you're running `lndk-cli` locally, it'll know where to find the certificate file it needs to establish a secure connection with the LNDK server.
+
+To run `lndk-cli` on a remote machine, users need to copy the `tls-cert.pem` file to the corresponding LNDK data directory (`~/.lndk`) on the machine where `lndk-cli` is being run.
