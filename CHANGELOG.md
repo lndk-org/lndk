@@ -2,13 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.1] - 2023-05-18
+## [0.1.0] - 2024-06-24
 
 ### Documentation
 
 - Add contributor covenant code of conduct v2.1
 - Fix typo
 - Add command for generating a custom macaroon
+- Add instructions for paying an offer with the cli
+- Add instructions for paying an Eclair offer
+- Update docs with new mode for passing in creds
+- Update docs with server updates
+- Update cargo fmt instructions for contributors
 
 ### Miscellaneous Tasks
 
@@ -16,6 +21,9 @@ All notable changes to this project will be documented in this file.
 - Include Sigstore Cosign signing in release workflow
 - Add MAINTAINERS.md with release process
 - Add release hook for CHANGELOG generation
+- Release lndk version 0.0.1
+- Update cargo-dist and regenerate
+- Update release process documentation & remove cosign key
 
 ### README
 
@@ -25,10 +33,30 @@ All notable changes to this project will be documented in this file.
 - Move architecture section to a separate file
 - Split off the cargo-crev note into its own subsection
 - Update running lndk instructions to make it more obvious there is a config file option
+- Add discord invitation
+- Fix bakemacaroon typo
+
+### Testing
+
+- Add bitcoind node setup for testing
+- Test that ldk node can send onion message
+- Add lnd git submodule
+- Add initial Makefile for lnd bin
+- Organize needed bitcoind data in a struct
+- Clean up directory structure
+- Add a utility for retrying grpc calls
+- Add lnd to integration tests
+- Test that lndk forwards onion messages
+- Specify log level in ldk nodes
 
 ### Actions
 
 - Include token in codecov action
+- Update github actions with new test process
+- Install protobuf-compiler so we can build tonic_lnd
+- Specify Rust version to use
+- Update fmt workflow with max comment width
+- Update codecov-actions to v4
 
 ### Arch
 
@@ -41,6 +69,25 @@ All notable changes to this project will be documented in this file.
 - Add tokio with multi threaded runtime
 - Update repository
 - Set version to 0.0.1
+
+### Cli
+
+- Add global arguments for connecting to lnd
+- Add cli command to pay offer
+- Default macaroon path should depend on the specified network
+- Add option to pass cert/macaroon in directly to cli
+- Update CLI to connect to new gRPC server
+- TLS connection with server
+- Add option to pass in LNDK tls cert directly
+
+### Clippy
+
+- Move outer attribute into inner
+- Move outer attribute into inner
+
+### Config
+
+- Clarify where log file is stored by default
 
 ### Contributing
 
@@ -62,9 +109,32 @@ All notable changes to this project will be documented in this file.
 
 - Add target and cargo lock
 
+### Itests
+
+- Update lnd submodule to tagged hash change
+- Add walletrpc subserver to lnd Makefile/README
+- Add lnd API calls needed to set up channels
+- Export bitcoind for tests
+- Bump ldk-sample to newer version
+- Advertise ldk node address
+- Set more granular lnd logs
+- Add lnd new_address api call
+
+### Lib
+
+- Implement and use OfferMessageHandler on OfferHandler
+- Refactor create_invoice_request to be a method of OfferHandler
+- When finding route, add missing fee ppm parameter
+- Move and Arc-ify OffersHandler
+- Remove offer from map if we fail/succeed to pay
+
 ### Lnd
 
 - Add docs for lnd node signer
+- Export network verifier for cli
+- Export get_lnd_client, features_support_onion_messages & network checker
+- Convert network string to lowercase before processing
+- Move get network logic into separate function
 
 ### Lnd/docs
 
@@ -73,6 +143,11 @@ All notable changes to this project will be documented in this file.
 ### Lndk
 
 - Cargo new
+
+### Logs
+
+- Filter out useless dependency logs
+- Add ldk sublogger
 
 ### Main
 
@@ -100,18 +175,29 @@ All notable changes to this project will be documented in this file.
 - Add producer for incoming messages
 - Implement IncomingMessageProducer trait for LND's grpc api
 - Consume message events from LND's API
+- Update logs to match the outlined standards
 - Change name of messages_exit_sender to clarify that it's for incoming messages
 - Add local CurrentPeers map to keep up-to-date track of peers to send outgoing onion messages to
 - Alter testing pubkey function to generate a random key
-- Update logs to match the outlined standards
 - Add producer and consumer for processing outgoing onion messages
 - Spin up outgoing message producer in a new task
 - Send one outgoing message per peer rather than all at once
 - Fail if LND does not support onion messages
+- Move main logic for running lndk into a library
+- Replace simple logger with log4rs
+- Ignore unused imports from configure_me
+- Add config option for specifying log level
+- Add grpc server config options
+- Auto-create data directory at ~/.lndk
+
+### Main+lib
+
+- Move logger out of run method
 
 ### Maintainers
 
 - Update cosign key pair generation
+- Add notes from first release
 
 ### Multi
 
@@ -126,10 +212,37 @@ All notable changes to this project will be documented in this file.
 - Move LndNodeSigner into lnd module
 - Move messenger utilities into onion_message module
 - Move onion messenger into module
+- Propagate shutdown signal from caller to lndk
+- Refactor to create OfferHandler and LndkOnionMessenger
+- Add verification details to invoice request
+- Split off uir signing portion of create_invoice_request into a method
+- Upgrade to ldk v20
+- Send offer payment
+- Add option to pass cert/macaroon in directly to lndk
+- Delete started channel
+- Expose payment when done tracking it
+- Setup grpc server
+- Format comments to 100 width
 
 ### Multi/refactor
 
 - Move CurrentPeers into its own module
+
+### Offers
+
+- Rename create_invoice_request
+- Add logic for connecting to the introduction node peer
+- Validate offer amount user input
+- Wait for onion messenger ready signal before sending request
+- Build a reply path for invoice request
+- Send invoice request
+- Verify invoice upon return
+- Add InvoicePayer for paying an offer
+- Add timeout for invoice response
+
+### Onion
+
+- Remove RefCell from MessengerUtilities
 
 ### Onion_messenger
 
@@ -146,6 +259,15 @@ All notable changes to this project will be documented in this file.
 - Update links to org
 - Add high level description of project and milestones
 - Update github link to org
+- Update branch instructions
+
+### Server
+
+- Require TLS for interacting with server
+
+### Utils
+
+- Add Default for MessengerUtilities to satisfy clippy
 
 ### Workflows
 

@@ -1232,7 +1232,7 @@ checksum = "01cda141df6706de531b6c46c3a33ecca755538219bd484262fa09410c13539c"
 
 [[package]]
 name = "lndk"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "bitcoin 0.30.2",
