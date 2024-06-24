@@ -212,8 +212,8 @@ impl Default for LndkOnionMessenger {
 }
 
 #[allow(dead_code)]
-enum OfferState {
-    OfferAdded,
+enum PaymentState {
+    PaymentAdded,
     InvoiceRequestSent,
     InvoiceReceived,
     InvoicePaymentDispatched,
@@ -221,7 +221,7 @@ enum OfferState {
 }
 
 pub struct OfferHandler {
-    active_offers: Mutex<HashMap<String, OfferState>>,
+    active_offers: Mutex<HashMap<String, PaymentState>>,
     active_invoices: Mutex<Vec<Bolt12Invoice>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     pub messenger_utils: MessengerUtilities,
@@ -281,7 +281,7 @@ impl OfferHandler {
         };
         {
             let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
+            active_offers.insert(offer_id.clone(), PaymentState::InvoiceReceived);
         }
 
         let payment_hash = invoice.payment_hash();
