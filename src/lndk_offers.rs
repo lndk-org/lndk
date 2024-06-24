@@ -1,5 +1,5 @@
 use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
-use crate::{OfferHandler, PayOfferParams, PaymentState};
+use crate::{OfferHandler, PaymentState};
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
@@ -98,42 +98,32 @@ pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
 impl OfferHandler {
     pub async fn send_invoice_request(
         &self,
-        mut cfg: PayOfferParams,
-    ) -> Result<(u64, PaymentId), OfferError<bitcoin::secp256k1::Error>> {
-        let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
-
+        destination: Destination,
+        mut client: Client,
+        offer: Offer,
+        mut reply_path: Option<BlindedPath>,
+        invoice_request: InvoiceRequest,
+    ) -> Result<(), OfferError<bitcoin::secp256k1::Error>> {
         // For now we connect directly to the introduction node of the blinded path so we don't need
         // any intermediate nodes here. In the future we'll query for a full path to the
         // introduction node for better sender privacy.
-        match cfg.destination {
-            Destination::Node(pubkey) => connect_to_peer(cfg.client.clone(), pubkey).await?,
+        match destination {
+            Destination::Node(pubkey) => connect_to_peer(client.clone(), pubkey).await?,
             Destination::BlindedPath(ref path) => {
-                connect_to_peer(cfg.client.clone(), path.introduction_node_id).await?
+                connect_to_peer(client.clone(), path.introduction_node_id).await?
             }
         };
 
-        let offer_id = cfg.offer.clone().to_string();
         {
             let mut active_offers = self.active_offers.lock().unwrap();
-            if active_offers.contains_key(&offer_id.clone()) {
+            if active_offers.contains_key(&offer.clone().to_string()) {
                 return Err(OfferError::AlreadyProcessing);
             }
-            active_offers.insert(cfg.offer.to_string().clone(), PaymentState::PaymentAdded);
+            active_offers.insert(offer.to_string().clone(), PaymentState::PaymentAdded);
         }
 
-        let (invoice_request, payment_id) = self
-            .create_invoice_request(
-                cfg.client.clone(),
-                cfg.offer,
-                vec![],
-                cfg.network,
-                validated_amount,
-            )
-            .await?;
-
-        if cfg.reply_path.is_none() {
-            let info = cfg
-                .client
+        if reply_path.is_none() {
+            let info = client
                 .lightning()
                 .get_info(GetInfoRequest {})
                 .await
@@ -141,20 +131,20 @@ impl OfferHandler {
                 .into_inner();
 
             let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-            cfg.reply_path = Some(self.create_reply_path(cfg.client.clone(), pubkey).await?)
+            reply_path = Some(self.create_reply_path(client.clone(), pubkey).await?)
         };
         let contents = OffersMessage::InvoiceRequest(invoice_request);
         let pending_message = PendingOnionMessage {
             contents,
-            destination: cfg.destination,
-            reply_path: cfg.reply_path,
+            destination,
+            reply_path,
         };
 
         let mut pending_messages = self.pending_messages.lock().unwrap();
         pending_messages.push(pending_message);
         std::mem::drop(pending_messages);
 
-        Ok((validated_amount, payment_id))
+        Ok(())
     }
 
     // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12
@@ -165,8 +155,10 @@ impl OfferHandler {
         offer: Offer,
         _metadata: Vec<u8>,
         network: Network,
-        msats: u64,
-    ) -> Result<(InvoiceRequest, PaymentId), OfferError<bitcoin::secp256k1::Error>> {
+        msats: Option<u64>,
+    ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError<bitcoin::secp256k1::Error>> {
+        let validated_amount = validate_amount(&offer, msats).await?;
+
         // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
         // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
         let key_loc = KeyLocator {
@@ -183,7 +175,7 @@ impl OfferHandler {
 
         // Generate a new payment id for this payment.
         let payment_id = PaymentId(self.messenger_utils.get_secure_random_bytes());
-        
+
         // We need to add some metadata to the invoice request to help with verification of the
         // invoice once returned from the offer maker. Once we get an invoice back, this metadata
         // will help us to determine: 1) That the invoice is truly for the invoice request we sent.
@@ -198,7 +190,7 @@ impl OfferHandler {
             .unwrap()
             .chain(network)
             .unwrap()
-            .amount_msats(msats)
+            .amount_msats(validated_amount)
             .unwrap()
             .build()
             .map_err(OfferError::BuildUIRFailure)?;
@@ -211,7 +203,7 @@ impl OfferHandler {
                 .await
                 .unwrap()?;
 
-        Ok((invoice_request, payment_id))
+        Ok((invoice_request, payment_id, validated_amount))
     }
 
     /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
@@ -705,7 +697,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         let resp = handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, amount)
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(amount))
             .await;
         assert!(resp.is_ok())
     }
@@ -725,7 +717,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
             .await
             .is_err())
     }
@@ -750,7 +742,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
+            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
             .await
             .is_err())
     }

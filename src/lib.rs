@@ -264,7 +264,25 @@ impl OfferHandler {
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let (validated_amount, _payment_id) = self.send_invoice_request(cfg).await.map_err(|e| {
+        let (invoice_request, _payment_id, validated_amount) = self
+            .create_invoice_request(
+                cfg.client.clone(),
+                cfg.offer.clone(),
+                vec![],
+                cfg.network,
+                cfg.amount,
+            )
+            .await?;
+
+        self.send_invoice_request(
+            cfg.destination.clone(),
+            cfg.client.clone(),
+            cfg.offer.clone(),
+            cfg.reply_path.clone(),
+            invoice_request,
+        )
+        .await
+        .map_err(|e| {
             let mut active_offers = self.active_offers.lock().unwrap();
             active_offers.remove(&offer_id.clone());
             e
