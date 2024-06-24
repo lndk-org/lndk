@@ -66,6 +66,3 @@ pr-run-mode = "plan"
 install-updater = true
 # Whether to enable GitHub Attestations
 github-attestations = true
-
-[workspace.metadata.release]
-pre-release-hook = ["git-cliff", "-o", "CHANGELOG.md", "--tag", "{{version}}"]
