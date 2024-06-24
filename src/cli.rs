@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::exit;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
 
@@ -75,15 +76,14 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), ()> {
+async fn main() {
     let args = Cli::parse();
     match args.command {
         Commands::Decode { offer_string } => {
             println!("Decoding offer: {offer_string}.");
             match decode(offer_string) {
                 Ok(offer) => {
-                    println!("Decoded offer: {:?}.", offer);
-                    Ok(())
+                    println!("Decoded offer: {:?}.", offer)
                 }
                 Err(e) => {
                     println!(
@@ -91,7 +91,7 @@ async fn main() -> Result<(), ()> {
                         invalid, failed to decode with error: {:?}.",
                         e
                     );
-                    Err(())
+                    exit(1)
                 }
             }
         }
@@ -105,8 +105,10 @@ async fn main() -> Result<(), ()> {
                 None => {
                     // If no cert pem string is provided, we'll look for the tls certificate in the
                     // default location.
-                    std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
-                        .map_err(|e| println!("ERROR reading cert: {e:?}"))?
+                    std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME)).unwrap_or_else(|e| {
+                        println!("ERROR reading cert: {e:?}");
+                        exit(1)
+                    })
                 }
             };
             let cert = Certificate::from_pem(pem);
@@ -117,12 +119,21 @@ async fn main() -> Result<(), ()> {
             let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}")) //
-                .map_err(|e| println!("ERROR creating endpoint: {e:?}"))?
+                .unwrap_or_else(|e| {
+                    println!("ERROR creating endpoint: {e:?}");
+                    exit(1)
+                })
                 .tls_config(tls)
-                .map_err(|e| println!("ERROR tls config: {e:?}"))?
+                .unwrap_or_else(|e| {
+                    println!("ERROR tls config: {e:?}");
+                    exit(1)
+                })
                 .connect()
                 .await
-                .map_err(|e| println!("ERROR connecting: {e:?}"))?;
+                .unwrap_or_else(|e| {
+                    println!("ERROR connecting: {e:?}");
+                    exit(1)
+                });
 
             let mut client = OffersClient::new(channel);
 
@@ -134,27 +145,31 @@ async fn main() -> Result<(), ()> {
                         invalid, failed to decode with error: {:?}.",
                         e
                     );
-                    return Err(());
+                    exit(1)
                 }
             };
 
             // Make sure both macaroon options are not set.
             if args.macaroon_path.is_some() && args.macaroon_hex.is_some() {
                 println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
-                return Err(());
+                exit(1)
             }
 
             // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
             // set, use the default macaroon path.
             let macaroon = match args.macaroon_path {
-                Some(path) => read_macaroon_from_file(path)
-                    .map_err(|e| println!("ERROR reading macaroon from file {e:?}"))?,
+                Some(path) => read_macaroon_from_file(path).unwrap_or_else(|e| {
+                    println!("ERROR reading macaroon from file {e:?}");
+                    exit(1)
+                }),
                 None => match args.macaroon_hex {
                     Some(macaroon) => macaroon,
                     None => {
                         let path = get_macaroon_path_default(&args.network);
-                        read_macaroon_from_file(path)
-                            .map_err(|e| println!("ERROR reading macaroon from file {e:?}"))?
+                        read_macaroon_from_file(path).unwrap_or_else(|e| {
+                            println!("ERROR reading macaroon from file {e:?}");
+                            exit(1)
+                        })
                     }
                 },
             };
@@ -163,14 +178,15 @@ async fn main() -> Result<(), ()> {
                 offer: offer.to_string(),
                 amount,
             });
-            add_metadata(&mut request, macaroon).map_err(|_| ())?;
+            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
 
             match client.pay_offer(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => println!("Error paying for offer: {err:?}"),
+                Err(err) => {
+                    println!("Error paying for offer: {err:?}");
+                    exit(1)
+                }
             };
-
-            Ok(())
         }
     }
 }
