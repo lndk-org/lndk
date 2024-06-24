@@ -247,20 +247,28 @@ async fn test_lndk_send_invoice_request() {
     // Make sure lndk successfully sends the invoice_request.
     let handler = Arc::new(lndk::OfferHandler::new());
     let messenger = lndk::LndkOnionMessenger::new();
-    let pay_cfg = PayOfferParams {
-        offer: offer.clone(),
-        amount: Some(20_000),
-        network: Network::Regtest,
-        client: client.clone(),
-        destination: Destination::BlindedPath(blinded_path.clone()),
-        reply_path: Some(reply_path.clone()),
-    };
+    let (invoice_request, _, _) = handler
+        .create_invoice_request(
+            client.clone(),
+            offer.clone(),
+            vec![],
+            Network::Regtest,
+            Some(20_000),
+        )
+        .await
+        .unwrap();
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = handler.send_invoice_request(pay_cfg.clone()) => {
+        res = handler.send_invoice_request(
+            Destination::BlindedPath(blinded_path.clone()),
+            client.clone(),
+            offer.clone(),
+            Some(reply_path.clone()),
+            invoice_request
+        ) => {
             assert!(res.is_ok());
         }
     }
@@ -292,12 +300,28 @@ async fn test_lndk_send_invoice_request() {
 
     let handler = Arc::new(lndk::OfferHandler::new());
     let messenger = lndk::LndkOnionMessenger::new();
+    let (invoice_request, _, _) = handler
+        .create_invoice_request(
+            client.clone(),
+            offer.clone(),
+            vec![],
+            Network::Regtest,
+            Some(20_000),
+        )
+        .await
+        .unwrap();
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         // We wait for ldk2 to receive the onion message.
-        res = handler.send_invoice_request(pay_cfg) => {
+        res = handler.send_invoice_request(
+            Destination::BlindedPath(blinded_path.clone()),
+            client.clone(),
+            offer.clone(),
+            Some(reply_path.clone()),
+            invoice_request
+        ) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
