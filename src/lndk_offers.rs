@@ -99,7 +99,7 @@ impl OfferHandler {
     pub async fn send_invoice_request(
         &self,
         mut cfg: PayOfferParams,
-    ) -> Result<u64, OfferError<bitcoin::secp256k1::Error>> {
+    ) -> Result<(u64, PaymentId), OfferError<bitcoin::secp256k1::Error>> {
         let validated_amount = validate_amount(&cfg.offer, cfg.amount).await?;
 
         // For now we connect directly to the introduction node of the blinded path so we don't need
@@ -121,7 +121,7 @@ impl OfferHandler {
             active_offers.insert(cfg.offer.to_string().clone(), PaymentState::PaymentAdded);
         }
 
-        let invoice_request = self
+        let (invoice_request, payment_id) = self
             .create_invoice_request(
                 cfg.client.clone(),
                 cfg.offer,
@@ -154,7 +154,7 @@ impl OfferHandler {
         pending_messages.push(pending_message);
         std::mem::drop(pending_messages);
 
-        Ok(validated_amount)
+        Ok((validated_amount, payment_id))
     }
 
     // create_invoice_request builds and signs an invoice request, the first step in the BOLT 12
@@ -166,7 +166,7 @@ impl OfferHandler {
         _metadata: Vec<u8>,
         network: Network,
         msats: u64,
-    ) -> Result<InvoiceRequest, OfferError<bitcoin::secp256k1::Error>> {
+    ) -> Result<(InvoiceRequest, PaymentId), OfferError<bitcoin::secp256k1::Error>> {
         // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
         // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
         let key_loc = KeyLocator {
@@ -182,17 +182,18 @@ impl OfferHandler {
             PublicKey::from_slice(&pubkey_bytes).expect("failed to deserialize public key");
 
         // Generate a new payment id for this payment.
-        let bytes = self.messenger_utils.get_secure_random_bytes();
+        let payment_id = PaymentId(self.messenger_utils.get_secure_random_bytes());
+        
         // We need to add some metadata to the invoice request to help with verification of the
-        // invoice once returned from the offer maker. Once we get an invoice back, this
-        // metadata will help us to determine: 1) That the invoice is truly for the invoice
-        // request we sent. 2) We don't pay duplicate invoices.
+        // invoice once returned from the offer maker. Once we get an invoice back, this metadata
+        // will help us to determine: 1) That the invoice is truly for the invoice request we sent.
+        // 2) We don't pay duplicate invoices.
         let unsigned_invoice_req = offer
             .request_invoice_deriving_metadata(
                 pubkey,
                 &self.expanded_key,
                 &self.messenger_utils,
-                PaymentId(bytes),
+                payment_id,
             )
             .unwrap()
             .chain(network)
@@ -205,9 +206,12 @@ impl OfferHandler {
         // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
         // task because we need to call block_on on sign_message so that sign_closure can be a
         // synchronous closure.
-        task::spawn_blocking(move || signer.sign_uir(key_loc, unsigned_invoice_req))
-            .await
-            .unwrap()
+        let invoice_request =
+            task::spawn_blocking(move || signer.sign_uir(key_loc, unsigned_invoice_req))
+                .await
+                .unwrap()?;
+
+        Ok((invoice_request, payment_id))
     }
 
     /// create_reply_path creates a blinded path to provide to the offer maker when requesting an
