@@ -1,5 +1,5 @@
 use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
-use crate::{OfferHandler, OfferState, PayOfferParams};
+use crate::{OfferHandler, PayOfferParams, PaymentState};
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
@@ -118,7 +118,7 @@ impl OfferHandler {
             if active_offers.contains_key(&offer_id.clone()) {
                 return Err(OfferError::AlreadyProcessing);
             }
-            active_offers.insert(cfg.offer.to_string().clone(), OfferState::OfferAdded);
+            active_offers.insert(cfg.offer.to_string().clone(), PaymentState::PaymentAdded);
         }
 
         let invoice_request = self
@@ -280,7 +280,7 @@ impl OfferHandler {
 
         {
             let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.insert(params.offer_id, OfferState::InvoicePaymentDispatched);
+            active_offers.insert(params.offer_id, PaymentState::InvoicePaymentDispatched);
         }
 
         // We'll track the payment until it settles.
