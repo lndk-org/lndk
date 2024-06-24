@@ -68,4 +68,4 @@ install-updater = true
 github-attestations = true
 
 [workspace.metadata.release]
-pre-release-hook = ["git-cliff", "-o", "CHANGELOG.md", "--tag", "{{version}}"]
+pre-release-hook = ["git-cliff", "--unreleased", "--prepend", "CHANGELOG.md", "--tag", "{{version}}"]
