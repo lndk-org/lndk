@@ -105,9 +105,6 @@ impl Offers for LNDKServer {
                 payment
             }
             Err(e) => match e {
-                OfferError::AlreadyProcessing => {
-                    return Err(Status::already_exists(format!("{e}")))
-                }
                 OfferError::InvalidAmount(e) => {
                     return Err(Status::invalid_argument(e.to_string()))
                 }
