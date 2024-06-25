@@ -54,7 +54,7 @@ async fn main() -> Result<(), ()> {
         signals,
     };
 
-    let handler = Arc::new(OfferHandler::new());
+    let handler = Arc::new(OfferHandler::new(config.response_invoice_timeout));
     let messenger = LndkOnionMessenger::new();
 
     let data_dir =

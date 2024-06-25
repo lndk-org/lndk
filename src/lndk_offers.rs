@@ -59,7 +59,7 @@ pub enum OfferError<Secp256k1Error> {
     /// Failed to send payment.
     PaymentFailure,
     /// Failed to receive an invoice back from offer creator before the timeout.
-    InvoiceTimeout,
+    InvoiceTimeout(u32),
 }
 
 impl Display for OfferError<Secp256k1Error> {
@@ -83,7 +83,7 @@ impl Display for OfferError<Secp256k1Error> {
             OfferError::RouteFailure(e) => write!(f, "Error routing payment: {e:?}"),
             OfferError::TrackFailure(e) => write!(f, "Error tracking payment: {e:?}"),
             OfferError::PaymentFailure => write!(f, "Failed to send payment"),
-            OfferError::InvoiceTimeout => write!(f, "Did not receive invoice in 100 seconds."),
+            OfferError::InvoiceTimeout(e) => write!(f, "Did not receive invoice in {e:?} seconds."),
         }
     }
 }
@@ -699,7 +699,7 @@ mod tests {
             .returning(move |_, _| Ok(get_invoice_request(offer.clone(), amount)));
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         let resp = handler
             .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, amount)
             .await;
@@ -719,7 +719,7 @@ mod tests {
             .returning(move |_, _| Ok(get_invoice_request(decode(get_offer()).unwrap(), 10000)));
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         assert!(handler
             .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
             .await
@@ -744,7 +744,7 @@ mod tests {
         });
 
         let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         assert!(handler
             .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, 10000,)
             .await
@@ -885,7 +885,7 @@ mod tests {
         });
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -902,7 +902,7 @@ mod tests {
             .returning(|| Ok(ListPeersResponse { peers: vec![] }));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -918,7 +918,7 @@ mod tests {
             .returning(|| Err(Status::unknown("unknown error")));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         assert!(handler
             .create_reply_path(connector_mock, receiver_node_id)
             .await
@@ -953,7 +953,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         let params = PayInvoiceParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
@@ -976,7 +976,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         let params = PayInvoiceParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
@@ -1009,7 +1009,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let handler = OfferHandler::new();
+        let handler = OfferHandler::new_default();
         let params = PayInvoiceParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
