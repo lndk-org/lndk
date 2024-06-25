@@ -16,6 +16,7 @@ use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
 use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
 use log::error;
+use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -32,8 +33,8 @@ use tonic_lnd::Client;
 #[derive(Debug)]
 /// OfferError is an error that occurs during the process of paying an offer.
 pub enum OfferError<Secp256k1Error> {
-    /// AlreadyProcessing indicates that we're already in the process of paying an offer.
-    AlreadyProcessing,
+    /// AlreadyProcessing indicates that we're already trying to make a payment with the same id.
+    AlreadyProcessing(PaymentId),
     /// BuildUIRFailure indicates a failure to build the unsigned invoice request.
     BuildUIRFailure(Bolt12SemanticError),
     /// SignError indicates a failure to sign the invoice request.
@@ -65,8 +66,11 @@ pub enum OfferError<Secp256k1Error> {
 impl Display for OfferError<Secp256k1Error> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OfferError::AlreadyProcessing => {
-                write!(f, "LNDK is already trying to pay for provided offer")
+            OfferError::AlreadyProcessing(id) => {
+                write!(
+                    f,
+                    "We're already trying to pay for a payment with this id {id}"
+                )
             }
             OfferError::BuildUIRFailure(e) => write!(f, "Error building invoice request: {e:?}"),
             OfferError::SignError(e) => write!(f, "Error signing invoice request: {e:?}"),
@@ -100,7 +104,6 @@ impl OfferHandler {
         &self,
         destination: Destination,
         mut client: Client,
-        offer: Offer,
         mut reply_path: Option<BlindedPath>,
         invoice_request: InvoiceRequest,
     ) -> Result<(), OfferError<bitcoin::secp256k1::Error>> {
@@ -113,14 +116,6 @@ impl OfferHandler {
                 connect_to_peer(client.clone(), path.introduction_node_id).await?
             }
         };
-
-        {
-            let mut active_offers = self.active_offers.lock().unwrap();
-            if active_offers.contains_key(&offer.clone().to_string()) {
-                return Err(OfferError::AlreadyProcessing);
-            }
-            active_offers.insert(offer.to_string().clone(), PaymentState::PaymentAdded);
-        }
 
         if reply_path.is_none() {
             let info = client
@@ -203,6 +198,19 @@ impl OfferHandler {
                 .await
                 .unwrap()?;
 
+        {
+            let mut active_payments = self.active_payments.lock().unwrap();
+            match active_payments.entry(payment_id) {
+                Entry::Occupied(_) => return Err(OfferError::AlreadyProcessing(payment_id)),
+                Entry::Vacant(v) => {
+                    v.insert(crate::PaymentInfo {
+                        state: PaymentState::InvoiceRequestCreated,
+                        invoice: None,
+                    });
+                }
+            };
+        }
+
         Ok((invoice_request, payment_id, validated_amount))
     }
 
@@ -275,8 +283,10 @@ impl OfferHandler {
             .map_err(OfferError::RouteFailure)?;
 
         {
-            let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.insert(params.offer_id, PaymentState::InvoicePaymentDispatched);
+            let mut active_payments = self.active_payments.lock().unwrap();
+            active_payments
+                .entry(params.payment_id)
+                .and_modify(|entry| entry.state = PaymentState::PaymentDispatched);
         }
 
         // We'll track the payment until it settles.
@@ -295,6 +305,7 @@ pub struct PayInvoiceParams {
     pub payment_hash: [u8; 32],
     pub msats: u64,
     pub offer_id: String,
+    pub payment_id: PaymentId,
 }
 
 // Checks that the user-provided amount matches the offer.
@@ -950,6 +961,7 @@ mod tests {
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
+        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let params = PayInvoiceParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
@@ -958,6 +970,7 @@ mod tests {
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
+            payment_id,
         };
         assert!(handler.pay_invoice(payer_mock, params).await.is_ok());
     }
@@ -972,6 +985,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
         let params = PayInvoiceParams {
             path: blinded_path,
@@ -981,6 +995,7 @@ mod tests {
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
+            payment_id,
         };
         assert!(handler.pay_invoice(payer_mock, params).await.is_err());
     }
@@ -1005,6 +1020,7 @@ mod tests {
 
         let blinded_path = get_blinded_path();
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
         let params = PayInvoiceParams {
             path: blinded_path,
@@ -1014,6 +1030,7 @@ mod tests {
             payment_hash: payment_hash,
             msats: 2000,
             offer_id: get_offer(),
+            payment_id,
         };
         assert!(handler.pay_invoice(payer_mock, params).await.is_err());
     }
