@@ -8,10 +8,13 @@ use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
+use lndk::lnd::validate_lnd_creds;
+use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
@@ -149,6 +152,53 @@ pub async fn connect_network(
     lnd.wait_for_chain_sync().await;
 
     (ldk1_pubkey, ldk2_pubkey, lnd_pubkey)
+}
+
+pub async fn setup_lndk(
+    lnd_cert_path: &str,
+    lnd_macaroon_path: &str,
+    address: String,
+    lndk_dir: PathBuf,
+) -> (
+    lndk::Cfg,
+    Arc<OfferHandler>,
+    LndkOnionMessenger,
+    triggered::Trigger,
+) {
+    let (shutdown, listener) = triggered::trigger();
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(lnd_cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(lnd_macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(address, creds);
+
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+    };
+
+    let lndk_cfg = lndk::Cfg {
+        lnd: lnd_cfg,
+        signals,
+    };
+
+    // Make sure lndk successfully sends the invoice_request.
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
+
+    let log_dir = Some(
+        lndk_dir
+            .join(format!("lndk-logs.txt"))
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    setup_logger(None, log_dir).unwrap();
+
+    return (lndk_cfg, handler, messenger, shutdown);
 }
 
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
