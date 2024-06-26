@@ -8,9 +8,13 @@ use chrono::Utc;
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
+use lndk::lnd::validate_lnd_creds;
+use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::str::FromStr;
+use std::sync::Arc;
 use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
@@ -71,6 +75,130 @@ pub async fn setup_test_infrastructure(
     let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
 
     (bitcoind, lnd, ldk1, ldk2, lndk_test_dir)
+}
+
+// connect_network establishes connections/channels between our nodes, and mines enough blocks and
+// allows the network to sync so that we can use the channels.
+pub async fn connect_network(
+    ldk1: &LdkNode,
+    ldk2: &LdkNode,
+    lnd: &mut LndNode,
+    bitcoind: &BitcoindNode,
+) -> (PublicKey, PublicKey, PublicKey) {
+    // Here we'll produce a little network of channels:
+    //
+    // ldk1 <- ldk2 <- lnd
+    //
+    // ldk1 will be the offer creator, which will build a blinded route from ldk2 to ldk1.
+    let (ldk1_pubkey, addr) = ldk1.get_node_info();
+    let (ldk2_pubkey, addr_2) = ldk2.get_node_info();
+    let lnd_info = lnd.get_info().await;
+    let lnd_pubkey = PublicKey::from_str(&lnd_info.identity_pubkey).unwrap();
+
+    ldk1.connect_to_peer(ldk2_pubkey, addr_2).await.unwrap();
+    lnd.connect_to_peer(ldk2_pubkey, addr_2).await;
+
+    let ldk2_fund_addr = ldk2.bitcoind_client.get_new_address().await;
+    let lnd_fund_addr = lnd.new_address().await.address;
+
+    // We need to convert funding addresses to the form that the bitcoincore_rpc library recognizes.
+    let ldk2_addr_string = ldk2_fund_addr.to_string();
+    let ldk2_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
+        .unwrap()
+        .require_network(BitcoindNetwork::Regtest)
+        .unwrap();
+    let lnd_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&lnd_fund_addr)
+        .unwrap()
+        .require_network(BitcoindNetwork::Regtest)
+        .unwrap();
+    let lnd_network_addr = lnd
+        .address
+        .replace("localhost", "127.0.0.1")
+        .replace("https://", "");
+
+    // Fund both of these nodes, open the channels, and synchronize the network.
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &lnd_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    ldk2.open_channel(ldk1_pubkey, addr, 200000, 0, false)
+        .await
+        .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    ldk2.open_channel(
+        lnd_pubkey,
+        SocketAddr::from_str(&lnd_network_addr).unwrap(),
+        200000,
+        10000000,
+        true,
+    )
+    .await
+    .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(20, &ldk2_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    (ldk1_pubkey, ldk2_pubkey, lnd_pubkey)
+}
+
+pub async fn setup_lndk(
+    lnd_cert_path: &str,
+    lnd_macaroon_path: &str,
+    address: String,
+    lndk_dir: PathBuf,
+) -> (
+    lndk::Cfg,
+    Arc<OfferHandler>,
+    LndkOnionMessenger,
+    triggered::Trigger,
+) {
+    let (shutdown, listener) = triggered::trigger();
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(lnd_cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(lnd_macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(address, creds);
+
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+    };
+
+    let lndk_cfg = lndk::Cfg {
+        lnd: lnd_cfg,
+        signals,
+    };
+
+    // Make sure lndk successfully sends the invoice_request.
+    let handler = Arc::new(lndk::OfferHandler::new());
+    let messenger = lndk::LndkOnionMessenger::new();
+
+    let log_dir = Some(
+        lndk_dir
+            .join(format!("lndk-logs.txt"))
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    setup_logger(None, log_dir).unwrap();
+
+    return (lndk_cfg, handler, messenger, shutdown);
 }
 
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
