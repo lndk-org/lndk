@@ -11,7 +11,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::onion_messenger::MessengerUtilities;
-use lndk::{setup_logger, LifecycleSignals, PayOfferParams};
+use lndk::{setup_logger, LifecycleSignals, OfferHandler, PayOfferParams};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -337,73 +337,10 @@ async fn test_lndk_pay_offer() {
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
-    // Here we'll produce a little network of channels:
-    //
-    // ldk1 <- ldk2 <- lnd
-    //
-    // ldk1 will be the offer creator, which will build a blinded route from ldk2 to ldk1.
-    let (pubkey, addr) = ldk1.get_node_info();
-    let (pubkey_2, addr_2) = ldk2.get_node_info();
-    let lnd_info = lnd.get_info().await;
-    let lnd_pubkey = PublicKey::from_str(&lnd_info.identity_pubkey).unwrap();
+    let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, &mut lnd, &bitcoind).await;
 
-    ldk1.connect_to_peer(pubkey_2, addr_2).await.unwrap();
-    lnd.connect_to_peer(pubkey_2, addr_2).await;
-
-    let ldk2_fund_addr = ldk2.bitcoind_client.get_new_address().await;
-    let lnd_fund_addr = lnd.new_address().await.address;
-
-    // We need to convert funding addresses to the form that the bitcoincore_rpc library recognizes.
-    let ldk2_addr_string = ldk2_fund_addr.to_string();
-    let ldk2_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
-        .unwrap()
-        .require_network(RpcNetwork::Regtest)
-        .unwrap();
-    let lnd_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&lnd_fund_addr)
-        .unwrap()
-        .require_network(RpcNetwork::Regtest)
-        .unwrap();
-    let lnd_network_addr = lnd
-        .address
-        .replace("localhost", "127.0.0.1")
-        .replace("https://", "");
-
-    // Fund both of these nodes, open the channels, and synchronize the network.
-    bitcoind
-        .node
-        .client
-        .generate_to_address(6, &lnd_addr)
-        .unwrap();
-
-    lnd.wait_for_chain_sync().await;
-
-    ldk2.open_channel(pubkey, addr, 200000, 0, false)
-        .await
-        .unwrap();
-
-    lnd.wait_for_graph_sync().await;
-
-    ldk2.open_channel(
-        lnd_pubkey,
-        SocketAddr::from_str(&lnd_network_addr).unwrap(),
-        200000,
-        10000000,
-        true,
-    )
-    .await
-    .unwrap();
-
-    lnd.wait_for_graph_sync().await;
-
-    bitcoind
-        .node
-        .client
-        .generate_to_address(20, &ldk2_addr)
-        .unwrap();
-
-    lnd.wait_for_chain_sync().await;
-
-    let path_pubkeys = vec![pubkey_2, pubkey];
+    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
     let offer = ldk1
         .create_offer(
@@ -441,7 +378,8 @@ async fn test_lndk_pay_offer() {
     let blinded_path = offer.paths()[0].clone();
     let secp_ctx = Secp256k1::new();
     let reply_path =
-        BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
+        BlindedPath::new_for_message(&[ldk2_pubkey, lnd_pubkey], &messenger_utils, &secp_ctx)
+            .unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
     let handler = Arc::new(lndk::OfferHandler::new());
