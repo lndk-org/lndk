@@ -353,25 +353,8 @@ async fn test_lndk_pay_offer() {
         .await
         .expect("should create offer");
 
-    let (shutdown, listener) = triggered::trigger();
-    let creds = validate_lnd_creds(
-        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
-        None,
-        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
-        None,
-    )
-    .unwrap();
-    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
-
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-    };
-
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg,
-        signals,
-    };
+    let (lndk_cfg, handler, messenger, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
     let messenger_utils = MessengerUtilities::new();
     let client = lnd.client.clone().unwrap();
@@ -381,9 +364,6 @@ async fn test_lndk_pay_offer() {
         BlindedPath::new_for_message(&[ldk2_pubkey, lnd_pubkey], &messenger_utils, &secp_ctx)
             .unwrap();
 
-    // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::new());
-    let messenger = lndk::LndkOnionMessenger::new();
     let pay_cfg = PayOfferParams {
         offer,
         amount: Some(20_000),
@@ -392,14 +372,6 @@ async fn test_lndk_pay_offer() {
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: Some(reply_path),
     };
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
-    setup_logger(None, log_dir).unwrap();
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
