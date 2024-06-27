@@ -15,7 +15,7 @@ use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
 use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
-use log::error;
+use log::{debug, error};
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -124,7 +124,7 @@ impl OfferHandler {
         let invoice_request = self
             .create_invoice_request(
                 cfg.client.clone(),
-                cfg.offer,
+                cfg.offer.clone(),
                 vec![],
                 cfg.network,
                 validated_amount,
@@ -141,8 +141,19 @@ impl OfferHandler {
                 .into_inner();
 
             let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-            cfg.reply_path = Some(self.create_reply_path(cfg.client.clone(), pubkey).await?)
+            cfg.reply_path = Some(
+                self.create_reply_path(cfg.client.clone(), pubkey, cfg.offer.signing_pubkey())
+                    .await?,
+            )
         };
+
+        if let Some(ref reply_path) = cfg.reply_path {
+            debug!(
+                "In invoice request, we chose {} as the introduction node of the reply path",
+                reply_path.introduction_node_id
+            );
+        };
+
         let contents = OffersMessage::InvoiceRequest(invoice_request);
         let pending_message = PendingOnionMessage {
             contents,
@@ -218,6 +229,7 @@ impl OfferHandler {
         &self,
         mut connector: impl PeerConnector + std::marker::Send + 'static,
         node_id: PublicKey,
+        offer_node_id: PublicKey,
     ) -> Result<BlindedPath, OfferError<Secp256k1Error>> {
         // Find an introduction node for our blinded path.
         let current_peers = connector.list_peers().await.map_err(|e| {
@@ -225,16 +237,30 @@ impl OfferHandler {
             OfferError::ListPeersFailure(e)
         })?;
 
+        let secp_ctx = Secp256k1::new();
+        // If we're connected to the node we're trying to pay, then we don't need to create a
+        // blinded path.
+        for peer in current_peers.peers.clone() {
+            let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+            if pubkey == offer_node_id {
+                return BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
+                    .map_err(|_| {
+                        error!("Could not create blinded path.");
+                        OfferError::BuildBlindedPathFailure
+                    });
+            }
+        }
+
         let mut intro_node = None;
         for peer in current_peers.peers {
             let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
             let onion_support = features_support_onion_messages(&peer.features);
+            // We don't want to make the node we're trying to pay the introduction node.
             if onion_support {
                 intro_node = Some(pubkey);
             }
         }
 
-        let secp_ctx = Secp256k1::new();
         if intro_node.is_none() {
             Ok(
                 BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
@@ -262,6 +288,11 @@ impl OfferHandler {
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
         params: PayInvoiceParams,
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
+        debug!(
+            "Attempting to pay invoice with introduction node {}",
+            params.path.introduction_node_id
+        );
+
         let resp = payer
             .query_routes(
                 params.path,
@@ -611,8 +642,12 @@ mod tests {
             .unwrap()
     }
 
-    fn get_pubkey() -> String {
-        "0313ba7ccbd754c117962b9afab6c2870eb3ef43f364a9f6c43d0fabb4553776ba".to_string()
+    fn get_pubkey() -> Vec<String> {
+        let pubkey1 =
+            "0313ba7ccbd754c117962b9afab6c2870eb3ef43f364a9f6c43d0fabb4553776ba".to_string();
+        let pubkey2 =
+            "03b060a3b572ab060532fbe49506fe25b5957195733788aab01ab3c0f40bb52602".to_string();
+        vec![pubkey1, pubkey2]
     }
 
     fn get_invoice_request(offer: Offer, amount: u64) -> InvoiceRequest {
@@ -638,7 +673,7 @@ mod tests {
         let entropy_source = MessengerUtilities::new();
         let secp_ctx = Secp256k1::new();
         BlindedPath::new_for_message(
-            &[PublicKey::from_str(&get_pubkey()).unwrap()],
+            &[PublicKey::from_str(&get_pubkey()[0]).unwrap()],
             &entropy_source,
             &secp_ctx,
         )
@@ -683,7 +718,7 @@ mod tests {
         let mut signer_mock = MockTestBolt12Signer::new();
 
         signer_mock.expect_derive_key().returning(|_| {
-            let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+            let pubkey = PublicKey::from_str(&get_pubkey()[0]).unwrap();
             Ok(pubkey.serialize().to_vec())
         });
 
@@ -731,7 +766,7 @@ mod tests {
         let mut signer_mock = MockTestBolt12Signer::new();
 
         signer_mock.expect_derive_key().returning(|_| {
-            Ok(PublicKey::from_str(&get_pubkey())
+            Ok(PublicKey::from_str(&get_pubkey()[0])
                 .unwrap()
                 .serialize()
                 .to_vec())
@@ -799,7 +834,7 @@ mod tests {
             .expect_connect_peer()
             .returning(|_, _| Ok(()));
 
-        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        let pubkey = PublicKey::from_str(&get_pubkey()[0]).unwrap();
         assert!(connect_to_peer(connector_mock, pubkey).await.is_ok());
     }
 
@@ -808,7 +843,7 @@ mod tests {
         let mut connector_mock = MockTestPeerConnector::new();
         connector_mock.expect_list_peers().returning(|| {
             let peer = tonic_lnd::lnrpc::Peer {
-                pub_key: get_pubkey(),
+                pub_key: get_pubkey()[0].clone(),
                 ..Default::default()
             };
 
@@ -831,7 +866,7 @@ mod tests {
             Ok(Some(node))
         });
 
-        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        let pubkey = PublicKey::from_str(&get_pubkey()[0]).unwrap();
         assert!(connect_to_peer(connector_mock, pubkey).await.is_ok());
     }
 
@@ -861,7 +896,7 @@ mod tests {
             .expect_connect_peer()
             .returning(|_, _| Err(Status::unknown("")));
 
-        let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
+        let pubkey = PublicKey::from_str(&get_pubkey()[0]).unwrap();
         assert!(connect_to_peer(connector_mock, pubkey).await.is_err());
     }
 
@@ -877,17 +912,18 @@ mod tests {
             feature_entry.insert(38, feature);
 
             let peer = tonic_lnd::lnrpc::Peer {
-                pub_key: get_pubkey(),
+                pub_key: get_pubkey()[0].clone(),
                 features: feature_entry,
                 ..Default::default()
             };
             Ok(ListPeersResponse { peers: vec![peer] })
         });
 
-        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_ok())
     }
@@ -901,10 +937,11 @@ mod tests {
             .expect_list_peers()
             .returning(|| Ok(ListPeersResponse { peers: vec![] }));
 
-        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_ok())
     }
@@ -917,10 +954,11 @@ mod tests {
             .expect_list_peers()
             .returning(|| Err(Status::unknown("unknown error")));
 
-        let receiver_node_id = PublicKey::from_str(&get_pubkey()).unwrap();
+        let receiver_node_id = PublicKey::from_str(&get_pubkey()[0]).unwrap();
+        let offer_node_id = PublicKey::from_str(&get_pubkey()[1]).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, offer_node_id)
             .await
             .is_err())
     }
