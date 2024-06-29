@@ -13,7 +13,7 @@ pub mod lndkrpc {
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
-use crate::lndk_offers::{OfferError, PayInvoiceParams};
+use crate::lndk_offers::{OfferError, SendPaymentParams};
 use crate::onion_messenger::MessengerUtilities;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
@@ -214,15 +214,26 @@ impl Default for LndkOnionMessenger {
 #[allow(dead_code)]
 enum OfferState {
     OfferAdded,
-    InvoiceRequestSent,
     InvoiceReceived,
-    InvoicePaymentDispatched,
-    InvoicePaid,
+}
+
+#[allow(dead_code)]
+enum RequestInvoiceState {
+    Added,
+    RequestSent,
+}
+
+#[allow(dead_code)]
+enum PayingInvoiceState {
+    Added,
+    Dispatched,
 }
 
 pub struct OfferHandler {
     active_offers: Mutex<HashMap<String, OfferState>>,
-    active_invoices: Mutex<Vec<Bolt12Invoice>>,
+    active_requesting_invoices: Mutex<HashMap<String, RequestInvoiceState>>,
+    active_requested_invoices: Mutex<Vec<Bolt12Invoice>>,
+    active_paying_invoices: Mutex<HashMap<String, PayingInvoiceState>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
@@ -241,6 +252,25 @@ pub struct PayOfferParams {
     pub reply_path: Option<BlindedPath>,
 }
 
+#[derive(Clone)]
+pub struct GetInvoiceParams {
+    pub offer: Offer,
+    pub amount: Option<u64>,
+    pub network: Network,
+    pub client: Client,
+    /// The destination the offer creator provided, which we will use to send the invoice request.
+    pub destination: Destination,
+    /// The path we will send back to the offer creator, so it knows where to send back the
+    /// invoice.
+    pub reply_path: Option<BlindedPath>,
+}
+
+#[derive(Clone)]
+pub struct PayInvoiceParams {
+    pub invoice: Bolt12Invoice,
+    pub client: Client,
+}
+
 impl OfferHandler {
     pub fn new() -> Self {
         let messenger_utils = MessengerUtilities::new();
@@ -249,11 +279,78 @@ impl OfferHandler {
 
         OfferHandler {
             active_offers: Mutex::new(HashMap::new()),
-            active_invoices: Mutex::new(Vec::new()),
+            active_requesting_invoices: Mutex::new(HashMap::new()),
+            active_requested_invoices: Mutex::new(Vec::new()),
+            active_paying_invoices: Mutex::new(HashMap::new()),
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils,
             expanded_key,
         }
+    }
+
+    pub async fn get_invoice(
+        &self,
+        cfg: GetInvoiceParams,
+    ) -> Result<Bolt12Invoice, OfferError<Secp256k1Error>> {
+        let offer_id = cfg.offer.clone().to_string();
+        self.send_invoice_request(cfg).await?;
+
+        let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
+            Ok(invoice) => {
+                let mut active_requesting_invoices =
+                    self.active_requesting_invoices.lock().unwrap();
+                active_requesting_invoices.remove(&offer_id);
+                invoice
+            }
+            Err(_) => {
+                error!("Did not receive invoice in 100 seconds.");
+                return Err(OfferError::InvoiceTimeout);
+            }
+        };
+
+        Ok(invoice)
+    }
+
+    pub async fn pay_invoice(
+        &self,
+        cfg: PayInvoiceParams,
+    ) -> Result<Payment, OfferError<Secp256k1Error>> {
+        let client_clone = cfg.client.clone();
+        let invoice_amount = cfg.invoice.amount_msats();
+        let payment_hash = cfg.invoice.payment_hash();
+        let payment_id = hex::encode(payment_hash.0);
+
+        {
+            let mut active_paying_invoices = self.active_paying_invoices.lock().unwrap();
+            if active_paying_invoices.contains_key(&payment_id.clone()) {
+                return Err(OfferError::AlreadyProcessing);
+            }
+            active_paying_invoices.insert(payment_id.clone(), PayingInvoiceState::Added);
+        }
+
+        let path_info = cfg.invoice.payment_paths()[0].clone();
+        let params = SendPaymentParams {
+            path: path_info.1,
+            cltv_expiry_delta: path_info.0.cltv_expiry_delta,
+            fee_base_msat: path_info.0.fee_base_msat,
+            fee_ppm: path_info.0.fee_proportional_millionths,
+            payment_hash: payment_hash.0,
+            msats: invoice_amount,
+            payment_id: payment_id.clone(),
+        };
+
+        self.send_payment(client_clone, params)
+            .await
+            .map(|payment| {
+                let mut active_paying_invoices = self.active_paying_invoices.lock().unwrap();
+                active_paying_invoices.remove(&payment_id);
+                payment
+            })
+            .map_err(|e| {
+                let mut active_paying_invoices = self.active_paying_invoices.lock().unwrap();
+                active_paying_invoices.remove(&payment_id);
+                e
+            })
     }
 
     /// Adds an offer to be paid with the amount specified. May only be called once for a single
@@ -264,60 +361,60 @@ impl OfferHandler {
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
-            let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.remove(&offer_id.clone());
-            e
-        })?;
 
-        let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
-            Ok(invoice) => invoice,
-            Err(_) => {
-                error!("Did not receive invoice in 100 seconds.");
-                let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id.clone());
-                return Err(OfferError::InvoiceTimeout);
-            }
-        };
         {
             let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
+            if active_offers.contains_key(&offer_id.clone()) {
+                return Err(OfferError::AlreadyProcessing);
+            }
+            active_offers.insert(cfg.offer.to_string().clone(), OfferState::OfferAdded);
         }
 
-        let payment_hash = invoice.payment_hash();
-        let path_info = invoice.payment_paths()[0].clone();
-
-        let params = PayInvoiceParams {
-            path: path_info.1,
-            cltv_expiry_delta: path_info.0.cltv_expiry_delta,
-            fee_base_msat: path_info.0.fee_base_msat,
-            fee_ppm: path_info.0.fee_proportional_millionths,
-            payment_hash: payment_hash.0,
-            msats: validated_amount,
-            offer_id: offer_id.clone(),
-        };
-
-        self.pay_invoice(client_clone, params)
+        let invoice = self
+            .get_invoice(GetInvoiceParams {
+                offer: cfg.offer.clone(),
+                amount: cfg.amount,
+                network: cfg.network,
+                client: cfg.client,
+                destination: cfg.destination,
+                reply_path: cfg.reply_path,
+            })
             .await
-            .map(|payment| {
+            .map(|invoice| {
                 let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id);
-                payment
+                active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
+                invoice
             })
             .map_err(|e| {
                 let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id);
+                active_offers.remove(&offer_id.clone());
                 e
-            })
+            })?;
+
+        self.pay_invoice(PayInvoiceParams {
+            invoice,
+            client: client_clone.clone(),
+        })
+        .await
+        .map(|payment| {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.remove(&offer_id);
+            payment
+        })
+        .map_err(|e| {
+            let mut active_offers = self.active_offers.lock().unwrap();
+            active_offers.remove(&offer_id);
+            e
+        })
     }
 
     /// wait_for_invoice waits for the offer creator to respond with an invoice.
     async fn wait_for_invoice(&self) -> Bolt12Invoice {
         loop {
             {
-                let mut active_invoices = self.active_invoices.lock().unwrap();
-                if active_invoices.len() == 1 {
-                    return active_invoices.pop().unwrap();
+                let mut active_requested_invoices = self.active_requested_invoices.lock().unwrap();
+                if active_requested_invoices.len() == 1 {
+                    return active_requested_invoices.pop().unwrap();
                 }
             }
             sleep(Duration::from_secs(2)).await;
@@ -347,8 +444,9 @@ impl OffersMessageHandler for OfferHandler {
                     // for this payment. Right now it's safe to let this be because we won't try to
                     // pay a second invoice (if it comes through).
                     Ok(_payment_id) => {
-                        let mut active_invoices = self.active_invoices.lock().unwrap();
-                        active_invoices.push(invoice.clone());
+                        let mut active_requested_invoices =
+                            self.active_requested_invoices.lock().unwrap();
+                        active_requested_invoices.push(invoice.clone());
                         Some(OffersMessage::Invoice(invoice))
                     }
                     Err(()) => Some(OffersMessage::InvoiceError(InvoiceError::from_string(
