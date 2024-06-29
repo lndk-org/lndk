@@ -23,6 +23,7 @@ use home::home_dir;
 use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
+use lightning::ln::msgs::DecodeError;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::invoice_error::InvoiceError;
@@ -485,6 +486,23 @@ impl OffersMessageHandler for OfferHandler {
 
     fn release_pending_messages(&self) -> Vec<PendingOnionMessage<OffersMessage>> {
         core::mem::take(&mut self.pending_messages.lock().unwrap())
+    }
+}
+
+pub struct Bolt12InvoiceString(pub String);
+
+impl TryFrom<Bolt12InvoiceString> for Bolt12Invoice {
+    type Error = DecodeError;
+
+    fn try_from(s: Bolt12InvoiceString) -> Result<Self, Self::Error> {
+        let bytes: Vec<u8> = hex::decode(s.0).unwrap();
+        Self::try_from(bytes).map_err(|_| DecodeError::InvalidValue)
+    }
+}
+
+impl From<String> for Bolt12InvoiceString {
+    fn from(s: String) -> Self {
+        Bolt12InvoiceString(s)
     }
 }
 
