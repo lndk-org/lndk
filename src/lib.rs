@@ -300,6 +300,19 @@ impl OfferHandler {
     /// offer.
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
+        let (invoice, validated_amount, payment_id) = self.get_invoice(cfg).await?;
+
+        self.pay_invoice(client_clone, validated_amount, &invoice, payment_id)
+            .await
+    }
+
+    /// Sends an invoice request and waits for an invoice to be sent back to us.
+    /// Reminder that if this method returns an error after create_invoice_request is called, we
+    /// *must* remove the payment_id from self.active_payments.
+    pub(crate) async fn get_invoice(
+        &self,
+        cfg: PayOfferParams,
+    ) -> Result<(Bolt12Invoice, u64, PaymentId), OfferError> {
         let (invoice_request, payment_id, validated_amount) = self
             .create_invoice_request(
                 cfg.client.clone(),
@@ -340,6 +353,19 @@ impl OfferHandler {
                 .and_modify(|entry| entry.state = PaymentState::InvoiceReceived);
         }
 
+        Ok((invoice, validated_amount, payment_id))
+    }
+
+    /// Sends an invoice request and waits for an invoice to be sent back to us.
+    /// Reminder that if this method returns an error after create_invoice_request is called, we
+    /// *must* remove the payment_id from self.active_payments.
+    pub(crate) async fn pay_invoice(
+        &self,
+        client: Client,
+        amount: u64,
+        invoice: &Bolt12Invoice,
+        payment_id: PaymentId,
+    ) -> Result<Payment, OfferError> {
         let payment_hash = invoice.payment_hash();
         let path_info = invoice.payment_paths()[0].clone();
 
@@ -349,7 +375,7 @@ impl OfferHandler {
             fee_base_msat: path_info.0.fee_base_msat,
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
-            msats: validated_amount,
+            msats: amount,
             payment_id,
         };
 
@@ -357,8 +383,7 @@ impl OfferHandler {
             IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
                 let get_chan_info_request = ChanInfoRequest { chan_id: scid };
-                let chan_info = cfg
-                    .client
+                let chan_info = client
                     .clone()
                     .lightning_read_only()
                     .get_chan_info(get_chan_info_request)
@@ -376,7 +401,7 @@ impl OfferHandler {
             intro_node_id
         );
 
-        self.send_payment(client_clone, params)
+        self.send_payment(client, params)
             .await
             .map(|payment| {
                 let mut active_payments = self.active_payments.lock().unwrap();
