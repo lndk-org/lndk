@@ -1,12 +1,16 @@
 use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
 use crate::lndk_offers::get_destination;
+use crate::lndkrpc::{PayInvoiceRequest, PayInvoiceResponse};
 use crate::{
-    lndkrpc, OfferError, OfferHandler, PayOfferParams, TLS_CERT_FILENAME, TLS_KEY_FILENAME,
+    lndkrpc, Bolt12InvoiceString, GetInvoiceParams, OfferError, OfferHandler, PayInvoiceParams,
+    PayOfferParams, TLS_CERT_FILENAME, TLS_KEY_FILENAME,
 };
 use bitcoin::secp256k1::PublicKey;
+use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::offer::Offer;
+use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
-use lndkrpc::{PayOfferRequest, PayOfferResponse};
+use lndkrpc::{GetInvoiceRequest, GetInvoiceResponse, PayOfferRequest, PayOfferResponse};
 use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
 use std::error::Error;
 use std::fmt::Display;
@@ -120,6 +124,144 @@ impl Offers for LNDKServer {
 
         let reply = PayOfferResponse {
             payment_preimage: payment.payment_preimage,
+        };
+
+        Ok(Response::new(reply))
+    }
+
+    async fn get_invoice(
+        &self,
+        request: Request<GetInvoiceRequest>,
+    ) -> Result<Response<GetInvoiceResponse>, Status> {
+        log::info!("Received a request: {:?}", request);
+
+        let metadata = request.metadata();
+        let macaroon = check_auth_metadata(metadata)?;
+        let creds = Creds::String {
+            cert: self.lnd_cert.clone(),
+            macaroon,
+        };
+        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let mut client = get_lnd_client(lnd_cfg)
+            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+
+        let inner_request = request.get_ref();
+        let offer = Offer::from_str(&inner_request.offer).map_err(|e| {
+            Status::invalid_argument(format!(
+                "The provided offer was invalid. Please provide a valid offer in bech32 format,
+                i.e. starting with 'lno'. Error: {e:?}"
+            ))
+        })?;
+
+        let destination = get_destination(&offer).await;
+        let reply_path = match self
+            .offer_handler
+            .create_reply_path(client.clone(), self.node_id)
+            .await
+        {
+            Ok(reply_path) => reply_path,
+            Err(e) => return Err(Status::internal(format!("Internal error: {e}"))),
+        };
+
+        let info = client
+            .lightning()
+            .get_info(GetInfoRequest {})
+            .await
+            .expect("failed to get info")
+            .into_inner();
+        let network = get_network(info)
+            .await
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
+
+        let cfg = GetInvoiceParams {
+            offer,
+            amount: inner_request.amount,
+            network,
+            client,
+            destination,
+            reply_path: Some(reply_path),
+        };
+
+        let invoice = match self.offer_handler.get_invoice(cfg).await {
+            Ok(invoice) => {
+                log::info!("Invoice request succeeded.");
+                invoice
+            }
+            Err(e) => match e {
+                OfferError::AlreadyProcessing => {
+                    return Err(Status::already_exists(format!("{e}")))
+                }
+                OfferError::InvalidAmount(e) => {
+                    return Err(Status::invalid_argument(e.to_string()))
+                }
+                OfferError::InvalidCurrency => {
+                    return Err(Status::invalid_argument(format!("{e}")))
+                }
+                _ => return Err(Status::internal(format!("Internal error: {e}"))),
+            },
+        };
+        let mut buffer = Vec::new();
+        {
+            invoice
+                .write(&mut buffer)
+                .map_err(|e| Status::internal(format!("Error serializing invoice: {e}")))?
+        }
+
+        let reply = GetInvoiceResponse {
+            invoice: hex::encode(buffer),
+        };
+
+        Ok(Response::new(reply))
+    }
+
+    async fn pay_invoice(
+        &self,
+        request: Request<PayInvoiceRequest>,
+    ) -> Result<Response<PayInvoiceResponse>, Status> {
+        log::info!("Received a request: {:?}", request);
+
+        let metadata = request.metadata();
+        let macaroon = check_auth_metadata(metadata)?;
+        let creds = Creds::String {
+            cert: self.lnd_cert.clone(),
+            macaroon,
+        };
+        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let client = get_lnd_client(lnd_cfg)
+            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+
+        let inner_request = request.get_ref();
+        let invoice_string: Bolt12InvoiceString = inner_request.invoice.clone().into();
+        let invoice = Bolt12Invoice::try_from(invoice_string).map_err(|e| {
+            Status::invalid_argument(format!(
+                "The provided invoice was invalid. Please provide a valid invoice in hex format.
+                Error: {e:?}"
+            ))
+        })?;
+
+        let cfg = PayInvoiceParams { invoice, client };
+
+        let invoice = match self.offer_handler.pay_invoice(cfg).await {
+            Ok(invoice) => {
+                log::info!("Invoice paid.");
+                invoice
+            }
+            Err(e) => match e {
+                OfferError::AlreadyProcessing => {
+                    return Err(Status::already_exists(format!("{e}")))
+                }
+                OfferError::InvalidAmount(e) => {
+                    return Err(Status::invalid_argument(e.to_string()))
+                }
+                OfferError::InvalidCurrency => {
+                    return Err(Status::invalid_argument(format!("{e}")))
+                }
+                _ => return Err(Status::internal(format!("Internal error: {e}"))),
+            },
+        };
+
+        let reply = PayInvoiceResponse {
+            payment_preimage: invoice.payment_preimage,
         };
 
         Ok(Response::new(reply))
