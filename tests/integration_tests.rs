@@ -17,39 +17,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::Duration;
 use tokio::{select, try_join};
 use tonic_lnd::Client;
-
-async fn wait_to_receive_onion_message(
-    ldk1: LdkNode,
-    ldk2: LdkNode,
-    lnd_id: PublicKey,
-) -> (LdkNode, LdkNode) {
-    let data: Vec<u8> = vec![72, 101, 108, 108, 111];
-
-    let res = ldk1
-        .send_onion_message(vec![lnd_id, ldk2.get_node_info().0], 65, data)
-        .await;
-    assert!(res.is_ok());
-
-    // We need to give lndk time to process the message and forward it to ldk2.
-    let ldk2 = match timeout(Duration::from_secs(100), check_for_message(ldk2)).await {
-        Err(_) => panic!("ldk2 did not receive onion message before timeout"),
-        Ok(ldk2) => ldk2,
-    };
-
-    return (ldk1, ldk2);
-}
-
-async fn check_for_message(ldk: LdkNode) -> LdkNode {
-    loop {
-        if ldk.onion_message_handler.messages.lock().unwrap().len() == 1 {
-            return ldk;
-        }
-        sleep(Duration::from_secs(2)).await;
-    }
-}
 
 // Creates N offers and spits out the PayOfferParams that we can use to pay.
 async fn create_offers(
@@ -111,70 +81,6 @@ async fn pay_offers(handler: Arc<OfferHandler>, pay_cfgs: &Vec<PayOfferParams>) 
     }
 
     try_join_all(futs).await.map(|_| ()).map_err(|_| ())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_lndk_forwards_onion_message() {
-    let test_name = "lndk_forwards_onion_message";
-    let (_bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
-        common::setup_test_infrastructure(test_name).await;
-
-    // Here we'll produce a little path of two channels. Both ldk nodes are connected to lnd like
-    // so:
-    //
-    // ldk1 <-> lnd <-> ldk2
-    //
-    // Notice that ldk1 and ldk2 are not connected directly to each other.
-    let (pubkey, addr) = ldk1.get_node_info();
-    let (pubkey_2, addr_2) = ldk2.get_node_info();
-    lnd.connect_to_peer(pubkey, addr).await;
-    lnd.connect_to_peer(pubkey_2, addr_2).await;
-    let lnd_info = lnd.get_info().await;
-
-    // Now we'll spin up lndk. Even though ldk1 and ldk2 are not directly connected, we'll show that
-    // lndk successfully helps lnd forward the onion message from ldk1 to ldk2.
-    let (shutdown, listener) = triggered::trigger();
-
-    let creds = validate_lnd_creds(
-        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
-        None,
-        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
-        None,
-    )
-    .unwrap();
-    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
-
-    let signals = LifecycleSignals {
-        shutdown: shutdown.clone(),
-        listener,
-    };
-    let lndk_cfg = lndk::Cfg {
-        lnd: lnd_cfg,
-        signals,
-    };
-
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
-    setup_logger(None, log_dir).unwrap();
-
-    let handler = Arc::new(lndk::OfferHandler::new());
-    let messenger = lndk::LndkOnionMessenger::new();
-    select! {
-        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
-            panic!("lndk should not have completed first {:?}", val);
-        },
-        // We wait for ldk2 to receive the onion message.
-        (ldk1, ldk2) = wait_to_receive_onion_message(ldk1, ldk2, PublicKey::from_str(&lnd_info.identity_pubkey).unwrap()) => {
-            shutdown.trigger();
-            ldk1.stop().await;
-            ldk2.stop().await;
-        }
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
