@@ -15,7 +15,7 @@ use crate::lnd::{
     LndCfg, LndNodeSigner, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER,
     MIN_LND_PRE_RELEASE_VER,
 };
-use crate::lndk_offers::{OfferError, PayInvoiceParams};
+use crate::lndk_offers::{OfferError, SendPaymentParams};
 use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
@@ -300,7 +300,6 @@ impl OfferHandler {
     /// offer.
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
-        let offer_id = cfg.offer.clone().to_string();
         let (invoice_request, payment_id, validated_amount) = self
             .create_invoice_request(
                 cfg.client.clone(),
@@ -344,14 +343,13 @@ impl OfferHandler {
         let payment_hash = invoice.payment_hash();
         let path_info = invoice.payment_paths()[0].clone();
 
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: path_info.1,
             cltv_expiry_delta: path_info.0.cltv_expiry_delta,
             fee_base_msat: path_info.0.fee_base_msat,
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
             msats: validated_amount,
-            offer_id: offer_id.clone(),
             payment_id,
         };
 
@@ -378,7 +376,7 @@ impl OfferHandler {
             intro_node_id
         );
 
-        self.pay_invoice(client_clone, params)
+        self.send_payment(client_clone, params)
             .await
             .map(|payment| {
                 let mut active_payments = self.active_payments.lock().unwrap();

@@ -288,11 +288,11 @@ impl OfferHandler {
         }
     }
 
-    /// pay_invoice tries to pay the provided invoice.
-    pub(crate) async fn pay_invoice(
+    /// send_payment tries to pay the provided invoice using LND.
+    pub(crate) async fn send_payment(
         &self,
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
-        params: PayInvoiceParams,
+        params: SendPaymentParams,
     ) -> Result<Payment, OfferError> {
         let resp = payer
             .query_routes(
@@ -325,14 +325,13 @@ impl OfferHandler {
     }
 }
 
-pub struct PayInvoiceParams {
+pub struct SendPaymentParams {
     pub path: BlindedPath,
     pub cltv_expiry_delta: u16,
     pub fee_base_msat: u32,
     pub fee_ppm: u32,
     pub payment_hash: [u8; 32],
     pub msats: u64,
-    pub offer_id: String,
     pub payment_id: PaymentId,
 }
 
@@ -1014,7 +1013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pay_invoice() {
+    async fn test_send_payment() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
@@ -1043,21 +1042,20 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_ok());
+        assert!(handler.send_payment(payer_mock, params).await.is_ok());
     }
 
     #[tokio::test]
-    async fn test_pay_invoice_query_error() {
+    async fn test_send_payment_query_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock
@@ -1068,21 +1066,20 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
+        assert!(handler.send_payment(payer_mock, params).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_pay_invoice_send_error() {
+    async fn test_send_payment_send_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
@@ -1103,16 +1100,15 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
+        assert!(handler.send_payment(payer_mock, params).await.is_err());
     }
 }
