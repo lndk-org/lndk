@@ -13,7 +13,7 @@ pub mod lndkrpc {
 use crate::lnd::{
     features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
 };
-use crate::lndk_offers::{OfferError, PayInvoiceParams};
+use crate::lndk_offers::{OfferError, SendPaymentParams};
 use crate::onion_messenger::MessengerUtilities;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
@@ -272,7 +272,6 @@ impl OfferHandler {
         cfg: PayOfferParams,
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
-        let offer_id = cfg.offer.clone().to_string();
         let (invoice_request, payment_id, validated_amount) = self
             .create_invoice_request(
                 cfg.client.clone(),
@@ -316,18 +315,17 @@ impl OfferHandler {
         let payment_hash = invoice.payment_hash();
         let path_info = invoice.payment_paths()[0].clone();
 
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: path_info.1,
             cltv_expiry_delta: path_info.0.cltv_expiry_delta,
             fee_base_msat: path_info.0.fee_base_msat,
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
             msats: validated_amount,
-            offer_id: offer_id.clone(),
             payment_id,
         };
 
-        self.pay_invoice(client_clone, params)
+        self.send_payment(client_clone, params)
             .await
             .map(|payment| {
                 let mut active_payments = self.active_payments.lock().unwrap();
