@@ -18,14 +18,20 @@ A cli for interacting with lndk
 Usage: lndk-cli [OPTIONS] <COMMAND>
 
 Commands:
-  decode     Decodes a bech32-encoded offer string into a BOLT 12 offer
-  pay-offer  PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string
-  help       Print this message or the help of the given subcommand(s)
+  decode-offer    Decodes a bech32-encoded offer string into a BOLT 12 offer
+  decode-invoice  Decodes a bech32-encoded invoice string into a BOLT 12 invoice
+  pay-offer       PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string
+  get-invoice     GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string
+  pay-invoice     PayInvoice pays a hex-encoded BOLT12 invoice
+  help            Print this message or the help of the given subcommand(s)
 
 Options:
-  -n, --network <NETWORK>              Global variables [default: regtest]          
-  -m, --macaroon-path <MACAROON_PATH>           
-      --macaroon-hex <MACAROON_HEX>    
+  -n, --network <NETWORK>              Global variables [default: regtest]
+  -m, --macaroon-path <MACAROON_PATH>  
+      --macaroon-hex <MACAROON_HEX>    A hex-encoded macaroon string to pass in directly to the cli
+      --cert-pem <CERT_PEM>            This option is for passing a pem-encoded TLS certificate string to establish a connection with the LNDK server. If this isn't set, the cli will look for the TLS file in the default location (~.lndk)
+      --grpc-host <GRPC_HOST>          [default: https://127.0.0.1]
+      --grpc-port <GRPC_PORT>          [default: 7000]
   -h, --help                           Print help
 ```
 
