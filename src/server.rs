@@ -5,15 +5,16 @@ use crate::{
     TLS_KEY_FILENAME,
 };
 use bitcoin::secp256k1::PublicKey;
+use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
-use lightning::offers::invoice::Bolt12Invoice;
+use lightning::offers::invoice::{BlindedPayInfo, Bolt12Invoice};
 use lightning::offers::offer::Offer;
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
 use lndkrpc::{
-    GetInvoiceRequest, GetInvoiceResponse, PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest,
-    PayOfferResponse,
+    Bolt12InvoiceContents, FeatureBit, GetInvoiceRequest, GetInvoiceResponse, PayInvoiceRequest,
+    PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash, PaymentPaths,
 };
 use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
 use std::error::Error;
@@ -211,15 +212,9 @@ impl Offers for LNDKServer {
             active_payments.remove(&payment_id);
         }
 
-        let mut buffer = Vec::new();
-        {
-            invoice
-                .write(&mut buffer)
-                .map_err(|e| Status::internal(format!("Error serializing invoice: {e}")))?
-        }
-
-        let reply = GetInvoiceResponse {
-            invoice: hex::encode(buffer),
+        let reply: GetInvoiceResponse = GetInvoiceResponse {
+            invoice_hex_str: encode_invoice_as_hex(&invoice)?,
+            invoice_contents: Some(generate_bolt12_invoice_contents(&invoice)),
         };
 
         Ok(Response::new(reply))
@@ -353,4 +348,138 @@ pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
     let key = std::fs::read_to_string(data_dir.join(TLS_KEY_FILENAME))?;
 
     Ok(Identity::from_pem(cert, key))
+}
+
+fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12InvoiceContents {
+    Bolt12InvoiceContents {
+        chain: invoice.chain().to_string(),
+        quantity: invoice.quantity(),
+        amount_msats: invoice.amount_msats(),
+        description: invoice
+            .description()
+            .map(|description| description.to_string()),
+        payment_hash: Some(PaymentHash {
+            hash: invoice.payment_hash().encode(),
+        }),
+        created_at: invoice.created_at().as_secs() as i64,
+        relative_expiry: invoice.relative_expiry().as_secs(),
+        node_id: Some(convert_public_key(invoice.signing_pubkey())),
+        signature: invoice.signature().to_string(),
+        payment_paths: extract_payment_paths(invoice),
+        features: convert_features(invoice.invoice_features().clone().encode()),
+    }
+}
+
+fn encode_invoice_as_hex(invoice: &Bolt12Invoice) -> Result<String, Status> {
+    let mut buffer = Vec::new();
+    invoice
+        .write(&mut buffer)
+        .map_err(|e| Status::internal(format!("Error serializing invoice: {e}")))?;
+    Ok(hex::encode(buffer))
+}
+
+fn extract_payment_paths(invoice: &Bolt12Invoice) -> Vec<PaymentPaths> {
+    invoice
+        .payment_paths()
+        .iter()
+        .map(|(blinded_pay_info, blinded_path)| PaymentPaths {
+            blinded_pay_info: Some(convert_blinded_pay_info(blinded_pay_info)),
+            blinded_path: Some(convert_blinded_path(blinded_path)),
+        })
+        .collect()
+}
+
+fn convert_public_key(native_pub_key: PublicKey) -> lndkrpc::PublicKey {
+    let pub_key_bytes = native_pub_key.encode();
+    lndkrpc::PublicKey { key: pub_key_bytes }
+}
+
+// Conversion function for FeatureBit.
+// TODO: Converting the FeatureBits doesn't work quite properly right now.
+fn feature_bit_from_id(feature_id: u8) -> Option<FeatureBit> {
+    match feature_id {
+        0 => Some(FeatureBit::DatalossProtectOpt),
+        1 => Some(FeatureBit::DatalossProtectOpt),
+        3 => Some(FeatureBit::InitialRouingSync),
+        4 => Some(FeatureBit::UpfrontShutdownScriptReq),
+        5 => Some(FeatureBit::UpfrontShutdownScriptOpt),
+        6 => Some(FeatureBit::GossipQueriesReq),
+        7 => Some(FeatureBit::GossipQueriesOpt),
+        8 => Some(FeatureBit::TlvOnionReq),
+        9 => Some(FeatureBit::TlvOnionOpt),
+        10 => Some(FeatureBit::ExtGossipQueriesReq),
+        11 => Some(FeatureBit::ExtGossipQueriesOpt),
+        12 => Some(FeatureBit::StaticRemoteKeyReq),
+        13 => Some(FeatureBit::StaticRemoteKeyOpt),
+        14 => Some(FeatureBit::PaymentAddrReq),
+        15 => Some(FeatureBit::PaymentAddrOpt),
+        16 => Some(FeatureBit::MppReq),
+        17 => Some(FeatureBit::MppOpt),
+        18 => Some(FeatureBit::WumboChannelsReq),
+        19 => Some(FeatureBit::WumboChannelsOpt),
+        20 => Some(FeatureBit::AnchorsReq),
+        21 => Some(FeatureBit::AnchorsOpt),
+        22 => Some(FeatureBit::AnchorsZeroFeeHtlcReq),
+        23 => Some(FeatureBit::AnchorsZeroFeeHtlcOpt),
+        30 => Some(FeatureBit::AmpReq),
+        31 => Some(FeatureBit::AmpOpt),
+        _ => None,
+    }
+}
+
+// Conversion function for features.
+// TODO: Converting the FeatureBits doesn't work quite properly right now.
+fn convert_features(features: Vec<u8>) -> Vec<i32> {
+    features
+        .iter()
+        .filter_map(|&feature_id| feature_bit_from_id(feature_id))
+        .map(|feature_bit| feature_bit as i32) // Cast enum variant to i32
+        .collect()
+}
+
+fn convert_blinded_pay_info(native_info: &BlindedPayInfo) -> lndkrpc::BlindedPayInfo {
+    lndkrpc::BlindedPayInfo {
+        fee_base_msat: native_info.fee_base_msat,
+        fee_proportional_millionths: native_info.fee_proportional_millionths,
+        cltv_expiry_delta: native_info.cltv_expiry_delta as u32,
+        htlc_minimum_msat: native_info.htlc_minimum_msat,
+        htlc_maximum_msat: native_info.htlc_maximum_msat,
+        features: convert_features(native_info.features.clone().encode()),
+    }
+}
+
+fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
+    let introduction_node = match native_info.introduction_node {
+        IntroductionNode::NodeId(pubkey) => lndkrpc::IntroductionNode {
+            node_id: Some(convert_public_key(pubkey)),
+            directed_short_channel_id: None,
+        },
+        IntroductionNode::DirectedShortChannelId(direction, scid) => {
+            let rpc_direction = match direction {
+                Direction::NodeOne => lndkrpc::Direction::NodeOne,
+                Direction::NodeTwo => lndkrpc::Direction::NodeTwo,
+            };
+
+            lndkrpc::IntroductionNode {
+                node_id: None,
+                directed_short_channel_id: Some(lndkrpc::DirectedShortChannelId {
+                    direction: rpc_direction.into(),
+                    scid,
+                }),
+            }
+        }
+    };
+
+    lndkrpc::BlindedPath {
+        introduction_node: Some(introduction_node),
+        blinding_point: Some(convert_public_key(native_info.blinding_point)),
+        blinded_hops: native_info
+            .blinded_hops
+            .iter()
+            .map(|hop| lndkrpc::BlindedHop {
+                blinded_node_id: Some(convert_public_key(hop.blinded_node_id)),
+                encrypted_payload: hop.encrypted_payload.clone(),
+            })
+            .collect(),
+    }
 }

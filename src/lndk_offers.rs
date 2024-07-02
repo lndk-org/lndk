@@ -653,7 +653,8 @@ impl InvoicePayer for Client {
     }
 }
 
-async fn get_node_id(
+// get_node_id finds an introduction node from the scid and direction provided by a blinded path.
+pub(crate) async fn get_node_id(
     client: Client,
     scid: u64,
     direction: Direction,
