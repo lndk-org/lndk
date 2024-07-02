@@ -3,6 +3,8 @@ package lndkrpc;
 
 service Offers {
     rpc PayOffer (PayOfferRequest) returns (PayOfferResponse);
+    rpc GetInvoice (GetInvoiceRequest) returns (GetInvoiceResponse);
+    rpc PayInvoice (PayInvoiceRequest) returns (PayInvoiceResponse);
 }
 
 message PayOfferRequest {
@@ -12,4 +14,22 @@ message PayOfferRequest {
 
 message PayOfferResponse {
     string payment_preimage = 2;
+}
+
+message GetInvoiceRequest {
+    string offer = 1;
+    optional uint64 amount = 2;
+}
+
+message GetInvoiceResponse {
+    string invoice = 1;
+}
+
+message PayInvoiceRequest {
+    string invoice = 1;
+    optional uint64 amount = 2;
+}
+
+message PayInvoiceResponse {
+    string payment_preimage = 1;
 }
