@@ -180,7 +180,7 @@ impl OfferHandler {
         network: Network,
         msats: Option<u64>,
     ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
-        let validated_amount = validate_amount(&offer, msats).await?;
+        let validated_amount = validate_amount(offer.amount(), msats).await?;
 
         // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
         // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
@@ -335,15 +335,23 @@ pub struct SendPaymentParams {
     pub payment_id: PaymentId,
 }
 
-// Checks that the user-provided amount matches the offer.
-pub async fn validate_amount(offer: &Offer, amount_msats: Option<u64>) -> Result<u64, OfferError> {
-    let validated_amount = match offer.amount() {
+/// Checks that the user-provided amount matches the provided offer or invoice.
+///
+/// Parameters:
+///
+/// * `offer_amount_msats`: The amount set in the offer or invoice.
+/// * `amount_msats`: The amount we want to pay.
+pub(crate) async fn validate_amount(
+    offer_amount_msats: Option<&Amount>,
+    pay_amount_msats: Option<u64>,
+) -> Result<u64, OfferError> {
+    let validated_amount = match offer_amount_msats {
         Some(offer_amount) => {
             match *offer_amount {
                 Amount::Bitcoin {
                     amount_msats: bitcoin_amt,
                 } => {
-                    if let Some(msats) = amount_msats {
+                    if let Some(msats) = pay_amount_msats {
                         if msats < bitcoin_amt {
                             return Err(OfferError::InvalidAmount(format!(
                                 "{msats} is less than offer amount {}",
@@ -367,7 +375,7 @@ pub async fn validate_amount(offer: &Offer, amount_msats: Option<u64>) -> Result
             }
         }
         None => {
-            if let Some(msats) = amount_msats {
+            if let Some(msats) = pay_amount_msats {
                 msats
             } else {
                 return Err(OfferError::InvalidAmount(
@@ -843,21 +851,21 @@ mod tests {
         // If the amount the user provided is greater than the offer-provided amount, then
         // we should be good.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
 
         let offer = build_custom_offer(0);
-        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_invalid_amount() {
         // If the amount the user provided is lower than the offer amount, we error.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(&offer, Some(1000)).await.is_err());
+        assert!(validate_amount(offer.amount(), Some(1000)).await.is_err());
 
         // Both user amount and offer amount can't be 0.
         let offer = build_custom_offer(0);
-        assert!(validate_amount(&offer, None).await.is_err());
+        assert!(validate_amount(offer.amount(), None).await.is_err());
     }
 
     #[tokio::test]
