@@ -99,24 +99,8 @@ async fn main() {
             ref offer_string,
             amount,
         } => {
-            let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
-            let pem = match args.cert_pem {
-                Some(pem) => pem,
-                None => {
-                    // If no cert pem string is provided, we'll look for the tls certificate in the
-                    // default location.
-                    std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME)).unwrap_or_else(|e| {
-                        println!("ERROR reading cert: {e:?}");
-                        exit(1)
-                    })
-                }
-            };
-            let cert = Certificate::from_pem(pem);
-            let tls = ClientTlsConfig::new()
-                .ca_certificate(cert)
-                .domain_name("localhost");
-
-            let grpc_host = args.grpc_host;
+            let tls = read_cert_from_args(&args);
+            let grpc_host = args.grpc_host.clone();
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}")) //
                 .unwrap_or_else(|e| {
@@ -149,31 +133,7 @@ async fn main() {
                 }
             };
 
-            // Make sure both macaroon options are not set.
-            if args.macaroon_path.is_some() && args.macaroon_hex.is_some() {
-                println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
-                exit(1)
-            }
-
-            // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
-            // set, use the default macaroon path.
-            let macaroon = match args.macaroon_path {
-                Some(path) => read_macaroon_from_file(path).unwrap_or_else(|e| {
-                    println!("ERROR reading macaroon from file {e:?}");
-                    exit(1)
-                }),
-                None => match args.macaroon_hex {
-                    Some(macaroon) => macaroon,
-                    None => {
-                        let path = get_macaroon_path_default(&args.network);
-                        read_macaroon_from_file(path).unwrap_or_else(|e| {
-                            println!("ERROR reading macaroon from file {e:?}");
-                            exit(1)
-                        })
-                    }
-                },
-            };
-
+            let macaroon = read_macaroon_from_args(&args);
             let mut request = Request::new(PayOfferRequest {
                 offer: offer.to_string(),
                 amount,
@@ -207,4 +167,50 @@ fn read_macaroon_from_file(path: PathBuf) -> Result<String, std::io::Error> {
     mac_contents.read_to_end(&mut buffer)?;
 
     Ok(hex::encode(buffer))
+}
+
+fn read_cert_from_args(args: &Cli) -> ClientTlsConfig {
+    let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
+    let pem = match &args.cert_pem {
+        Some(pem) => pem.clone(),
+        None => {
+            // If no cert pem string is provided, we'll look for the tls certificate in the
+            // default location.
+            std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME)).unwrap_or_else(|e| {
+                println!("ERROR reading cert: {e:?}");
+                exit(1)
+            })
+        }
+    };
+    let cert = Certificate::from_pem(pem);
+    ClientTlsConfig::new()
+        .ca_certificate(cert)
+        .domain_name("localhost")
+}
+
+fn read_macaroon_from_args(args: &Cli) -> String {
+    // Make sure both macaroon options are not set.
+    if args.macaroon_path.is_some() && args.macaroon_hex.is_some() {
+        println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
+        exit(1)
+    }
+
+    // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
+    // set, use the default macaroon path.
+    match &args.macaroon_path {
+        Some(path) => read_macaroon_from_file(path.clone()).unwrap_or_else(|e| {
+            println!("ERROR reading macaroon from file {e:?}");
+            exit(1)
+        }),
+        None => match &args.macaroon_hex {
+            Some(macaroon) => macaroon.clone(),
+            None => {
+                let path = get_macaroon_path_default(&args.network.clone());
+                read_macaroon_from_file(path).unwrap_or_else(|e| {
+                    println!("ERROR reading macaroon from file {e:?}");
+                    exit(1)
+                })
+            }
+        },
+    }
 }
