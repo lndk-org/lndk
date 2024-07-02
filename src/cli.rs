@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
-use lndk::lndkrpc::PayOfferRequest;
+use lndk::lndkrpc::{GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
 use lndk::{DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, TLS_CERT_FILENAME};
 use std::fs::File;
 use std::io::BufReader;
@@ -73,6 +73,25 @@ enum Commands {
         #[arg(required = false)]
         amount: Option<u64>,
     },
+    /// GetInvoice fetch an invoice, will be returned as a hex-encoded string. It fetches the
+    /// invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
+    GetInvoice {
+        /// The offer string.
+        offer_string: String,
+        /// Amount the user would like to pay. If this isn't set, we'll assume the user is paying
+        /// whatever the offer amount is.
+        #[arg(required = false)]
+        amount: Option<u64>,
+    },
+    /// PayInvoice pays a BOLT12 hex-encoded TLV invoice.
+    PayInvoice {
+        /// The encoded invoice string.
+        invoice_string: String,
+        /// Amount the user would like to pay. If this isn't set, we'll assume the user is paying
+        /// whatever the invoice amount is set to.
+        #[arg(required = false)]
+        amount: Option<u64>,
+    },
 }
 
 #[tokio::main]
@@ -102,7 +121,7 @@ async fn main() {
             let tls = read_cert_from_args(&args);
             let grpc_host = args.grpc_host.clone();
             let grpc_port = args.grpc_port;
-            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}")) //
+            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
                     println!("ERROR creating endpoint: {e:?}");
                     exit(1)
@@ -148,10 +167,102 @@ async fn main() {
                 }
             };
         }
+        Commands::GetInvoice {
+            ref offer_string,
+            amount,
+        } => {
+            let tls = read_cert_from_args(&args);
+            let grpc_host = args.grpc_host.clone();
+            let grpc_port = args.grpc_port;
+            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
+                .unwrap_or_else(|e| {
+                    println!("ERROR creating endpoint: {e:?}");
+                    exit(1)
+                })
+                .tls_config(tls)
+                .unwrap_or_else(|e| {
+                    println!("ERROR tls config: {e:?}");
+                    exit(1)
+                })
+                .connect()
+                .await
+                .unwrap_or_else(|e| {
+                    println!("ERROR connecting: {e:?}");
+                    exit(1)
+                });
+
+            let mut client = OffersClient::new(channel);
+            let offer = match decode(offer_string.to_owned()) {
+                Ok(offer) => offer,
+                Err(e) => {
+                    println!(
+                        "ERROR: please provide offer starting with lno. Provided offer is \
+                        invalid, failed to decode with error: {:?}.",
+                        e
+                    );
+                    exit(1)
+                }
+            };
+
+            let macaroon = read_macaroon_from_args(&args);
+            let mut request = Request::new(GetInvoiceRequest {
+                offer: offer.to_string(),
+                amount,
+            });
+            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            match client.get_invoice(request).await {
+                Ok(response) => {
+                    println!("Invoice: {:?}.", response.get_ref())
+                }
+                Err(err) => {
+                    println!("Error getting invoice for offer: {err:?}");
+                    exit(1)
+                }
+            }
+        }
+        Commands::PayInvoice {
+            ref invoice_string,
+            amount,
+        } => {
+            let tls = read_cert_from_args(&args);
+            let grpc_host = args.grpc_host.clone();
+            let grpc_port = args.grpc_port;
+            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
+                .unwrap_or_else(|e| {
+                    println!("ERROR creating endpoint: {e:?}");
+                    exit(1)
+                })
+                .tls_config(tls)
+                .unwrap_or_else(|e| {
+                    println!("ERROR tls config: {e:?}");
+                    exit(1)
+                })
+                .connect()
+                .await
+                .unwrap_or_else(|e| {
+                    println!("ERROR connecting: {e:?}");
+                    exit(1)
+                });
+
+            let mut client = OffersClient::new(channel);
+            let macaroon = read_macaroon_from_args(&args);
+            let mut request = Request::new(PayInvoiceRequest {
+                invoice: invoice_string.to_owned(),
+                amount,
+            });
+            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            match client.pay_invoice(request).await {
+                Ok(_) => println!("Successfully paid for offer!"),
+                Err(err) => {
+                    println!("Error paying invoice: {err:?}");
+                    exit(1)
+                }
+            }
+        }
     }
 }
 
-fn add_metadata(request: &mut Request<PayOfferRequest>, macaroon: String) -> Result<(), ()> {
+fn add_metadata<R>(request: &mut Request<R>, macaroon: String) -> Result<(), ()> {
     let macaroon = macaroon.parse().map_err(|e| {
         println!("Error parsing provided macaroon string into tonic metadata {e:?}")
     })?;
