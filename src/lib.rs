@@ -19,6 +19,7 @@ use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{Error as Secp256k1Error, PublicKey, Secp256k1};
 use home::home_dir;
 use lightning::blinded_path::BlindedPath;
+use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice::Bolt12Invoice;
@@ -117,11 +118,13 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct Cfg {
     pub lnd: LndCfg,
     pub signals: LifecycleSignals,
 }
 
+#[derive(Clone)]
 pub struct LifecycleSignals {
     // Use to externally trigger shutdown.
     pub shutdown: Trigger,
@@ -212,20 +215,27 @@ impl Default for LndkOnionMessenger {
 }
 
 #[allow(dead_code)]
-enum OfferState {
-    OfferAdded,
+enum PaymentState {
+    InvoiceRequestCreated,
     InvoiceRequestSent,
     InvoiceReceived,
-    InvoicePaymentDispatched,
-    InvoicePaid,
+    PaymentDispatched,
+    Paid,
 }
 
 pub struct OfferHandler {
-    active_offers: Mutex<HashMap<String, OfferState>>,
-    active_invoices: Mutex<Vec<Bolt12Invoice>>,
+    // active_payments holds a list of payments we're currently attempting to make. When we create
+    // a new invoice request for a payment, we set a PaymentId in its metadata, which we also store
+    // here. Then we wait until we receive an invoice with the same PaymentId.
+    active_payments: Mutex<HashMap<PaymentId, PaymentInfo>>,
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
+}
+
+pub struct PaymentInfo {
+    state: PaymentState,
+    invoice: Option<Bolt12Invoice>,
 }
 
 #[derive(Clone)]
@@ -248,8 +258,7 @@ impl OfferHandler {
         let expanded_key = ExpandedKey::new(&KeyMaterial(random_bytes));
 
         OfferHandler {
-            active_offers: Mutex::new(HashMap::new()),
-            active_invoices: Mutex::new(Vec::new()),
+            active_payments: Mutex::new(HashMap::new()),
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils,
             expanded_key,
@@ -264,24 +273,44 @@ impl OfferHandler {
     ) -> Result<Payment, OfferError<Secp256k1Error>> {
         let client_clone = cfg.client.clone();
         let offer_id = cfg.offer.clone().to_string();
-        let validated_amount = self.send_invoice_request(cfg).await.map_err(|e| {
-            let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.remove(&offer_id.clone());
+        let (invoice_request, payment_id, validated_amount) = self
+            .create_invoice_request(
+                cfg.client.clone(),
+                cfg.offer.clone(),
+                vec![],
+                cfg.network,
+                cfg.amount,
+            )
+            .await?;
+
+        self.send_invoice_request(
+            cfg.destination.clone(),
+            cfg.client.clone(),
+            cfg.reply_path.clone(),
+            invoice_request,
+        )
+        .await
+        .map_err(|e| {
+            let mut active_payments = self.active_payments.lock().unwrap();
+            active_payments.remove(&payment_id);
             e
         })?;
 
-        let invoice = match timeout(Duration::from_secs(100), self.wait_for_invoice()).await {
-            Ok(invoice) => invoice,
-            Err(_) => {
-                error!("Did not receive invoice in 100 seconds.");
-                let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id.clone());
-                return Err(OfferError::InvoiceTimeout);
-            }
-        };
+        let invoice =
+            match timeout(Duration::from_secs(20), self.wait_for_invoice(payment_id)).await {
+                Ok(invoice) => invoice,
+                Err(_) => {
+                    error!("Did not receive invoice in 100 seconds.");
+                    let mut active_payments = self.active_payments.lock().unwrap();
+                    active_payments.remove(&payment_id);
+                    return Err(OfferError::InvoiceTimeout);
+                }
+            };
         {
-            let mut active_offers = self.active_offers.lock().unwrap();
-            active_offers.insert(offer_id.clone(), OfferState::InvoiceReceived);
+            let mut active_payments = self.active_payments.lock().unwrap();
+            active_payments
+                .entry(payment_id)
+                .and_modify(|entry| entry.state = PaymentState::InvoiceReceived);
         }
 
         let payment_hash = invoice.payment_hash();
@@ -295,30 +324,33 @@ impl OfferHandler {
             payment_hash: payment_hash.0,
             msats: validated_amount,
             offer_id: offer_id.clone(),
+            payment_id,
         };
 
         self.pay_invoice(client_clone, params)
             .await
             .map(|payment| {
-                let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id);
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments.remove(&payment_id);
                 payment
             })
             .map_err(|e| {
-                let mut active_offers = self.active_offers.lock().unwrap();
-                active_offers.remove(&offer_id);
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments.remove(&payment_id);
                 e
             })
     }
 
     /// wait_for_invoice waits for the offer creator to respond with an invoice.
-    async fn wait_for_invoice(&self) -> Bolt12Invoice {
+    async fn wait_for_invoice(&self, payment_id: PaymentId) -> Bolt12Invoice {
         loop {
             {
-                let mut active_invoices = self.active_invoices.lock().unwrap();
-                if active_invoices.len() == 1 {
-                    return active_invoices.pop().unwrap();
-                }
+                let active_payments = self.active_payments.lock().unwrap();
+                if let Some(pay_info) = active_payments.get(&payment_id) {
+                    if let Some(invoice) = pay_info.invoice.clone() {
+                        return invoice;
+                    }
+                };
             }
             sleep(Duration::from_secs(2)).await;
         }
@@ -340,20 +372,34 @@ impl OffersMessageHandler for OfferHandler {
             }
             OffersMessage::Invoice(invoice) => {
                 let secp_ctx = &Secp256k1::new();
-                // We verify that this invoice is a response to the invoice request we just sent.
+                // We verify that this invoice is a response to an invoice request we sent.
                 match invoice.verify(&self.expanded_key, secp_ctx) {
-                    // TODO: Eventually when we allow for multiple payments in flight, we can use
-                    // the returned payment id below to check if we already processed an invoice
-                    // for this payment. Right now it's safe to let this be because we won't try to
-                    // pay a second invoice (if it comes through).
-                    Ok(_payment_id) => {
-                        let mut active_invoices = self.active_invoices.lock().unwrap();
-                        active_invoices.push(invoice.clone());
+                    Ok(payment_id) => {
+                        info!("Received an invoice: {invoice:?}");
+
+                        let mut active_payments = self.active_payments.lock().unwrap();
+                        match active_payments.get_mut(&payment_id) {
+                            Some(pay_info) => match pay_info.invoice {
+                                Some(_) => {
+                                    error!("We already received an invoice with this payment id.")
+                                }
+                                None => {
+                                    pay_info.state = PaymentState::InvoiceReceived;
+                                    pay_info.invoice = Some(invoice.clone());
+                                }
+                            },
+                            None => {
+                                error!("We received an invoice request for a payment id that we don't recognize or already paid: {payment_id:?}. We will ignore the invoice.");
+                            }
+                        }
                         Some(OffersMessage::Invoice(invoice))
                     }
-                    Err(()) => Some(OffersMessage::InvoiceError(InvoiceError::from_string(
-                        String::from("invoice verification failure"),
-                    ))),
+                    Err(()) => {
+                        error!("Invoice verification failed for invoice: {invoice:?}");
+                        Some(OffersMessage::InvoiceError(InvoiceError::from_string(
+                            String::from("invoice verification failure"),
+                        )))
+                    }
                 }
             }
             OffersMessage::InvoiceError(error) => {
