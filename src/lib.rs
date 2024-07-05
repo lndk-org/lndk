@@ -371,12 +371,12 @@ impl OffersMessageHandler for OfferHandler {
                 None
             }
             OffersMessage::Invoice(invoice) => {
+                info!("Received an invoice: {invoice:?}");
                 let secp_ctx = &Secp256k1::new();
                 // We verify that this invoice is a response to an invoice request we sent.
                 match invoice.verify(&self.expanded_key, secp_ctx) {
                     Ok(payment_id) => {
-                        info!("Received an invoice: {invoice:?}");
-
+                        info!("Successfully verified invoice for payment_id {payment_id}");
                         let mut active_payments = self.active_payments.lock().unwrap();
                         match active_payments.get_mut(&payment_id) {
                             Some(pay_info) => match pay_info.invoice {
