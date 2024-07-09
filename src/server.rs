@@ -59,7 +59,7 @@ impl Offers for LNDKServer {
         &self,
         request: Request<PayOfferRequest>,
     ) -> Result<Response<PayOfferResponse>, Status> {
-        log::info!("Received a request: {:?}", request);
+        log::info!("Received a request: {:?}", request.get_ref());
 
         let metadata = request.metadata();
         let macaroon = check_auth_metadata(metadata)?;
