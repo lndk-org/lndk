@@ -70,7 +70,11 @@ impl Offers for LNDKServer {
             ))
         })?;
 
-        let destination = get_destination(&offer).await;
+        let destination = get_destination(&offer).await.map_err(|e| {
+            Status::internal(format!(
+                "Internal error: Couldn't get destination from offer: {e:?}"
+            ))
+        })?;
         let reply_path = match self
             .offer_handler
             .create_reply_path(client.clone(), self.node_id)

@@ -18,7 +18,7 @@ bitcoin = { version = "0.30.2", features = ["rand"] }
 clap = { version = "4.4.6", features = ["derive", "string"] }
 futures = "0.3.26"
 home = "0.5.5"
-lightning = { git = "https://github.com/lightningdevkit/rust-lightning", rev = "06f9dd7", features = ["max_level_trace", "_test_utils"] }
+lightning = { version = "0.0.123", features = ["max_level_trace", "_test_utils"] }
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 log = "0.4.17"
@@ -26,7 +26,7 @@ log4rs = { version = "1.2.0", features = ["file_appender"] }
 rcgen = { version = "0.13.1", features = ["pem", "x509-parser"] }
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
 tonic = { version = "0.11", features = [ "tls", "transport" ] }
-tonic_lnd = { git = "https://github.com/orbitalturtle/tonic_lnd", rev="afb0187621bca604f606cacfe3cb2aedf5d2fc89", package="fedimint-tonic-lnd", features = ["lightningrpc", "routerrpc"] }
+tonic_lnd = { git = "https://github.com/orbitalturtle/tonic_lnd", rev="18c5a71084886024a6b90307bfb8822288c5daea", package="fedimint-tonic-lnd", features = ["lightningrpc", "routerrpc"] }
 hex = "0.4.3"
 configure_me = "0.4.0"
 bytes = "1.4.0"
@@ -37,7 +37,7 @@ prost = "0.12"
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
 bitcoind = { version = "0.30.0", features = [ "22_0" ] }
 chrono = { version = "0.4.26" }
-ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", branch = "offer-handling-send-payment" }
+ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", rev = "57b5e50c8dc306ece28654777b1cfc4792b35df0" }
 mockall = "0.11.3"
 tempfile = "3.5.0"
 

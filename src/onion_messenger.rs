@@ -7,6 +7,8 @@ use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
 use core::ops::Deref;
+use futures::executor::block_on;
+use lightning::blinded_path::NodeIdLookUp;
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::onion_message::messenger::{
@@ -28,6 +30,8 @@ use std::marker::Copy;
 use std::str::FromStr;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{select, time, time::Duration, time::Interval};
+use tonic_lnd::lnrpc::ChanInfoRequest;
+use tonic_lnd::Client;
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
     lnrpc::CustomMessage, lnrpc::PeerEvent, lnrpc::SendCustomMessageRequest,
@@ -46,6 +50,49 @@ const DEFAULT_CALL_COUNT: u8 = 10;
 
 /// DEFAULT_CALL_FREQUENCY is the default period over which peers are rate limited.
 const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
+
+/// Node Id LookUp is a utility struct implementing NodeIdLookUp trait for LDK's OnionMessenger.
+pub struct LndkNodeIdLookUp {
+    client: Client,
+    our_node_id: PublicKey,
+}
+
+impl LndkNodeIdLookUp {
+    pub fn new(client: Client, our_node_id: PublicKey) -> Self {
+        LndkNodeIdLookUp {
+            client,
+            our_node_id,
+        }
+    }
+}
+
+impl NodeIdLookUp for LndkNodeIdLookUp {
+    fn next_node_id(&self, short_channel_id: u64) -> Option<PublicKey> {
+        let get_chan_info_request = ChanInfoRequest {
+            chan_id: short_channel_id,
+        };
+        let client = self.client.clone();
+        match block_on(
+            client
+                .lightning_read_only()
+                .get_chan_info(get_chan_info_request),
+        ) {
+            Ok(channel_info) => {
+                let channel_info = channel_info.into_inner();
+                let pubkey = if channel_info.node1_pub == self.our_node_id.to_string() {
+                    channel_info.node2_pub
+                } else {
+                    channel_info.node1_pub
+                };
+                PublicKey::from_slice(pubkey.as_bytes()).ok()
+            }
+            Err(e) => {
+                error!("Error getting channel info: {e}.");
+                None
+            }
+        }
+    }
+}
 
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait
 /// implementations for LDK’s OnionMessenger.
@@ -108,6 +155,7 @@ impl LndkOnionMessenger {
         ES: Deref,
         NS: Deref,
         L: Deref,
+        NL: Deref,
         MR: Deref,
         OMH: Deref,
         CMH: Deref,
@@ -115,7 +163,7 @@ impl LndkOnionMessenger {
         &self,
         current_peers: HashMap<PublicKey, bool>,
         ln_client: &mut tonic_lnd::LightningClient,
-        onion_messenger: OnionMessenger<ES, NS, L, MR, OMH, CMH>,
+        onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, CMH>,
         network: Network,
         signals: LifecycleSignals,
     ) -> Result<(), ()>
@@ -123,6 +171,7 @@ impl LndkOnionMessenger {
         ES::Target: EntropySource,
         NS::Target: NodeSigner,
         L::Target: Logger,
+        NL::Target: NodeIdLookUp,
         MR::Target: MessageRouter,
         OMH::Target: OffersMessageHandler,
         CMH::Target: CustomOnionMessageHandler + Sized,
