@@ -23,9 +23,10 @@ use tonic_lnd::lnrpc::{
     GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse, Payment, QueryRoutesResponse,
     Route,
 };
-use tonic_lnd::signrpc::KeyLocator;
+use tonic_lnd::signrpc::{KeyDescriptor, KeyLocator};
 use tonic_lnd::tonic::Status;
 use tonic_lnd::verrpc::Version;
+use tonic_lnd::walletrpc::KeyReq;
 use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -384,7 +385,7 @@ pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.
 #[async_trait]
 pub trait MessageSigner {
-    async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
+    async fn derive_next_key(&mut self, key_loc: KeyReq) -> Result<KeyDescriptor, Status>;
     async fn sign_message(
         &mut self,
         key_loc: KeyLocator,
