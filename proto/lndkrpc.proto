@@ -4,6 +4,7 @@ package lndkrpc;
 service Offers {
     rpc PayOffer (PayOfferRequest) returns (PayOfferResponse);
     rpc GetInvoice (GetInvoiceRequest) returns (GetInvoiceResponse);
+    rpc DecodeInvoice (DecodeInvoiceRequest) returns (Bolt12InvoiceContents);
     rpc PayInvoice (PayInvoiceRequest) returns (PayInvoiceResponse);
 }
 
@@ -19,6 +20,10 @@ message PayOfferResponse {
 message GetInvoiceRequest {
     string offer = 1;
     optional uint64 amount = 2;
+}
+
+message DecodeInvoiceRequest {
+    string invoice = 1;
 }
 
 message GetInvoiceResponse {

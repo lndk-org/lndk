@@ -102,7 +102,7 @@ impl Display for OfferError {
 
 impl Error for OfferError {}
 
-// Decodes a bech32 string into an LDK offer.
+// Decodes a bech32 offer string into an LDK offer.
 pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
     offer_str.parse::<Offer>()
 }
