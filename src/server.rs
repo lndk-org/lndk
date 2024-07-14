@@ -13,8 +13,9 @@ use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
 use lndkrpc::{
-    Bolt12InvoiceContents, FeatureBit, GetInvoiceRequest, GetInvoiceResponse, PayInvoiceRequest,
-    PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash, PaymentPaths,
+    Bolt12InvoiceContents, DecodeInvoiceRequest, FeatureBit, GetInvoiceRequest, GetInvoiceResponse,
+    PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash,
+    PaymentPaths,
 };
 use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
 use std::error::Error;
@@ -132,6 +133,20 @@ impl Offers for LNDKServer {
             payment_preimage: payment.payment_preimage,
         };
 
+        Ok(Response::new(reply))
+    }
+
+    async fn decode_invoice(
+        &self,
+        request: Request<DecodeInvoiceRequest>,
+    ) -> Result<Response<Bolt12InvoiceContents>, Status> {
+        log::info!("Received a request: {:?}", request.get_ref());
+
+        let invoice_string: Bolt12InvoiceString = request.get_ref().invoice.clone().into();
+        let invoice = Bolt12Invoice::try_from(invoice_string)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let reply: Bolt12InvoiceContents = generate_bolt12_invoice_contents(&invoice);
         Ok(Response::new(reply))
     }
 

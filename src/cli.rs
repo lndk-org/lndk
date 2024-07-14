@@ -1,8 +1,12 @@
 use clap::{Parser, Subcommand};
+use lightning::offers::invoice::Bolt12Invoice;
 use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
 use lndk::lndkrpc::{GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
-use lndk::{DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, TLS_CERT_FILENAME};
+use lndk::{
+    Bolt12InvoiceString, DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    TLS_CERT_FILENAME,
+};
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
@@ -59,9 +63,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Decodes a bech32-encoded offer string into a BOLT 12 offer.
-    Decode {
+    DecodeOffer {
         /// The offer string to decode.
         offer_string: String,
+    },
+    /// Decodes a bech32-encoded invoice string into a BOLT 12 invoice.
+    DecodeInvoice {
+        /// The invoice string to decode.
+        invoice_string: String,
     },
     /// PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
     PayOffer {
@@ -98,7 +107,7 @@ enum Commands {
 async fn main() {
     let args = Cli::parse();
     match args.command {
-        Commands::Decode { offer_string } => {
+        Commands::DecodeOffer { offer_string } => {
             println!("Decoding offer: {offer_string}.");
             match decode(offer_string) {
                 Ok(offer) => {
@@ -111,6 +120,24 @@ async fn main() {
                         e
                     );
                     exit(1)
+                }
+            }
+        }
+        Commands::DecodeInvoice { invoice_string } => {
+            println!("Decoding invoice: {invoice_string}.");
+
+            let invoice_string: Bolt12InvoiceString = invoice_string.clone().into();
+            match Bolt12Invoice::try_from(invoice_string) {
+                Ok(invoice) => {
+                    println!("Decoded invoice: {:?}.", invoice);
+                }
+                Err(e) => {
+                    println!(
+                        "ERROR please provide hex-encoded invoice string. Provided invoice is \
+                        invalid, failed to decode with error: {:?}.",
+                        e
+                    );
+                    exit(1);
                 }
             }
         }
