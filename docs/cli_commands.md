@@ -18,9 +18,10 @@ A cli for interacting with lndk
 Usage: lndk-cli [OPTIONS] <COMMAND>
 
 Commands:
-  decode     Decodes a bech32-encoded offer string into a BOLT 12 offer
-  pay-offer  PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string
-  help       Print this message or the help of the given subcommand(s)
+  decode-offer    Decodes a bech32-encoded offer string into a BOLT 12 offer
+  decode-invoice  Decodes a bech32-encoded invoice string into a BOLT 12 invoice
+  pay-offer       PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string
+  help            Print this message or the help of the given subcommand(s)
 
 Options:
   -n, --network <NETWORK>              Global variables [default: regtest]          
