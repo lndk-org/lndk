@@ -19,11 +19,11 @@ When you encounter a problem with `LNDK`, Feel free to file issues or start [a d
 
 #### Compiling LND
 
-To run `LNDK`, you require access to a `LND` node running _at least_ [LND v0.17.0](https://github.com/lightningnetwork/lnd/releases/tag/v0.17.0-beta).
+To run `LNDK`, you will need a `LND` node running at least [LND v0.18.0](https://github.com/lightningnetwork/lnd/releases/tag/v0.18.0-beta).
 
-You will need to compile `LND` in `dev` mode (to enable protocol-level feature handling externally) and enable the `peersrpc`, `signerrpc`, and `walletrpc` sub-servers:
+You will need to compile `LND` with the `peersrpc`, `signerrpc`, and `walletrpc` sub-servers enabled:
 
-`make install tags="peersrpc signrpc walletrpc dev"`
+`make install tags="peersrpc signrpc walletrpc"`
 
 Note that this guide assumes some familiarity with setting up `LND`. If you're looking to get up to speed, try [this guide](https://docs.lightning.engineering/lightning-network-tools/lnd/run-lnd).
 
