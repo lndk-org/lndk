@@ -126,6 +126,7 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
 pub struct Cfg {
     pub lnd: LndCfg,
     pub signals: LifecycleSignals,
+    pub skip_version_check: bool,
 }
 
 #[derive(Clone)]
@@ -181,7 +182,7 @@ impl LndkOnionMessenger {
             return Err(());
         }
 
-        if !has_version(&version, None) {
+        if !args.skip_version_check && !has_version(&version, None) {
             error!(
                     "The LND version {} is not compatible with LNDK. Please update to version {}.{}.{}-{} or higher.",
                     &version.version, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER

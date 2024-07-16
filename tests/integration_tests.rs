@@ -174,6 +174,7 @@ async fn test_lndk_send_invoice_request() {
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg.clone(),
         signals,
+        skip_version_check: false,
     };
 
     let mut client = lnd.client.clone().unwrap();
@@ -256,6 +257,7 @@ async fn test_lndk_send_invoice_request() {
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg,
         signals,
+        skip_version_check: false,
     };
 
     let log_dir = Some(

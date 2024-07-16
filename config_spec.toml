@@ -56,3 +56,9 @@ name = "grpc_port"
 type = "u16"
 optional = true
 doc = "The port the grpc server will run on. Defaults to 7000."
+
+[[param]]
+name = "skip_version_check"
+type = "bool"
+default = "false"
+doc = "Skip checking the LND version. Otherwise, LNDK checks that the LND version is compatible with LNDK."

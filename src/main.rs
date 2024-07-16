@@ -52,6 +52,7 @@ async fn main() -> Result<(), ()> {
     let args = Cfg {
         lnd: lnd_args,
         signals,
+        skip_version_check: config.skip_version_check,
     };
 
     let handler = Arc::new(OfferHandler::new());
