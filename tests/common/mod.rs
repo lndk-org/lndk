@@ -183,6 +183,7 @@ pub async fn setup_lndk(
     let lndk_cfg = lndk::Cfg {
         lnd: lnd_cfg,
         signals,
+        skip_version_check: false,
     };
 
     // Make sure lndk successfully sends the invoice_request.

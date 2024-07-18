@@ -11,7 +11,9 @@ pub mod lndkrpc {
 }
 
 use crate::lnd::{
-    features_support_onion_messages, get_lnd_client, get_network, LndCfg, LndNodeSigner,
+    features_support_onion_messages, get_lnd_client, get_network, has_build_tags, has_version,
+    LndCfg, LndNodeSigner, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER,
+    MIN_LND_PRE_RELEASE_VER,
 };
 use crate::lndk_offers::{OfferError, PayInvoiceParams};
 use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
@@ -31,6 +33,7 @@ use lightning::onion_message::messenger::{
 use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::{EntropySource, KeyMaterial};
+use lnd::BUILD_TAGS_REQUIRED;
 use log::{debug, error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -41,6 +44,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
 use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::{ChanInfoRequest, GetInfoRequest, Payment};
+use tonic_lnd::verrpc::VersionRequest;
 use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
@@ -122,6 +126,7 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
 pub struct Cfg {
     pub lnd: LndCfg,
     pub signals: LifecycleSignals,
+    pub skip_version_check: bool,
 }
 
 #[derive(Clone)]
@@ -158,6 +163,30 @@ impl LndkOnionMessenger {
 
         if !features_support_onion_messages(&info.features) {
             error!("LND must support onion messaging to run LNDK.");
+            return Err(());
+        }
+
+        let version = client
+            .versioner()
+            .get_version(VersionRequest {})
+            .await
+            .expect("failed to get version")
+            .into_inner();
+
+        if !has_build_tags(&version, None) {
+            error!(
+                "LND build tags '{}' are not compatible with LNDK. Make sure '{}' are enabled.",
+                &version.build_tags.join(", "),
+                BUILD_TAGS_REQUIRED.join(", ")
+            );
+            return Err(());
+        }
+
+        if !args.skip_version_check && !has_version(&version, None) {
+            error!(
+                    "The LND version {} is not compatible with LNDK. Please update to version {}.{}.{}-{} or higher.",
+                    &version.version, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER, MIN_LND_PRE_RELEASE_VER
+                );
             return Err(());
         }
 
