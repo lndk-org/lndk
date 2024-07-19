@@ -9,33 +9,17 @@ on:
 env:
   GO_VERSION: 1.21.0
 
-  RUST_VERSION: 1.78.0
-
 jobs:
   build_and_format:
     name: LNDK Rust Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.GO_VERSION }}
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install protobuf-compiler
-      - uses: actions-rs/cargo@v1
-        name: cargo build
-        with:
-          command: build
-          args: --release --all-features
-      - uses: actions-rs/cargo@v1
-        name: cargo fmt
-        with:
-          command: fmt
-          args: -- --config unstable_features=true --config wrap_comments=true --config comment_width=100 --check
-      - uses: actions-rs/cargo@v1
-        name: cargo clippy
-        with:
-          command: clippy
-          args: -- --deny warnings
+      - run: cargo build --release --all-features
+      - run: cargo fmt -- --config unstable_features=true --config wrap_comments=true --config comment_width=100 --check
+      - run: cargo clippy -- --deny warnings
 
   ########################
   # run ubuntu integration tests
@@ -44,12 +28,10 @@ jobs:
     name: run ubuntu unit and integration tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: 'true'
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.GO_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install protobuf-compiler
       - name: setup go ${{ env.GO_VERSION }}
         uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
@@ -66,10 +48,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.GO_VERSION }}
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install protobuf-compiler
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
