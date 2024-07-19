@@ -210,11 +210,11 @@ impl OfferHandler {
                 &self.messenger_utils,
                 payment_id,
             )
-            .unwrap()
+            .map_err(OfferError::BuildUIRFailure)?
             .chain(network)
-            .unwrap()
+            .map_err(OfferError::BuildUIRFailure)?
             .amount_msats(validated_amount)
-            .unwrap()
+            .map_err(OfferError::BuildUIRFailure)?
             .build()
             .map_err(OfferError::BuildUIRFailure)?;
 
