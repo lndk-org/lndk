@@ -11,6 +11,7 @@ service Offers {
 message PayOfferRequest {
    string offer = 1;
    optional uint64 amount = 2;
+   optional string payer_note = 3;
 }
 
 message PayOfferResponse {
@@ -20,6 +21,7 @@ message PayOfferResponse {
 message GetInvoiceRequest {
     string offer = 1;
     optional uint64 amount = 2;
+    optional string payer_note = 3;
 }
 
 message DecodeInvoiceRequest {

@@ -107,6 +107,7 @@ impl Offers for LNDKServer {
         let cfg = PayOfferParams {
             offer,
             amount: inner_request.amount,
+            payer_note: inner_request.payer_note.clone(),
             network,
             client,
             destination,
@@ -199,6 +200,7 @@ impl Offers for LNDKServer {
         let cfg = PayOfferParams {
             offer,
             amount: inner_request.amount,
+            payer_note: inner_request.payer_note.clone(),
             network,
             client,
             destination,

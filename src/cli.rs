@@ -81,16 +81,25 @@ enum Commands {
         /// whatever the offer amount is.
         #[arg(required = false)]
         amount: Option<u64>,
+
+        /// A payer-provided note which will be seen by the recipient.
+        #[arg(required = false)]
+        payer_note: Option<String>,
     },
     /// GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It
     /// fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
     GetInvoice {
         /// The offer string.
         offer_string: String,
+
         /// Amount the user would like to pay. If this isn't set, we'll assume the user is paying
         /// whatever the offer amount is.
         #[arg(required = false)]
         amount: Option<u64>,
+
+        /// A payer-provided note which will be seen by the recipient.
+        #[arg(required = false)]
+        payer_note: Option<String>,
     },
     /// PayInvoice pays a hex-encoded BOLT12 invoice.
     PayInvoice {
@@ -144,6 +153,7 @@ async fn main() {
         Commands::PayOffer {
             ref offer_string,
             amount,
+            payer_note,
         } => {
             let tls = read_cert_from_args(args.cert_pem);
             let grpc_host = args.grpc_host;
@@ -184,6 +194,7 @@ async fn main() {
             let mut request = Request::new(PayOfferRequest {
                 offer: offer.to_string(),
                 amount,
+                payer_note,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
 
@@ -198,6 +209,7 @@ async fn main() {
         Commands::GetInvoice {
             ref offer_string,
             amount,
+            payer_note,
         } => {
             let tls = read_cert_from_args(args.cert_pem);
             let grpc_host = args.grpc_host;
@@ -237,6 +249,7 @@ async fn main() {
             let mut request = Request::new(GetInvoiceRequest {
                 offer: offer.to_string(),
                 amount,
+                payer_note,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.get_invoice(request).await {
