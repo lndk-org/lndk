@@ -85,7 +85,7 @@ async fn main() -> Result<(), ()> {
 
     // The user passed in a TLS cert to help us establish a secure connection to LND. But now we
     // need to generate a TLS credentials for connecting securely to the LNDK server.
-    generate_tls_creds(data_dir.clone()).map_err(|e| {
+    generate_tls_creds(data_dir.clone(), config.tls_ip).map_err(|e| {
         error!("Error generating tls credentials: {e}");
     })?;
     let identity = read_tls(data_dir).map_err(|e| {

@@ -326,15 +326,24 @@ impl Display for CertificateGenFailure {
 impl Error for CertificateGenFailure {}
 
 // If a tls cert/key pair doesn't already exist, generate_tls_creds creates the tls cert/key pair
-// required secure connections to LNDK's gRPC server. By default they are stored in ~/.lndk.
-pub fn generate_tls_creds(data_dir: PathBuf) -> Result<(), CertificateGenFailure> {
+// required to secure connections to LNDK's gRPC server. By default they are stored in ~/.lndk.
+pub fn generate_tls_creds(
+    data_dir: PathBuf,
+    tls_ips_string: Option<String>,
+) -> Result<(), CertificateGenFailure> {
     let cert_path = data_dir.join(TLS_CERT_FILENAME);
     let key_path = data_dir.join(TLS_KEY_FILENAME);
+    let tls_ips = collect_tls_ips(tls_ips_string);
 
     // Did we have to generate a new key? In that case we also need to regenerate the certificate.
     if !key_path.exists() || !cert_path.exists() {
         log::debug!("Generating fresh TLS credentials in {data_dir:?}");
-        let subject_alt_names = vec!["localhost".to_string()];
+        let mut subject_alt_names = vec!["localhost".to_string()];
+        if let Some(ips) = tls_ips {
+            for ip in ips {
+                subject_alt_names.push(ip);
+            }
+        };
 
         let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names)
             .map_err(CertificateGenFailure::RcgenError)?;
@@ -363,6 +372,12 @@ pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
     let key = std::fs::read_to_string(data_dir.join(TLS_KEY_FILENAME))?;
 
     Ok(Identity::from_pem(cert, key))
+}
+
+// The user first passes in the tls ips as a comma-deliminated string into LNDK. Here we turn that
+// string into a Vec.
+fn collect_tls_ips(tls_ips_str: Option<String>) -> Option<Vec<String>> {
+    tls_ips_str.map(|tls_ips_str| tls_ips_str.split(',').map(|str| str.to_owned()).collect())
 }
 
 fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12InvoiceContents {
@@ -496,5 +511,28 @@ fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
                 encrypted_payload: hop.encrypted_payload.clone(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collect_tls_ips() {
+        // Test that it returns a vector of one element if only one ip is provided.
+        let tls_ips_str = Some("192.168.0.1".to_string());
+        let tls_ips = collect_tls_ips(tls_ips_str);
+        assert!(tls_ips.is_some());
+        assert!(tls_ips.as_ref().unwrap().len() == 1);
+
+        // If no ip is provided, collect_tls_ips should return None.
+        assert!(collect_tls_ips(None).is_none());
+
+        // If two ips are provided, a vector of length two should be returned.
+        let tls_ips_str = Some("192.168.0.1,192.168.0.3".to_string());
+        let tls_ips = collect_tls_ips(tls_ips_str);
+        assert!(tls_ips.is_some());
+        assert!(tls_ips.as_ref().unwrap().len() == 2);
     }
 }

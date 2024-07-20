@@ -7,19 +7,11 @@ type = "String"
 optional = false
 doc = "LND GRPC address, kindly note that the address must start with https:// ip address : port."
 
-
 [[param]]
 name = "cert_path"
 type = "std::path::PathBuf"
 optional = true
 doc = "The path to LND tls certificate file. Note: the abosolute tls certificate file path is required here."
-
-
-[[param]]
-name = "macaroon_path"
-type = "std::path::PathBuf"
-optional = true
-doc = "The path to LND macaroon file. Note: the abosolute macaroon file path is required here."
 
 [[param]]
 name = "cert_pem"
@@ -27,6 +19,17 @@ type = "String"
 optional = true
 doc = "The PEM-encoded tls certificate to pass directly into LNDK."
 
+[[param]]
+name = "tls_ip"
+type = "String"
+optional = true
+doc = "Add an ip or domain to the certificate used to access the LNDK server. To add multiple ip addresses, separate each ip address with a comma. Like: '192.168.0.1,lndkisdope.org'"
+
+[[param]]
+name = "macaroon_path"
+type = "std::path::PathBuf"
+optional = true
+doc = "The path to LND macaroon file. Note: the abosolute macaroon file path is required here."
 
 [[param]]
 name = "macaroon_hex"
