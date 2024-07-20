@@ -318,7 +318,6 @@ impl OfferHandler {
             .create_invoice_request(
                 cfg.client.clone(),
                 cfg.offer.clone(),
-                vec![],
                 cfg.network,
                 cfg.amount,
             )

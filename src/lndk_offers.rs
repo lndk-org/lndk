@@ -176,7 +176,6 @@ impl OfferHandler {
         &self,
         mut signer: impl MessageSigner + std::marker::Send + 'static,
         offer: Offer,
-        _metadata: Vec<u8>,
         network: Network,
         msats: Option<u64>,
     ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
@@ -799,7 +798,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         let resp = handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(amount))
+            .create_invoice_request(signer_mock, offer, Network::Regtest, Some(amount))
             .await;
         assert!(resp.is_ok())
     }
@@ -819,7 +818,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
+            .create_invoice_request(signer_mock, offer, Network::Regtest, Some(10000))
             .await
             .is_err())
     }
@@ -842,7 +841,7 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
+            .create_invoice_request(signer_mock, offer, Network::Regtest, Some(10000))
             .await
             .is_err())
     }
