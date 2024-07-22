@@ -62,6 +62,22 @@ which you can do in [most languages](https://grpc.io/docs/languages/).
 Again, since LNDK needs to connect to LND, you'll need to pass in your LND macaroon to establish a connection. Note that:
 - The client must pass in this data via gRPC metadata. You can find an example of this in the [Rust client](https://github.com/lndk-org/lndk/blob/master/src/cli.rs) used to connect `lndk-cli` to the server.
 
+## Baking a custom macaroon
+
+Rather than use the admin.macaroon with unrestricted permission to an LND node, we can bake a macaroon using lncli with much more specific permissions for better security. Note also that the macaroon required for [starting up a LNDK instance](https://github.com/lndk-org/lndk?tab=readme-ov-file#custom-macaroon) requires different permissions than when making a payment.
+
+When using `pay-offer`, you can generate a macaroon which will give LNDK only the specific grpc endpoints it needs to hit:
+
+```
+lncli bakemacaroon --save_to=<FILEPATH>/lndk-pay.macaroon uri:/walletrpc.WalletKit/DeriveKey uri:/signrpc.Signer/SignMessage uri:/lnrpc.Lightning/GetNodeInfo uri:/lnrpc.Lightning/ConnectPeer uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/GetChanInfo uri:/lnrpc.Lightning/QueryRoutes uri:/routerrpc.Router/SendToRouteV2 uri:/routerrpc.Router/TrackPaymentV2
+```
+
+If you're using just the `get-invoice` command, you can bake a macaroon with less permissions:
+
+```
+lncli bakemacaroon --save_to=<FILEPATH>/lndk-pay.macaroon uri:/walletrpc.WalletKit/DeriveKey uri:/signrpc.Signer/SignMessage uri:/lnrpc.Lightning/GetNodeInfo uri:/lnrpc.Lightning/ConnectPeer uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/GetChanInfo
+```
+
 ## TLS: Running `lndk-cli` remotely
 
 When `LNDK` is started up, self-signed TLS credentials are automatically generated and stored in `~/.lndk`. If you're running `lndk-cli` locally, it'll know where to find the certificate file it needs to establish a secure connection with the LNDK server.
