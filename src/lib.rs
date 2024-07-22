@@ -15,7 +15,7 @@ use crate::lnd::{
     LndCfg, LndNodeSigner, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER,
     MIN_LND_PRE_RELEASE_VER,
 };
-use crate::lndk_offers::{OfferError, PayInvoiceParams};
+use crate::lndk_offers::{OfferError, SendPaymentParams};
 use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
@@ -23,6 +23,7 @@ use home::home_dir;
 use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
+use lightning::ln::msgs::DecodeError;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::invoice_error::InvoiceError;
@@ -300,7 +301,19 @@ impl OfferHandler {
     /// offer.
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
-        let offer_id = cfg.offer.clone().to_string();
+        let (invoice, validated_amount, payment_id) = self.get_invoice(cfg).await?;
+
+        self.pay_invoice(client_clone, validated_amount, &invoice, payment_id)
+            .await
+    }
+
+    /// Sends an invoice request and waits for an invoice to be sent back to us.
+    /// Reminder that if this method returns an error after create_invoice_request is called, we
+    /// *must* remove the payment_id from self.active_payments.
+    pub(crate) async fn get_invoice(
+        &self,
+        cfg: PayOfferParams,
+    ) -> Result<(Bolt12Invoice, u64, PaymentId), OfferError> {
         let (invoice_request, payment_id, validated_amount) = self
             .create_invoice_request(
                 cfg.client.clone(),
@@ -341,17 +354,29 @@ impl OfferHandler {
                 .and_modify(|entry| entry.state = PaymentState::InvoiceReceived);
         }
 
+        Ok((invoice, validated_amount, payment_id))
+    }
+
+    /// Sends an invoice request and waits for an invoice to be sent back to us.
+    /// Reminder that if this method returns an error after create_invoice_request is called, we
+    /// *must* remove the payment_id from self.active_payments.
+    pub(crate) async fn pay_invoice(
+        &self,
+        client: Client,
+        amount: u64,
+        invoice: &Bolt12Invoice,
+        payment_id: PaymentId,
+    ) -> Result<Payment, OfferError> {
         let payment_hash = invoice.payment_hash();
         let path_info = invoice.payment_paths()[0].clone();
 
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: path_info.1,
             cltv_expiry_delta: path_info.0.cltv_expiry_delta,
             fee_base_msat: path_info.0.fee_base_msat,
             fee_ppm: path_info.0.fee_proportional_millionths,
             payment_hash: payment_hash.0,
-            msats: validated_amount,
-            offer_id: offer_id.clone(),
+            msats: amount,
             payment_id,
         };
 
@@ -359,8 +384,7 @@ impl OfferHandler {
             IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
                 let get_chan_info_request = ChanInfoRequest { chan_id: scid };
-                let chan_info = cfg
-                    .client
+                let chan_info = client
                     .clone()
                     .lightning_read_only()
                     .get_chan_info(get_chan_info_request)
@@ -378,7 +402,7 @@ impl OfferHandler {
             intro_node_id
         );
 
-        self.pay_invoice(client_clone, params)
+        self.send_payment(client, params)
             .await
             .map(|payment| {
                 let mut active_payments = self.active_payments.lock().unwrap();
@@ -462,6 +486,23 @@ impl OffersMessageHandler for OfferHandler {
 
     fn release_pending_messages(&self) -> Vec<PendingOnionMessage<OffersMessage>> {
         core::mem::take(&mut self.pending_messages.lock().unwrap())
+    }
+}
+
+pub struct Bolt12InvoiceString(pub String);
+
+impl TryFrom<Bolt12InvoiceString> for Bolt12Invoice {
+    type Error = DecodeError;
+
+    fn try_from(s: Bolt12InvoiceString) -> Result<Self, Self::Error> {
+        let bytes: Vec<u8> = hex::decode(s.0).unwrap();
+        Self::try_from(bytes).map_err(|_| DecodeError::InvalidValue)
+    }
+}
+
+impl From<String> for Bolt12InvoiceString {
+    fn from(s: String) -> Self {
+        Bolt12InvoiceString(s)
     }
 }
 

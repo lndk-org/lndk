@@ -102,7 +102,7 @@ impl Display for OfferError {
 
 impl Error for OfferError {}
 
-// Decodes a bech32 string into an LDK offer.
+// Decodes a bech32 offer string into an LDK offer.
 pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
     offer_str.parse::<Offer>()
 }
@@ -180,7 +180,7 @@ impl OfferHandler {
         network: Network,
         msats: Option<u64>,
     ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
-        let validated_amount = validate_amount(&offer, msats).await?;
+        let validated_amount = validate_amount(offer.amount(), msats).await?;
 
         // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
         // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
@@ -288,11 +288,11 @@ impl OfferHandler {
         }
     }
 
-    /// pay_invoice tries to pay the provided invoice.
-    pub(crate) async fn pay_invoice(
+    /// send_payment tries to pay the provided invoice using LND.
+    pub(crate) async fn send_payment(
         &self,
         mut payer: impl InvoicePayer + std::marker::Send + 'static,
-        params: PayInvoiceParams,
+        params: SendPaymentParams,
     ) -> Result<Payment, OfferError> {
         let resp = payer
             .query_routes(
@@ -325,26 +325,33 @@ impl OfferHandler {
     }
 }
 
-pub struct PayInvoiceParams {
+pub struct SendPaymentParams {
     pub path: BlindedPath,
     pub cltv_expiry_delta: u16,
     pub fee_base_msat: u32,
     pub fee_ppm: u32,
     pub payment_hash: [u8; 32],
     pub msats: u64,
-    pub offer_id: String,
     pub payment_id: PaymentId,
 }
 
-// Checks that the user-provided amount matches the offer.
-pub async fn validate_amount(offer: &Offer, amount_msats: Option<u64>) -> Result<u64, OfferError> {
-    let validated_amount = match offer.amount() {
+/// Checks that the user-provided amount matches the provided offer or invoice.
+///
+/// Parameters:
+///
+/// * `offer_amount_msats`: The amount set in the offer or invoice.
+/// * `amount_msats`: The amount we want to pay.
+pub(crate) async fn validate_amount(
+    offer_amount_msats: Option<&Amount>,
+    pay_amount_msats: Option<u64>,
+) -> Result<u64, OfferError> {
+    let validated_amount = match offer_amount_msats {
         Some(offer_amount) => {
             match *offer_amount {
                 Amount::Bitcoin {
                     amount_msats: bitcoin_amt,
                 } => {
-                    if let Some(msats) = amount_msats {
+                    if let Some(msats) = pay_amount_msats {
                         if msats < bitcoin_amt {
                             return Err(OfferError::InvalidAmount(format!(
                                 "{msats} is less than offer amount {}",
@@ -368,7 +375,7 @@ pub async fn validate_amount(offer: &Offer, amount_msats: Option<u64>) -> Result
             }
         }
         None => {
-            if let Some(msats) = amount_msats {
+            if let Some(msats) = pay_amount_msats {
                 msats
             } else {
                 return Err(OfferError::InvalidAmount(
@@ -646,7 +653,8 @@ impl InvoicePayer for Client {
     }
 }
 
-async fn get_node_id(
+// get_node_id finds an introduction node from the scid and direction provided by a blinded path.
+pub(crate) async fn get_node_id(
     client: Client,
     scid: u64,
     direction: Direction,
@@ -844,21 +852,21 @@ mod tests {
         // If the amount the user provided is greater than the offer-provided amount, then
         // we should be good.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
 
         let offer = build_custom_offer(0);
-        assert!(validate_amount(&offer, Some(20000)).await.is_ok());
+        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_invalid_amount() {
         // If the amount the user provided is lower than the offer amount, we error.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(&offer, Some(1000)).await.is_err());
+        assert!(validate_amount(offer.amount(), Some(1000)).await.is_err());
 
         // Both user amount and offer amount can't be 0.
         let offer = build_custom_offer(0);
-        assert!(validate_amount(&offer, None).await.is_err());
+        assert!(validate_amount(offer.amount(), None).await.is_err());
     }
 
     #[tokio::test]
@@ -1014,7 +1022,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pay_invoice() {
+    async fn test_send_payment() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
@@ -1043,21 +1051,20 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let handler = OfferHandler::new();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_ok());
+        assert!(handler.send_payment(payer_mock, params).await.is_ok());
     }
 
     #[tokio::test]
-    async fn test_pay_invoice_query_error() {
+    async fn test_send_payment_query_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock
@@ -1068,21 +1075,20 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
+        assert!(handler.send_payment(payer_mock, params).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_pay_invoice_send_error() {
+    async fn test_send_payment_send_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
         payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
@@ -1103,16 +1109,15 @@ mod tests {
         let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
         let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
         let handler = OfferHandler::new();
-        let params = PayInvoiceParams {
+        let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
             payment_hash: payment_hash,
             msats: 2000,
-            offer_id: get_offer(),
             payment_id,
         };
-        assert!(handler.pay_invoice(payer_mock, params).await.is_err());
+        assert!(handler.send_payment(payer_mock, params).await.is_err());
     }
 }
