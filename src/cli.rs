@@ -145,8 +145,8 @@ async fn main() {
             ref offer_string,
             amount,
         } => {
-            let tls = read_cert_from_args(&args);
-            let grpc_host = args.grpc_host.clone();
+            let tls = read_cert_from_args(args.cert_pem);
+            let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
@@ -179,7 +179,8 @@ async fn main() {
                 }
             };
 
-            let macaroon = read_macaroon_from_args(&args);
+            let macaroon =
+                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(PayOfferRequest {
                 offer: offer.to_string(),
                 amount,
@@ -198,8 +199,8 @@ async fn main() {
             ref offer_string,
             amount,
         } => {
-            let tls = read_cert_from_args(&args);
-            let grpc_host = args.grpc_host.clone();
+            let tls = read_cert_from_args(args.cert_pem);
+            let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
@@ -231,7 +232,8 @@ async fn main() {
                 }
             };
 
-            let macaroon = read_macaroon_from_args(&args);
+            let macaroon =
+                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(GetInvoiceRequest {
                 offer: offer.to_string(),
                 amount,
@@ -251,7 +253,7 @@ async fn main() {
             ref invoice_string,
             amount,
         } => {
-            let tls = read_cert_from_args(&args);
+            let tls = read_cert_from_args(args.cert_pem.clone());
             let grpc_host = args.grpc_host.clone();
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
@@ -272,7 +274,8 @@ async fn main() {
                 });
 
             let mut client = OffersClient::new(channel);
-            let macaroon = read_macaroon_from_args(&args);
+            let macaroon =
+                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(PayInvoiceRequest {
                 invoice: invoice_string.to_owned(),
                 amount,
@@ -307,9 +310,9 @@ fn read_macaroon_from_file(path: PathBuf) -> Result<String, std::io::Error> {
     Ok(hex::encode(buffer))
 }
 
-fn read_cert_from_args(args: &Cli) -> ClientTlsConfig {
+fn read_cert_from_args(cert_pem: Option<String>) -> ClientTlsConfig {
     let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
-    let pem = match &args.cert_pem {
+    let pem = match &cert_pem {
         Some(pem) => pem.clone(),
         None => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
@@ -326,24 +329,28 @@ fn read_cert_from_args(args: &Cli) -> ClientTlsConfig {
         .domain_name("localhost")
 }
 
-fn read_macaroon_from_args(args: &Cli) -> String {
+fn read_macaroon_from_args(
+    macaroon_path: Option<PathBuf>,
+    macaroon_hex: Option<String>,
+    network: &str,
+) -> String {
     // Make sure both macaroon options are not set.
-    if args.macaroon_path.is_some() && args.macaroon_hex.is_some() {
+    if macaroon_path.is_some() && macaroon_hex.is_some() {
         println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
         exit(1)
     }
 
     // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
     // set, use the default macaroon path.
-    match &args.macaroon_path {
+    match macaroon_path {
         Some(path) => read_macaroon_from_file(path.clone()).unwrap_or_else(|e| {
             println!("ERROR reading macaroon from file {e:?}");
             exit(1)
         }),
-        None => match &args.macaroon_hex {
+        None => match &macaroon_hex {
             Some(macaroon) => macaroon.clone(),
             None => {
-                let path = get_macaroon_path_default(&args.network.clone());
+                let path = get_macaroon_path_default(network);
                 read_macaroon_from_file(path).unwrap_or_else(|e| {
                     println!("ERROR reading macaroon from file {e:?}");
                     exit(1)
