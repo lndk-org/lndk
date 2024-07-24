@@ -7,6 +7,7 @@ use crate::{
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
+use lightning::ln::features::{BlindedHopFeatures, Bolt12InvoiceFeatures};
 use lightning::offers::invoice::{BlindedPayInfo, Bolt12Invoice};
 use lightning::offers::offer::Offer;
 use lightning::sign::EntropySource;
@@ -398,7 +399,7 @@ fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12I
         node_id: Some(convert_public_key(invoice.signing_pubkey())),
         signature: invoice.signature().to_string(),
         payment_paths: extract_payment_paths(invoice),
-        features: convert_features(invoice.invoice_features().clone().encode()),
+        features: convert_invoice_features(invoice.invoice_features().clone()),
         payer_note: invoice
             .payer_note()
             .map(|payer_note| payer_note.to_string()),
@@ -429,47 +430,23 @@ fn convert_public_key(native_pub_key: PublicKey) -> lndkrpc::PublicKey {
     lndkrpc::PublicKey { key: pub_key_bytes }
 }
 
-// Conversion function for FeatureBit.
-// TODO: Converting the FeatureBits doesn't work quite properly right now.
-fn feature_bit_from_id(feature_id: u8) -> Option<FeatureBit> {
-    match feature_id {
-        0 => Some(FeatureBit::DatalossProtectOpt),
-        1 => Some(FeatureBit::DatalossProtectOpt),
-        3 => Some(FeatureBit::InitialRouingSync),
-        4 => Some(FeatureBit::UpfrontShutdownScriptReq),
-        5 => Some(FeatureBit::UpfrontShutdownScriptOpt),
-        6 => Some(FeatureBit::GossipQueriesReq),
-        7 => Some(FeatureBit::GossipQueriesOpt),
-        8 => Some(FeatureBit::TlvOnionReq),
-        9 => Some(FeatureBit::TlvOnionOpt),
-        10 => Some(FeatureBit::ExtGossipQueriesReq),
-        11 => Some(FeatureBit::ExtGossipQueriesOpt),
-        12 => Some(FeatureBit::StaticRemoteKeyReq),
-        13 => Some(FeatureBit::StaticRemoteKeyOpt),
-        14 => Some(FeatureBit::PaymentAddrReq),
-        15 => Some(FeatureBit::PaymentAddrOpt),
-        16 => Some(FeatureBit::MppReq),
-        17 => Some(FeatureBit::MppOpt),
-        18 => Some(FeatureBit::WumboChannelsReq),
-        19 => Some(FeatureBit::WumboChannelsOpt),
-        20 => Some(FeatureBit::AnchorsReq),
-        21 => Some(FeatureBit::AnchorsOpt),
-        22 => Some(FeatureBit::AnchorsZeroFeeHtlcReq),
-        23 => Some(FeatureBit::AnchorsZeroFeeHtlcOpt),
-        30 => Some(FeatureBit::AmpReq),
-        31 => Some(FeatureBit::AmpOpt),
-        _ => None,
+// Conversion function for invoice features.
+// Based on Bolt12InvoiceContext in https://docs.rs/lightning/latest/src/lightning/ln/features.rs.html#213
+fn convert_invoice_features(features: Bolt12InvoiceFeatures) -> Vec<i32> {
+    let mut feature_bits = Vec::new();
+    if features.requires_basic_mpp() {
+        feature_bits.push(FeatureBit::MppReq as i32);
     }
+    if features.supports_basic_mpp() {
+        feature_bits.push(FeatureBit::MppOpt as i32);
+    }
+    feature_bits
 }
 
-// Conversion function for features.
-// TODO: Converting the FeatureBits doesn't work quite properly right now.
-fn convert_features(features: Vec<u8>) -> Vec<i32> {
-    features
-        .iter()
-        .filter_map(|&feature_id| feature_bit_from_id(feature_id))
-        .map(|feature_bit| feature_bit as i32) // Cast enum variant to i32
-        .collect()
+// Conversion function for hop features.
+// Based on BlindedHopContext in https://docs.rs/lightning/latest/src/lightning/ln/features.rs.html#213
+fn convert_hop_features(_: BlindedHopFeatures) -> Vec<i32> {
+    Vec::new()
 }
 
 fn convert_blinded_pay_info(native_info: &BlindedPayInfo) -> lndkrpc::BlindedPayInfo {
@@ -479,7 +456,7 @@ fn convert_blinded_pay_info(native_info: &BlindedPayInfo) -> lndkrpc::BlindedPay
         cltv_expiry_delta: native_info.cltv_expiry_delta as u32,
         htlc_minimum_msat: native_info.htlc_minimum_msat,
         htlc_maximum_msat: native_info.htlc_maximum_msat,
-        features: convert_features(native_info.features.clone().encode()),
+        features: convert_hop_features(native_info.features.clone()),
     }
 }
 
