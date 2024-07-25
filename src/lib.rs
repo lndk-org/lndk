@@ -16,7 +16,7 @@ use crate::lnd::{
     MIN_LND_PRE_RELEASE_VER,
 };
 use crate::lndk_offers::{OfferError, SendPaymentParams};
-use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
+use crate::onion_messenger::{LndkMessageRouter, LndkNodeIdLookUp, MessengerUtilities};
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use home::home_dir;
@@ -216,7 +216,9 @@ impl LndkOnionMessenger {
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::new();
         let network_graph = &NetworkGraph::new(network, &messenger_utils);
-        let message_router = &DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let default_message_router = DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let message_router =
+            &LndkMessageRouter(default_message_router, client.clone().lightning_read_only());
         let node_id_lookup = LndkNodeIdLookUp::new(client.clone(), pubkey);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,

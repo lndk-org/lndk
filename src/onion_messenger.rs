@@ -5,16 +5,18 @@ use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
 use bitcoin::network::constants::Network;
-use bitcoin::secp256k1::PublicKey;
+use bitcoin::secp256k1::{PublicKey, Secp256k1, Signing, Verification};
 use core::ops::Deref;
 use futures::executor::block_on;
-use lightning::blinded_path::NodeIdLookUp;
+use lightning::blinded_path::{BlindedPath, NodeIdLookUp};
 use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::onion_message::messenger::{
-    CustomOnionMessageHandler, MessageRouter, OnionMessenger,
+    CustomOnionMessageHandler, DefaultMessageRouter, Destination, MessageRouter, OnionMessagePath,
+    OnionMessenger,
 };
 use lightning::onion_message::offers::OffersMessageHandler;
+use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::EntropySource;
 use lightning::sign::NodeSigner;
 use lightning::util::logger::{Level, Logger, Record};
@@ -51,6 +53,52 @@ const DEFAULT_CALL_COUNT: u8 = 10;
 
 /// DEFAULT_CALL_FREQUENCY is the default period over which peers are rate limited.
 const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
+
+/// LndkMessageRouter temporarily helps us to avoid a race condition we sometimes experience when
+/// making payments. What happens is, we auto-connect to the introduction node of a blinded path
+/// provided by a offer. But because the OnionMessenger hasn't yet processed the PeerConnected
+/// event, it thinks we aren't connected to the introduction node, and it throws an error that
+/// it can't find a route. So, here in find_path we add a quick check in ListPeers and add that
+/// peer to the list.
+///
+/// Once we've fully implemented a NetworkGraph we should remove this.
+#[allow(dead_code)]
+pub(crate) struct LndkMessageRouter<G: Deref<Target = NetworkGraph<L>>, L: Deref, ES: Deref>(
+    pub(crate) DefaultMessageRouter<G, L, ES>,
+    pub(crate) LightningClient,
+)
+where
+    L::Target: Logger,
+    ES::Target: EntropySource;
+
+impl<G: Deref<Target = NetworkGraph<L>>, L: Deref, ES: Deref> MessageRouter
+    for LndkMessageRouter<G, L, ES>
+where
+    L::Target: Logger,
+    ES::Target: EntropySource,
+{
+    fn find_path(
+        &self,
+        sender: PublicKey,
+        peers: Vec<PublicKey>,
+        destination: Destination,
+    ) -> Result<OnionMessagePath, ()> {
+        // TODO: Instead of simply returning an error here, we should somehow pass the error to
+        // OfferHandler. Perhaps by doing something like...  passing a channel to LndkMessageRouter
+        // when it's instantiated that OfferHandler also has access to. The OfferHandler will
+        // need access to this so it can return the error to the user properly.
+        self.0.find_path(sender, peers, destination)
+    }
+
+    fn create_blinded_paths<T: Signing + Verification>(
+        &self,
+        recipient: PublicKey,
+        peers: Vec<PublicKey>,
+        secp_ctx: &Secp256k1<T>,
+    ) -> Result<Vec<BlindedPath>, ()> {
+        self.0.create_blinded_paths(recipient, peers, secp_ctx)
+    }
+}
 
 /// Node Id LookUp is a utility struct implementing NodeIdLookUp trait for LDK's OnionMessenger.
 pub struct LndkNodeIdLookUp {
