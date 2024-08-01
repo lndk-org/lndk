@@ -399,6 +399,9 @@ fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12I
         signature: invoice.signature().to_string(),
         payment_paths: extract_payment_paths(invoice),
         features: convert_features(invoice.invoice_features().clone().encode()),
+        payer_note: invoice
+            .payer_note()
+            .map(|payer_note| payer_note.to_string()),
     }
 }
 

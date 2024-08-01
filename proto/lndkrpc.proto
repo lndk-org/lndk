@@ -54,6 +54,7 @@ message Bolt12InvoiceContents {
     PublicKey node_id = 9;
     string signature = 10;
     repeated FeatureBit features = 11;
+    optional string payer_note = 12;
 }
 
 message PaymentHash {
