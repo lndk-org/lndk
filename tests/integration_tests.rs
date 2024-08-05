@@ -52,6 +52,7 @@ async fn create_offers(
         let pay_cfg = PayOfferParams {
             offer: offer,
             amount: Some(20_000),
+            payer_note: Some("".to_string()),
             network: Network::Regtest,
             client: client.clone(),
             destination: Destination::BlindedPath(blinded_path),
@@ -221,9 +222,9 @@ async fn test_lndk_send_invoice_request() {
         .create_invoice_request(
             client.clone(),
             offer.clone(),
-            vec![],
             Network::Regtest,
             Some(20_000),
+            Some("".to_string()),
         )
         .await
         .unwrap();
@@ -275,9 +276,9 @@ async fn test_lndk_send_invoice_request() {
         .create_invoice_request(
             client.clone(),
             offer.clone(),
-            vec![],
             Network::Regtest,
             Some(20_000),
+            Some("".to_string()),
         )
         .await
         .unwrap();
@@ -336,6 +337,7 @@ async fn test_lndk_pay_offer() {
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
         amount: Some(20_000),
+        payer_note: Some("".to_string()),
         network: Network::Regtest,
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
@@ -391,6 +393,7 @@ async fn test_lndk_pay_offer_concurrently() {
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
         amount: Some(20_000),
+        payer_note: Some("".to_string()),
         network: Network::Regtest,
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),

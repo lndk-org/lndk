@@ -274,6 +274,7 @@ pub struct PaymentInfo {
 pub struct PayOfferParams {
     pub offer: Offer,
     pub amount: Option<u64>,
+    pub payer_note: Option<String>,
     pub network: Network,
     pub client: Client,
     /// The destination the offer creator provided, which we will use to send the invoice request.
@@ -318,9 +319,9 @@ impl OfferHandler {
             .create_invoice_request(
                 cfg.client.clone(),
                 cfg.offer.clone(),
-                vec![],
                 cfg.network,
                 cfg.amount,
+                cfg.payer_note,
             )
             .await?;
 

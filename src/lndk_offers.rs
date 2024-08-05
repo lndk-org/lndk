@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::schnorr::Signature;
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SignOnly};
 use futures::executor::block_on;
 use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice_request::{
-    InvoiceRequest, SignInvoiceRequestFn, UnsignedInvoiceRequest,
+    ExplicitPayerId, InvoiceRequest, InvoiceRequestBuilder, SignInvoiceRequestFn,
+    UnsignedInvoiceRequest,
 };
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
@@ -176,9 +177,9 @@ impl OfferHandler {
         &self,
         mut signer: impl MessageSigner + std::marker::Send + 'static,
         offer: Offer,
-        _metadata: Vec<u8>,
         network: Network,
         msats: Option<u64>,
+        payer_note: Option<String>,
     ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
         let validated_amount = validate_amount(offer.amount(), msats).await?;
 
@@ -203,7 +204,7 @@ impl OfferHandler {
         // invoice once returned from the offer maker. Once we get an invoice back, this metadata
         // will help us to determine: 1) That the invoice is truly for the invoice request we sent.
         // 2) We don't pay duplicate invoices.
-        let unsigned_invoice_req = offer
+        let builder: InvoiceRequestBuilder<'_, '_, ExplicitPayerId, SignOnly> = offer
             .request_invoice_deriving_metadata(
                 pubkey,
                 &self.expanded_key,
@@ -214,9 +215,14 @@ impl OfferHandler {
             .chain(network)
             .map_err(OfferError::BuildUIRFailure)?
             .amount_msats(validated_amount)
-            .map_err(OfferError::BuildUIRFailure)?
-            .build()
             .map_err(OfferError::BuildUIRFailure)?;
+
+        let builder = match payer_note {
+            Some(payer_note_str) => builder.payer_note(payer_note_str),
+            None => builder,
+        };
+
+        let unsigned_invoice_req = builder.build().map_err(OfferError::BuildUIRFailure)?;
 
         // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
         // task because we need to call block_on on sign_message so that sign_closure can be a
@@ -799,7 +805,13 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         let resp = handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(amount))
+            .create_invoice_request(
+                signer_mock,
+                offer,
+                Network::Regtest,
+                Some(amount),
+                Some("".to_string()),
+            )
             .await;
         assert!(resp.is_ok())
     }
@@ -819,7 +831,13 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
+            .create_invoice_request(
+                signer_mock,
+                offer,
+                Network::Regtest,
+                Some(10000),
+                Some("".to_string())
+            )
             .await
             .is_err())
     }
@@ -842,7 +860,13 @@ mod tests {
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::new();
         assert!(handler
-            .create_invoice_request(signer_mock, offer, vec![], Network::Regtest, Some(10000))
+            .create_invoice_request(
+                signer_mock,
+                offer,
+                Network::Regtest,
+                Some(10000),
+                Some("".to_string())
+            )
             .await
             .is_err())
     }
