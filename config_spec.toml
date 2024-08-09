@@ -65,3 +65,9 @@ name = "skip_version_check"
 type = "bool"
 default = "false"
 doc = "Skip checking the LND version. Otherwise, LNDK checks that the LND version is compatible with LNDK."
+
+[[param]]
+name = "response_invoice_timeout"
+type = "u32"
+optional = true
+doc = "Amount of time in seconds that server waits for an offer creator to respond with an invoice. Defaults to 15s."

@@ -113,6 +113,7 @@ impl Offers for LNDKServer {
             client,
             destination,
             reply_path: Some(reply_path),
+            response_invoice_timeout: inner_request.response_invoice_timeout,
         };
 
         let payment = match self.offer_handler.pay_offer(cfg).await {
@@ -206,6 +207,7 @@ impl Offers for LNDKServer {
             client,
             destination,
             reply_path: Some(reply_path),
+            response_invoice_timeout: inner_request.response_invoice_timeout,
         };
 
         let (invoice, _, payment_id) = match self.offer_handler.get_invoice(cfg).await {

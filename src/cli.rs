@@ -93,6 +93,11 @@ enum Commands {
         /// A payer-provided note which will be seen by the recipient.
         #[arg(required = false)]
         payer_note: Option<String>,
+
+        /// The amount of time in seconds that the user would like to wait for an invoice to
+        /// arrive. If this isn't set, we'll use the default value.
+        #[arg(long, global = false, required = false, default_value = "15")]
+        response_invoice_timeout: Option<u32>,
     },
     /// GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It
     /// fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
@@ -108,6 +113,11 @@ enum Commands {
         /// A payer-provided note which will be seen by the recipient.
         #[arg(required = false)]
         payer_note: Option<String>,
+
+        /// The amount of time in seconds that the user would like to wait for an invoice to
+        /// arrive. If this isn't set, we'll use the default value.
+        #[arg(long, global = false, required = false, default_value = "15")]
+        response_invoice_timeout: Option<u32>,
     },
     /// PayInvoice pays a hex-encoded BOLT12 invoice.
     PayInvoice {
@@ -162,6 +172,7 @@ async fn main() {
             ref offer_string,
             amount,
             payer_note,
+            response_invoice_timeout,
         } => {
             let tls = read_cert_from_args(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host;
@@ -203,6 +214,7 @@ async fn main() {
                 offer: offer.to_string(),
                 amount,
                 payer_note,
+                response_invoice_timeout,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
 
@@ -218,6 +230,7 @@ async fn main() {
             ref offer_string,
             amount,
             payer_note,
+            response_invoice_timeout,
         } => {
             let tls = read_cert_from_args(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host;
@@ -258,6 +271,7 @@ async fn main() {
                 offer: offer.to_string(),
                 amount,
                 payer_note,
+                response_invoice_timeout,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.get_invoice(request).await {

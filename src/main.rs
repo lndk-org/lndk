@@ -21,6 +21,7 @@ use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
 use std::fs::create_dir_all;
 use std::path::PathBuf;
+use std::process::exit;
 use std::sync::Arc;
 use tokio::select;
 use tonic::transport::{Server, ServerTlsConfig};
@@ -55,7 +56,15 @@ async fn main() -> Result<(), ()> {
         skip_version_check: config.skip_version_check,
     };
 
-    let handler = Arc::new(OfferHandler::new());
+    let response_invoice_timeout = config.response_invoice_timeout;
+    if let Some(timeout) = response_invoice_timeout {
+        if timeout == 0 {
+            eprintln!("Error: response_invoice_timeout must be more than 0 seconds.");
+            exit(1);
+        }
+    }
+
+    let handler = Arc::new(OfferHandler::new(config.response_invoice_timeout));
     let messenger = LndkOnionMessenger::new();
 
     let data_dir =
