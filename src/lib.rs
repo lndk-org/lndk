@@ -64,6 +64,7 @@ pub const DEFAULT_DATA_DIR: &str = ".lndk";
 
 pub const TLS_CERT_FILENAME: &str = "tls-cert.pem";
 pub const TLS_KEY_FILENAME: &str = "tls-key.pem";
+pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
 
 #[allow(clippy::result_unit_err)]
 pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
@@ -263,6 +264,9 @@ pub struct OfferHandler {
     pending_messages: Mutex<Vec<PendingOnionMessage<OffersMessage>>>,
     pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
+    /// The amount of time in seconds that we will wait for the offer creator to respond with
+    /// an invoice. If not provided, we will use the default value of 15 seconds.
+    pub response_invoice_timeout: u32,
 }
 
 pub struct PaymentInfo {
@@ -282,19 +286,25 @@ pub struct PayOfferParams {
     /// The path we will send back to the offer creator, so it knows where to send back the
     /// invoice.
     pub reply_path: Option<BlindedPath>,
+    /// The amount of time in seconds that we will wait for the offer creator to respond with
+    /// an invoice. If not provided, we will use the default value of 15 seconds.
+    pub response_invoice_timeout: Option<u32>,
 }
 
 impl OfferHandler {
-    pub fn new() -> Self {
+    pub fn new(response_invoice_timeout: Option<u32>) -> Self {
         let messenger_utils = MessengerUtilities::new();
         let random_bytes = messenger_utils.get_secure_random_bytes();
         let expanded_key = ExpandedKey::new(&KeyMaterial(random_bytes));
+        let response_invoice_timeout =
+            response_invoice_timeout.unwrap_or(DEFAULT_RESPONSE_INVOICE_TIMEOUT);
 
         OfferHandler {
             active_payments: Mutex::new(HashMap::new()),
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils,
             expanded_key,
+            response_invoice_timeout,
         }
     }
 
@@ -338,16 +348,24 @@ impl OfferHandler {
             e
         })?;
 
-        let invoice =
-            match timeout(Duration::from_secs(20), self.wait_for_invoice(payment_id)).await {
-                Ok(invoice) => invoice,
-                Err(_) => {
-                    error!("Did not receive invoice in 100 seconds.");
-                    let mut active_payments = self.active_payments.lock().unwrap();
-                    active_payments.remove(&payment_id);
-                    return Err(OfferError::InvoiceTimeout);
-                }
-            };
+        let cfg_timeout = cfg
+            .response_invoice_timeout
+            .unwrap_or(self.response_invoice_timeout);
+
+        let invoice = match timeout(
+            Duration::from_secs(cfg_timeout as u64),
+            self.wait_for_invoice(payment_id),
+        )
+        .await
+        {
+            Ok(invoice) => invoice,
+            Err(_) => {
+                error!("Did not receive invoice in {cfg_timeout} seconds.");
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments.remove(&payment_id);
+                return Err(OfferError::InvoiceTimeout(cfg_timeout));
+            }
+        };
         {
             let mut active_payments = self.active_payments.lock().unwrap();
             active_payments
@@ -435,7 +453,7 @@ impl OfferHandler {
 
 impl Default for OfferHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 

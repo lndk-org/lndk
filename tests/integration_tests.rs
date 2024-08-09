@@ -57,6 +57,7 @@ async fn create_offers(
             client: client.clone(),
             destination: Destination::BlindedPath(blinded_path),
             reply_path: Some(reply_path),
+            response_invoice_timeout: None,
         };
 
         pay_cfgs.push(pay_cfg);
@@ -216,7 +217,7 @@ async fn test_lndk_send_invoice_request() {
     setup_logger(None, log_dir).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
     let (invoice_request, _, _) = handler
         .create_invoice_request(
@@ -270,7 +271,7 @@ async fn test_lndk_send_invoice_request() {
     );
     setup_logger(None, log_dir).unwrap();
 
-    let handler = Arc::new(lndk::OfferHandler::new());
+    let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
     let (invoice_request, _, _) = handler
         .create_invoice_request(
@@ -342,6 +343,7 @@ async fn test_lndk_pay_offer() {
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: Some(reply_path),
+        response_invoice_timeout: None,
     };
     select! {
         val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
@@ -398,6 +400,7 @@ async fn test_lndk_pay_offer_concurrently() {
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: Some(reply_path),
+        response_invoice_timeout: None,
     };
     // Let's also try to pay the same offer multiple times concurrently.
     select! {
