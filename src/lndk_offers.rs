@@ -29,8 +29,9 @@ use tonic_lnd::lnrpc::{
     ListPeersResponse, Payment, QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
-use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
+use tonic_lnd::signrpc::{KeyDescriptor, KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
+use tonic_lnd::walletrpc::KeyReq;
 use tonic_lnd::Client;
 
 #[derive(Debug)]
@@ -183,19 +184,20 @@ impl OfferHandler {
     ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
         let validated_amount = validate_amount(offer.amount(), msats).await?;
 
-        // We use KeyFamily KeyFamilyNodeKey (6) to derive a key to represent our node id. See:
-        // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L103
-        let key_loc = KeyLocator {
-            key_family: 6,
-            key_index: 1,
+        // We use KeyFamily KeyFamilyNodeKey (3) to derive a key. For better privacy, the key
+        // shouldn't correspond to our node id.
+        // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L86
+        let key_loc = KeyReq {
+            key_family: 3,
+            ..Default::default()
         };
 
-        let pubkey_bytes = signer
-            .derive_key(key_loc.clone())
+        let key_descriptor = signer
+            .derive_next_key(key_loc.clone())
             .await
             .map_err(OfferError::DeriveKeyFailure)?;
-        let pubkey =
-            PublicKey::from_slice(&pubkey_bytes).expect("failed to deserialize public key");
+        let pubkey = PublicKey::from_slice(&key_descriptor.raw_key_bytes)
+            .expect("failed to deserialize public key");
 
         // Generate a new payment id for this payment.
         let payment_id = PaymentId(self.messenger_utils.get_secure_random_bytes());
@@ -227,10 +229,11 @@ impl OfferHandler {
         // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
         // task because we need to call block_on on sign_message so that sign_closure can be a
         // synchronous closure.
-        let invoice_request =
-            task::spawn_blocking(move || signer.sign_uir(key_loc, unsigned_invoice_req))
-                .await
-                .unwrap()?;
+        let invoice_request = task::spawn_blocking(move || {
+            signer.sign_uir(key_descriptor.key_loc.unwrap(), unsigned_invoice_req)
+        })
+        .await
+        .unwrap()?;
 
         {
             let mut active_payments = self.active_payments.lock().unwrap();
@@ -489,9 +492,9 @@ impl PeerConnector for Client {
 
 #[async_trait]
 impl MessageSigner for Client {
-    async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status> {
-        match self.wallet().derive_key(key_loc).await {
-            Ok(resp) => Ok(resp.into_inner().raw_key_bytes),
+    async fn derive_next_key(&mut self, key_req: KeyReq) -> Result<KeyDescriptor, Status> {
+        match self.wallet().derive_next_key(key_req).await {
+            Ok(resp) => Ok(resp.into_inner()),
             Err(e) => Err(e),
         }
     }
@@ -600,7 +603,7 @@ impl InvoicePayer for Client {
 
         let blinded_payment_paths = tonic_lnd::lnrpc::BlindedPaymentPath {
             blinded_path,
-            total_cltv_delta: u32::from(cltv_expiry_delta) + 120,
+            total_cltv_delta: u32::from(cltv_expiry_delta),
             base_fee_msat: u64::from(fee_base_msat),
             proportional_fee_msat: u64::from(fee_ppm),
             ..Default::default()
@@ -754,7 +757,7 @@ mod tests {
 
          #[async_trait]
          impl MessageSigner for TestBolt12Signer {
-             async fn derive_key(&mut self, key_loc: KeyLocator) -> Result<Vec<u8>, Status>;
+             async fn derive_next_key(&mut self, key_req: KeyReq) -> Result<KeyDescriptor, Status>;
              async fn sign_message(&mut self, key_loc: KeyLocator, merkle_hash: Hash, tag: String) -> Result<Vec<u8>, Status>;
              fn sign_uir(&mut self, key_loc: KeyLocator, unsigned_invoice_req: UnsignedInvoiceRequest) -> Result<InvoiceRequest, OfferError>;
          }
@@ -786,9 +789,17 @@ mod tests {
     async fn test_request_invoice() {
         let mut signer_mock = MockTestBolt12Signer::new();
 
-        signer_mock.expect_derive_key().returning(|_| {
-            let pubkey = PublicKey::from_str(&get_pubkey()).unwrap();
-            Ok(pubkey.serialize().to_vec())
+        signer_mock.expect_derive_next_key().returning(|_| {
+            Ok(KeyDescriptor {
+                raw_key_bytes: PublicKey::from_str(&get_pubkey())
+                    .unwrap()
+                    .serialize()
+                    .to_vec(),
+                key_loc: Some(KeyLocator {
+                    key_family: 3,
+                    ..Default::default()
+                }),
+            })
         });
 
         let offer = decode(get_offer()).unwrap();
@@ -821,7 +832,7 @@ mod tests {
         let mut signer_mock = MockTestBolt12Signer::new();
 
         signer_mock
-            .expect_derive_key()
+            .expect_derive_next_key()
             .returning(|_| Err(Status::unknown("error testing")));
 
         signer_mock
@@ -846,11 +857,17 @@ mod tests {
     async fn test_request_invoice_signer_error() {
         let mut signer_mock = MockTestBolt12Signer::new();
 
-        signer_mock.expect_derive_key().returning(|_| {
-            Ok(PublicKey::from_str(&get_pubkey())
-                .unwrap()
-                .serialize()
-                .to_vec())
+        signer_mock.expect_derive_next_key().returning(|_| {
+            Ok(KeyDescriptor {
+                raw_key_bytes: PublicKey::from_str(&get_pubkey())
+                    .unwrap()
+                    .serialize()
+                    .to_vec(),
+                key_loc: Some(KeyLocator {
+                    key_family: 3,
+                    ..Default::default()
+                }),
+            })
         });
 
         signer_mock
