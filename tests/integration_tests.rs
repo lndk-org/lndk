@@ -7,7 +7,7 @@ use bitcoin::Network;
 use bitcoincore_rpc::bitcoin::Network as RpcNetwork;
 use bitcoincore_rpc::RpcApi;
 use ldk_sample::node_api::Node as LdkNode;
-use lightning::blinded_path::BlindedPath;
+use lightning::blinded_path::{BlindedPath, IntroductionNode};
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
@@ -309,7 +309,7 @@ async fn test_lndk_pay_offer() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -366,7 +366,7 @@ async fn test_lndk_pay_offer_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -424,7 +424,7 @@ async fn test_lndk_pay_multiple_offers_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = &vec![ldk2_pubkey, ldk1_pubkey];
     let reply_path = &vec![ldk2_pubkey, lnd_pubkey];
@@ -464,7 +464,7 @@ async fn test_transient_keys() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -512,4 +512,68 @@ async fn test_transient_keys() {
             ldk2.stop().await;
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// We test that when creating a reply path for an offer node to send an invoice to, we don't
+// use a node that we're connected to as the introduction node if it's an unadvertised node that
+// is only connected by private channels.
+async fn test_reply_path_unannounced_peers() {
+    let test_name = "unannounced_peers";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (_, _, lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, false, &mut lnd, &bitcoind).await;
+
+    let (_, handler, _, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
+
+    // In the small network we produced above, the lnd node is only connected to ldk2, which has a
+    // private channel and as such, is an unadvertised node. Because of that, create_reply_path
+    // should not use ldk2 as an introduction node and should return a reply path directly to
+    // itself.
+    let reply_path = handler
+        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey)
+        .await;
+    assert!(reply_path.is_ok());
+    assert_eq!(reply_path.unwrap().blinded_hops.len(), 1);
+
+    shutdown.trigger();
+    ldk1.stop().await;
+    ldk2.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// We test that when creating a reply path for an offer node to send an invoice to, we successfully
+// use a node that we're connected to as the introduction node *if* it's an advertised node with
+// public channels.
+async fn test_reply_path_announced_peers() {
+    let test_name = "announced_peers";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (_, ldk2_pubkey, lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+
+    let (_, handler, _, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
+
+    // In the small network we produced above, the lnd node is only connected to ldk2, which has a
+    // public channel and as such, is indeed an advertised node. Because of this, we make sure
+    // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
+    // expected.
+    let reply_path = handler
+        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey)
+        .await;
+    assert!(reply_path.is_ok());
+    assert_eq!(reply_path.as_ref().unwrap().blinded_hops.len(), 2);
+    assert_eq!(
+        reply_path.as_ref().unwrap().introduction_node,
+        IntroductionNode::NodeId(ldk2_pubkey)
+    );
+
+    shutdown.trigger();
+    ldk1.stop().await;
+    ldk2.stop().await;
 }

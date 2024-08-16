@@ -82,6 +82,7 @@ pub async fn setup_test_infrastructure(
 pub async fn connect_network(
     ldk1: &LdkNode,
     ldk2: &LdkNode,
+    announce_channel: bool,
     lnd: &mut LndNode,
     bitcoind: &BitcoindNode,
 ) -> (PublicKey, PublicKey, PublicKey) {
@@ -136,7 +137,7 @@ pub async fn connect_network(
         SocketAddr::from_str(&lnd_network_addr).unwrap(),
         200000,
         10000000,
-        true,
+        announce_channel,
     )
     .await
     .unwrap();
