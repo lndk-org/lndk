@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
 use tokio::select;
+use tokio::signal::unix::SignalKind;
 use tonic::transport::{Server, ServerTlsConfig};
 use tonic_lnd::lnrpc::GetInfoRequest;
 
@@ -53,12 +54,33 @@ async fn main() -> Result<(), ()> {
     let lnd_args = LndCfg::new(config.address, creds.clone());
 
     let (shutdown, listener) = triggered::trigger();
-    let signals = LifecycleSignals { shutdown, listener };
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener: listener.clone(),
+    };
     let args = Cfg {
         lnd: lnd_args,
         signals,
         skip_version_check: config.skip_version_check,
     };
+
+    let mut sigterm_stream = tokio::signal::unix::signal(SignalKind::terminate())
+        .map_err(|e| error!("Error initializing sigterm signal: {e}."))?;
+    let mut sigint_stream = tokio::signal::unix::signal(SignalKind::interrupt())
+        .map_err(|e| error!("Error initializing sigint signal: {e}."))?;
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sigint_stream.recv() => {
+                info!("Received CTRL-C, shutting down..");
+                shutdown.trigger();
+            }
+            _ = sigterm_stream.recv() => {
+                info!("Received SIGTERM, shutting down..");
+                shutdown.trigger();
+            }
+        }
+    });
 
     let response_invoice_timeout = config.response_invoice_timeout;
     if let Some(timeout) = response_invoice_timeout {
@@ -113,7 +135,7 @@ async fn main() -> Result<(), ()> {
         .tls_config(ServerTlsConfig::new().identity(identity))
         .expect("couldn't configure tls")
         .add_service(OffersServer::new(server))
-        .serve(addr);
+        .serve_with_shutdown(addr, listener);
 
     info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
 
