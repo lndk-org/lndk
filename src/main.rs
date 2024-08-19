@@ -23,7 +23,10 @@ use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
-use tokio::select;
+use tokio::{
+    select,
+    signal::unix::{signal, SignalKind},
+};
 use tonic::transport::{Server, ServerTlsConfig};
 use tonic_lnd::lnrpc::GetInfoRequest;
 
@@ -117,6 +120,10 @@ async fn main() -> Result<(), ()> {
 
     info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
 
+    // Set up signal handlers for SIGTERM and SIGINT
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to set up SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("failed to set up SIGINT handler");
+
     select! {
        _ = messenger.run(args, Arc::clone(&handler)) => {
            info!("Onion messenger completed");
@@ -126,6 +133,12 @@ async fn main() -> Result<(), ()> {
                 Ok(_) => info!("API completed"),
                 Err(e) => error!("Error running API: {}", e),
             };
+       },
+       _ = sigterm.recv() => {
+            info!("Received SIGTERM, shutting down");
+       },
+       _ = sigint.recv() => {
+            info!("Received SIGINT, shutting down");
        },
     }
 
