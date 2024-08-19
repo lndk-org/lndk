@@ -36,6 +36,10 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
 
+    let data_dir =
+        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
+    setup_logger(config.log_level, config.log_dir)?;
+
     let creds = validate_lnd_creds(
         config.cert_path,
         config.cert_pem,
@@ -43,7 +47,7 @@ async fn main() -> Result<(), ()> {
         config.macaroon_hex,
     )
     .map_err(|e| {
-        println!("Error validating config: {e}.");
+        error!("Error validating config: {e}.");
     })?;
     let address = config.address.clone();
     let lnd_args = LndCfg::new(config.address, creds.clone());
@@ -59,17 +63,13 @@ async fn main() -> Result<(), ()> {
     let response_invoice_timeout = config.response_invoice_timeout;
     if let Some(timeout) = response_invoice_timeout {
         if timeout == 0 {
-            eprintln!("Error: response_invoice_timeout must be more than 0 seconds.");
+            error!("Error: response_invoice_timeout must be more than 0 seconds.");
             exit(1);
         }
     }
 
     let handler = Arc::new(OfferHandler::new(config.response_invoice_timeout));
     let messenger = LndkOnionMessenger::new();
-
-    let data_dir =
-        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
-    setup_logger(config.log_level, config.log_dir)?;
 
     let mut client = get_lnd_client(args.lnd.clone()).expect("failed to connect to lnd");
     let info = client
