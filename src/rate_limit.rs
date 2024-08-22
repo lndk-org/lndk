@@ -50,6 +50,11 @@ pub(crate) struct TokenLimiter<C: Clock> {
     last_update: Instant,
 }
 
+pub(crate) struct RateLimiterCfg {
+    pub(crate) call_count: u8,
+    pub(crate) call_period_secs: Duration,
+}
+
 impl<C: Clock> TokenLimiter<C> {
     /// new creates a TokenLimiter initialized with the clock's current time and loads the set of
     /// peers provided with each allocated call_count hits for the current period.

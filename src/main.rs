@@ -54,6 +54,8 @@ async fn main() -> Result<(), ()> {
         lnd: lnd_args,
         signals,
         skip_version_check: config.skip_version_check,
+        rate_limit_count: config.rate_limit_count,
+        rate_limit_period_secs: config.rate_limit_period_secs,
     };
 
     let response_invoice_timeout = config.response_invoice_timeout;
