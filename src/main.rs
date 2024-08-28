@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
 use tokio::select;
+use tokio::signal::unix::SignalKind;
 use tonic::transport::{Server, ServerTlsConfig};
 use tonic_lnd::lnrpc::GetInfoRequest;
 
@@ -36,6 +37,10 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
 
+    let data_dir =
+        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
+    setup_logger(config.log_level, config.log_dir)?;
+
     let creds = validate_lnd_creds(
         config.cert_path,
         config.cert_pem,
@@ -43,33 +48,50 @@ async fn main() -> Result<(), ()> {
         config.macaroon_hex,
     )
     .map_err(|e| {
-        println!("Error validating config: {e}.");
+        error!("Error validating config: {e}.");
     })?;
     let address = config.address.clone();
     let lnd_args = LndCfg::new(config.address, creds.clone());
 
     let (shutdown, listener) = triggered::trigger();
-    let signals = LifecycleSignals { shutdown, listener };
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener: listener.clone(),
+    };
     let args = Cfg {
         lnd: lnd_args,
         signals,
         skip_version_check: config.skip_version_check,
     };
 
+    let mut sigterm_stream = tokio::signal::unix::signal(SignalKind::terminate())
+        .map_err(|e| error!("Error initializing sigterm signal: {e}."))?;
+    let mut sigint_stream = tokio::signal::unix::signal(SignalKind::interrupt())
+        .map_err(|e| error!("Error initializing sigint signal: {e}."))?;
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sigint_stream.recv() => {
+                info!("Received CTRL-C, shutting down..");
+                shutdown.trigger();
+            }
+            _ = sigterm_stream.recv() => {
+                info!("Received SIGTERM, shutting down..");
+                shutdown.trigger();
+            }
+        }
+    });
+
     let response_invoice_timeout = config.response_invoice_timeout;
     if let Some(timeout) = response_invoice_timeout {
         if timeout == 0 {
-            eprintln!("Error: response_invoice_timeout must be more than 0 seconds.");
+            error!("Error: response_invoice_timeout must be more than 0 seconds.");
             exit(1);
         }
     }
 
     let handler = Arc::new(OfferHandler::new(config.response_invoice_timeout));
     let messenger = LndkOnionMessenger::new();
-
-    let data_dir =
-        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
-    setup_logger(config.log_level, config.log_dir)?;
 
     let mut client = get_lnd_client(args.lnd.clone()).expect("failed to connect to lnd");
     let info = client
@@ -113,7 +135,7 @@ async fn main() -> Result<(), ()> {
         .tls_config(ServerTlsConfig::new().identity(identity))
         .expect("couldn't configure tls")
         .add_service(OffersServer::new(server))
-        .serve(addr);
+        .serve_with_shutdown(addr, listener);
 
     info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
 

@@ -24,7 +24,7 @@ rand_core = "0.6.4"
 log = "0.4.17"
 log4rs = { version = "1.2.0", features = ["file_appender"] }
 rcgen = { version = "0.13.1", features = ["pem", "x509-parser"] }
-tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "signal"] }
 tonic = { version = "0.11", features = [ "tls", "transport" ] }
 tonic_lnd = { git = "https://github.com/orbitalturtle/tonic_lnd", rev="18c5a71084886024a6b90307bfb8822288c5daea", package="fedimint-tonic-lnd", features = ["lightningrpc", "routerrpc", "versionrpc"] }
 hex = "0.4.3"
