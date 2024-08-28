@@ -20,8 +20,7 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::{fmt, fs};
 use tonic_lnd::lnrpc::{
-    GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse, Payment, QueryRoutesResponse,
-    Route,
+    GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment, QueryRoutesResponse, Route,
 };
 use tonic_lnd::signrpc::{KeyDescriptor, KeyLocator};
 use tonic_lnd::tonic::Status;
@@ -404,7 +403,11 @@ pub trait MessageSigner {
 pub trait PeerConnector {
     async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
     async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
-    async fn get_node_info(&mut self, pub_key: String) -> Result<Option<LightningNode>, Status>;
+    async fn get_node_info(
+        &mut self,
+        pub_key: String,
+        include_channels: bool,
+    ) -> Result<NodeInfo, Status>;
 }
 
 /// InvoicePayer provides a layer of abstraction over the LND API for paying for a BOLT 12 invoice.
