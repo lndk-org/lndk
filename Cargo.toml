@@ -75,7 +75,7 @@ protobuf = { version = "27.3_1" }
 
 # Release dependencies for Linux
 [workspace.metadata.dist.dependencies.apt]
-protobuf-compiler = { version = "3.27.3-1" }
+protobuf-compiler = { version = "3.21.12-8.2build1" }
 
 # Release dependencies for Windows
 [workspace.metadata.dist.dependencies.chocolatey]
