@@ -75,8 +75,12 @@ protobuf = { version = "27.3_1" }
 
 # Release dependencies for Linux
 [workspace.metadata.dist.dependencies.apt]
-protobuf-compiler = '*'
+protobuf-compiler = { version = "3.21.12-8.2build1" }
 
 # Release dependencies for Windows
 [workspace.metadata.dist.dependencies.chocolatey]
 protoc = { version = "27.3.0" }
+
+# Use more recent version of ubuntu
+[workspace.metadata.dist.github-custom-runners]
+x86_64-unknown-linux-gnu = "ubuntu-24.04"
