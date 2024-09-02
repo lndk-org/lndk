@@ -68,3 +68,15 @@ install-updater = true
 github-attestations = true
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+
+# Release dependencies for MacOS
+[workspace.metadata.dist.dependencies.homebrew]
+protobuf = { version = "3.15.8" }
+
+# Release dependencies for Linux
+[workspace.metadata.dist.dependencies.apt]
+protobuf-compiler = { version = "3.15.8" }
+
+# Release dependencies for Windows
+[workspace.metadata.dist.dependencies.chocolatey]
+protoc = { version = "3.15.8" }
