@@ -12,6 +12,7 @@ use lndk::lnd::validate_lnd_creds;
 use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -23,6 +24,8 @@ use tonic_lnd::lnrpc::{AddressType, GetInfoRequest};
 use tonic_lnd::Client;
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
+const BIN_DIR: &str = "bin";
+const DEBUG_DIR: &str = "debug";
 
 pub async fn setup_test_infrastructure(
     test_name: &str,
@@ -295,7 +298,7 @@ impl LndNode {
         zmq_tx_port: u16,
         lnd_data_dir: PathBuf,
     ) -> LndNode {
-        let lnd_exe_dir = env::temp_dir().join(LNDK_TESTS_FOLDER).join("bin");
+        let lnd_exe_dir = env::temp_dir().join(LNDK_TESTS_FOLDER).join(BIN_DIR);
         env::set_current_dir(lnd_exe_dir).expect("couldn't set current directory");
 
         let lnd_dir_binding = Builder::new()
@@ -552,5 +555,42 @@ impl LndNode {
         };
 
         resp
+    }
+}
+
+pub(crate) struct LndkCli {
+    macaroon_path: String,
+    cert_path: String,
+    server_port: u16,
+}
+
+impl LndkCli {
+    pub(crate) fn new(macaroon_path: String, cert_path: String, server_port: u16) -> Self {
+        Self {
+            macaroon_path,
+            cert_path,
+            server_port,
+        }
+    }
+
+    pub(crate) async fn pay_offer(&self, offer: String, amount: u64) -> ExitStatus {
+        let lndk_exe_dir = env::temp_dir()
+            .join(LNDK_TESTS_FOLDER)
+            .join(BIN_DIR)
+            .join(DEBUG_DIR);
+        env::set_current_dir(lndk_exe_dir).expect("couldn't set current directory");
+
+        Command::new("./lndk-cli")
+            .arg(format!("--macaroon-path={}", self.macaroon_path))
+            .arg(format!("--cert-path={}", self.cert_path))
+            .arg(format!("--grpc-port={}", self.server_port))
+            .arg("pay-offer")
+            .arg(offer)
+            .arg(amount.to_string())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("failed to execute cargo run process")
+            .status
     }
 }
