@@ -42,7 +42,7 @@ pub struct LNDKServer {
     node_id: PublicKey,
     // The LND tls cert we need to establish a connection with LND.
     lnd_cert: String,
-    address: String,
+    lnd_address: String,
 }
 
 impl LNDKServer {
@@ -50,13 +50,13 @@ impl LNDKServer {
         offer_handler: Arc<OfferHandler>,
         node_id: &str,
         lnd_cert: String,
-        address: String,
+        lnd_address: String,
     ) -> Self {
         Self {
             offer_handler,
             node_id: PublicKey::from_str(node_id).unwrap(),
             lnd_cert,
-            address,
+            lnd_address,
         }
     }
 }
@@ -75,7 +75,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let mut client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
@@ -171,7 +171,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let mut client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
@@ -258,7 +258,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
