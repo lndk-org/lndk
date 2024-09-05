@@ -6,12 +6,15 @@ use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use bitcoincore_rpc::bitcoin::Network as RpcNetwork;
 use bitcoincore_rpc::RpcApi;
+use bitcoind::get_available_port;
+use common::LndkCli;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::blinded_path::{BlindedPath, IntroductionNode};
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::onion_messenger::MessengerUtilities;
+use lndk::server::setup_server;
 use lndk::{setup_logger, LifecycleSignals, OfferHandler, PayOfferParams};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -572,6 +575,99 @@ async fn test_reply_path_announced_peers() {
         reply_path.as_ref().unwrap().introduction_node,
         IntroductionNode::NodeId(ldk2_pubkey)
     );
+
+    shutdown.trigger();
+    ldk1.stop().await;
+    ldk2.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Tests the interaction between the CLI and the server and ensures that we can make a payment
+// with the CLI.
+async fn test_server_pay_offer() {
+    let test_name = "lndk_server_pay_offer";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, ldk2_pubkey, _) =
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+
+    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
+    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
+    let offer_amount = 20_000;
+    let offer = ldk1
+        .create_offer(
+            &path_pubkeys,
+            Network::Regtest,
+            offer_amount,
+            Quantity::One,
+            expiration,
+        )
+        .await
+        .expect("should create offer");
+
+    let log_dir = Some(
+        lndk_dir
+            .join(format!("lndk-logs.txt"))
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    setup_logger(None, log_dir).unwrap();
+
+    let (lndk_cfg, handler, messenger, shutdown) = common::setup_lndk(
+        &lnd.cert_path,
+        &lnd.macaroon_path,
+        lnd.address.clone(),
+        lndk_dir.clone(),
+    )
+    .await;
+
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds.clone());
+
+    let server_port = get_available_port().unwrap();
+    let server_fut = setup_server(
+        lnd_cfg,
+        None,
+        Some(server_port),
+        lndk_dir.clone(),
+        None,
+        Arc::clone(&handler),
+        lnd.address,
+    )
+    .await
+    .unwrap();
+
+    // Spin up the onion messenger and server in another thread before we try to pay the offer
+    // via the CLI.
+    tokio::spawn(async move {
+        select! {
+            val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
+                panic!("lndk should not have completed first {:?}", val);
+            },
+            _ = server_fut => {
+                panic!("server should not have completed first");
+            },
+        }
+    });
+
+    // Let's try running the pay-offer CLI command.
+    let lndk_tls_cert_path = lndk_dir.join("tls-cert.pem");
+    let cli = LndkCli::new(
+        lnd.macaroon_path,
+        lndk_tls_cert_path.to_str().unwrap().to_owned(),
+        server_port,
+    );
+
+    let resp = cli.pay_offer(offer.to_string(), offer_amount).await;
+    assert!(resp.success());
 
     shutdown.trigger();
     ldk1.stop().await;
