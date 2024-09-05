@@ -31,6 +31,10 @@ use tonic::metadata::MetadataMap;
 use tonic::transport::Identity;
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
+
+pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
+pub const DEFAULT_SERVER_PORT: u16 = 7000;
+
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
     node_id: PublicKey,

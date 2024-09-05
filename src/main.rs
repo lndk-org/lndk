@@ -12,10 +12,12 @@ mod internal {
 use home::home_dir;
 use internal::*;
 use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
-use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
+use lndk::server::{
+    generate_tls_creds, read_tls, LNDKServer, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+};
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
-    DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    DEFAULT_DATA_DIR,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};

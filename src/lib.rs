@@ -57,8 +57,6 @@ pub fn init_logger(config: LogConfig) {
     });
 }
 
-pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
-pub const DEFAULT_SERVER_PORT: u16 = 7000;
 pub const LDK_LOGGER_NAME: &str = "ldk";
 pub const DEFAULT_DATA_DIR: &str = ".lndk";
 
