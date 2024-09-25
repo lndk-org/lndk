@@ -22,8 +22,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy the built executable from the builder stage
+# Copy the built executables from the builder stage
 COPY --from=builder /app/target/release/lndk /usr/local/bin/lndk
+COPY --from=builder /app/target/release/lndk-cli /usr/local/bin/lndk-cli
 
 # Set the startup command
 CMD ["lndk"]
