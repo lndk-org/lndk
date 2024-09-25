@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  lndk:
+    container_name: lndk
+    build: .
+    # depends_on: [lnd]
+    restart: on-failure
+    volumes:
+      - /Users/nitesh/.polar/networks/1/volumes/lnd/alice:/lnd:ro
+    command: >
+      lndk --address=https://polar-n1-alice:10001 --cert-path=/lnd/tls.cert --macaroon-path=/lnd/data/chain/bitcoin/regtest/admin.macaroon
+networks:
+  default:
+    name: polar-network-1_default
+    external: true
