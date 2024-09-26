@@ -86,8 +86,8 @@ Or in a more concrete example:
 * In the lndk directory, create file named `lndk.conf`.
 * Add the following lines to the file:
   * `address="<ADDRESS"`
-  * `cert-path="<TLSPATH>"`
-  * `macaroon-path="<MACAROONPATH>"`
+  * `cert_path="<TLSPATH>"`
+  * `macaroon_path="<MACAROONPATH>"`
 * Run `cargo run --bin=lndk -- --conf lndk.conf`
 
 - Use any of the commands with the --help option for more information about each argument.
