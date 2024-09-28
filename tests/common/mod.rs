@@ -185,7 +185,7 @@ pub async fn setup_lndk(
         signals,
         skip_version_check: false,
         rate_limit_count: 10,
-        rate_limit_period: 1,
+        rate_limit_period_secs: 1,
     };
 
     // Make sure lndk successfully sends the invoice_request.

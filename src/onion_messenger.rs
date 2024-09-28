@@ -269,7 +269,7 @@ impl LndkOnionMessenger {
         let rate_limiter = &mut TokenLimiter::new(
             current_peers.keys().copied(),
             rate_limiter_cfg.call_count,
-            rate_limiter_cfg.call_period,
+            rate_limiter_cfg.call_period_secs,
             TokioClock::new(),
         );
         let mut message_sender = CustomMessenger {

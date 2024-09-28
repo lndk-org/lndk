@@ -131,7 +131,7 @@ pub struct Cfg {
     pub signals: LifecycleSignals,
     pub skip_version_check: bool,
     pub rate_limit_count: u8,
-    pub rate_limit_period: u64,
+    pub rate_limit_period_secs: u64,
 }
 
 #[derive(Clone)]
@@ -241,7 +241,7 @@ impl LndkOnionMessenger {
             args.signals,
             RateLimiterCfg {
                 call_count: args.rate_limit_count,
-                call_period: Duration::from_secs(args.rate_limit_period),
+                call_period_secs: Duration::from_secs(args.rate_limit_period_secs),
             },
         )
         .await

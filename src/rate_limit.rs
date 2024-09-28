@@ -52,7 +52,7 @@ pub(crate) struct TokenLimiter<C: Clock> {
 
 pub(crate) struct RateLimiterCfg {
     pub(crate) call_count: u8,
-    pub(crate) call_period: Duration,
+    pub(crate) call_period_secs: Duration,
 }
 
 impl<C: Clock> TokenLimiter<C> {
