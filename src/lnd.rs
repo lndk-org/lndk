@@ -13,7 +13,6 @@ use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
 use log::error;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Display;
@@ -48,7 +47,7 @@ pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
 }
 
 /// LndCfg specifies the configuration required to connect to LND's grpc client.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LndCfg {
     pub address: String,
     pub creds: Creds,
@@ -233,23 +232,23 @@ pub fn has_build_tags(version: &Version, requirement: Option<BuildTagsRequiremen
 }
 
 /// LndNodeSigner provides signing operations using LND's signer subserver.
-pub(crate) struct LndNodeSigner<'a> {
+pub(crate) struct LndNodeSigner {
     pubkey: PublicKey,
     secp_ctx: Secp256k1<secp256k1::All>,
-    signer: RefCell<&'a mut tonic_lnd::SignerClient>,
+    signer: tonic_lnd::SignerClient,
 }
 
-impl<'a> LndNodeSigner<'a> {
-    pub(crate) fn new(pubkey: PublicKey, signer: &'a mut tonic_lnd::SignerClient) -> Self {
+impl LndNodeSigner {
+    pub(crate) fn new(pubkey: PublicKey, signer: tonic_lnd::SignerClient) -> Self {
         LndNodeSigner {
             pubkey,
             secp_ctx: Secp256k1::new(),
-            signer: RefCell::new(signer),
+            signer,
         }
     }
 }
 
-impl<'a> NodeSigner for LndNodeSigner<'a> {
+impl NodeSigner for LndNodeSigner {
     /// Get node id based on the provided [`Recipient`].
     ///
     /// This method must return the same value each time it is called with a given [`Recipient`]
@@ -287,7 +286,7 @@ impl<'a> NodeSigner for LndNodeSigner<'a> {
             *other_key
         };
 
-        let shared_secret = match block_on(self.signer.borrow_mut().derive_shared_key(
+        let shared_secret = match block_on(self.signer.clone().derive_shared_key(
             tonic_lnd::signrpc::SharedKeyRequest {
                 ephemeral_pubkey: tweaked_key.serialize().into_iter().collect::<Vec<u8>>(),
                 key_desc: None,

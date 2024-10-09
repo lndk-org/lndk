@@ -12,31 +12,37 @@ use lightning::offers::invoice::{BlindedPayInfo, Bolt12Invoice};
 use lightning::offers::offer::Offer;
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
-use lndkrpc::offers_server::Offers;
+use lndkrpc::offers_server::{Offers, OffersServer};
 use lndkrpc::{
     Bolt12InvoiceContents, DecodeInvoiceRequest, FeatureBit, GetInvoiceRequest, GetInvoiceResponse,
     PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash,
     PaymentPaths,
 };
+use log::{error, info};
 use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::{metadata, set_permissions, File};
+use std::future::Future;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
-use tonic::transport::Identity;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
+
+pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
+pub const DEFAULT_SERVER_PORT: u16 = 7000;
+
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
     node_id: PublicKey,
     // The LND tls cert we need to establish a connection with LND.
     lnd_cert: String,
-    address: String,
+    lnd_address: String,
 }
 
 impl LNDKServer {
@@ -44,13 +50,13 @@ impl LNDKServer {
         offer_handler: Arc<OfferHandler>,
         node_id: &str,
         lnd_cert: String,
-        address: String,
+        lnd_address: String,
     ) -> Self {
         Self {
             offer_handler,
             node_id: PublicKey::from_str(node_id).unwrap(),
             lnd_cert,
-            address,
+            lnd_address,
         }
     }
 }
@@ -69,7 +75,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let mut client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
@@ -165,7 +171,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let mut client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
@@ -252,7 +258,7 @@ impl Offers for LNDKServer {
             cert: self.lnd_cert.clone(),
             macaroon,
         };
-        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let lnd_cfg = LndCfg::new(self.lnd_address.clone(), creds);
         let client = get_lnd_client(lnd_cfg)
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
@@ -308,6 +314,64 @@ fn check_auth_metadata(metadata: &MetadataMap) -> Result<String, Status> {
     };
 
     Ok(macaroon)
+}
+
+pub async fn setup_server(
+    lnd_cfg: LndCfg,
+    grpc_host: Option<String>,
+    grpc_port: Option<u16>,
+    data_dir: PathBuf,
+    tls_ip: Option<String>,
+    handler: Arc<OfferHandler>,
+    lnd_address: String,
+) -> Result<impl Future<Output = Result<(), tonic::transport::Error>>, ()> {
+    let mut client = get_lnd_client(lnd_cfg.clone()).expect("failed to connect to lnd");
+    let info = client
+        .lightning()
+        .get_info(GetInfoRequest {})
+        .await
+        .expect("failed to get info")
+        .into_inner();
+
+    let grpc_host = match grpc_host {
+        Some(host) => host,
+        None => DEFAULT_SERVER_HOST.to_string(),
+    };
+    let grpc_port = match grpc_port {
+        Some(port) => port,
+        None => DEFAULT_SERVER_PORT,
+    };
+    let addr = format!("{grpc_host}:{grpc_port}").parse().map_err(|e| {
+        error!("Error parsing API address: {e}");
+    })?;
+    let lnd_tls_str = lnd_cfg.creds.get_certificate_string()?;
+
+    // The user passed in a TLS cert to help us establish a secure connection to LND. But now we
+    // need to generate a TLS credentials for connecting securely to the LNDK server.
+    generate_tls_creds(data_dir.clone(), tls_ip).map_err(|e| {
+        error!("Error generating tls credentials: {e}");
+    })?;
+    let identity = read_tls(data_dir).map_err(|e| {
+        error!("Error reading tls credentials: {e}");
+    })?;
+
+    let server = LNDKServer::new(
+        Arc::clone(&handler),
+        &info.identity_pubkey,
+        lnd_tls_str,
+        lnd_address,
+    )
+    .await;
+
+    let server_fut = Server::builder()
+        .tls_config(ServerTlsConfig::new().identity(identity))
+        .expect("couldn't configure tls")
+        .add_service(OffersServer::new(server))
+        .serve(addr);
+
+    info!("Starting lndk's grpc server at address {grpc_host}:{grpc_port}");
+
+    Ok(server_fut)
 }
 
 /// An error that occurs when generating TLS credentials.
