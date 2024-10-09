@@ -177,6 +177,8 @@ async fn test_lndk_send_invoice_request() {
         lnd: lnd_cfg.clone(),
         signals,
         skip_version_check: false,
+        rate_limit_count: 10,
+        rate_limit_period_secs: 1,
     };
 
     let mut client = lnd.client.clone().unwrap();
@@ -260,6 +262,8 @@ async fn test_lndk_send_invoice_request() {
         lnd: lnd_cfg,
         signals,
         skip_version_check: false,
+        rate_limit_count: 10,
+        rate_limit_period_secs: 1,
     };
 
     let log_dir = Some(
