@@ -207,13 +207,7 @@ async fn test_lndk_send_invoice_request() {
         }
     }
 
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
+    let log_dir = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_dir).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
@@ -262,13 +256,7 @@ async fn test_lndk_send_invoice_request() {
         skip_version_check: false,
     };
 
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
+    let log_dir = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_dir).unwrap();
 
     let handler = Arc::new(lndk::OfferHandler::default());
