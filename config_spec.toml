@@ -45,7 +45,7 @@ doc = "The path to the lndk data directory. By default this is stored in ~/.lndk
 [[param]]
 name = "log_file"
 type = "String"
-doc = "The path to the lndk log file. By default this is stored in ~/.lndk"
+doc = "The path to the lndk log file. If not specified, defaults to `<data_dir>/lndk.log`."
 
 [[param]]
 name = "log_level"
