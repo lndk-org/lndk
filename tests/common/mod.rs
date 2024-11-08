@@ -193,13 +193,7 @@ pub async fn setup_lndk(
     let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
 
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
+    let log_dir = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_dir).unwrap();
 
     return (lndk_cfg, handler, messenger, shutdown);

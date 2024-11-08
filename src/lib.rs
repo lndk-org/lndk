@@ -42,6 +42,7 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use rate_limit::RateLimiterCfg;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
 use tokio::time::{sleep, timeout, Duration};
@@ -62,13 +63,14 @@ pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
 pub const LDK_LOGGER_NAME: &str = "ldk";
 pub const DEFAULT_DATA_DIR: &str = ".lndk";
+pub const DEFAULT_LOG_FILE: &str = "lndk.log";
 
 pub const TLS_CERT_FILENAME: &str = "tls-cert.pem";
 pub const TLS_KEY_FILENAME: &str = "tls-key.pem";
 pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
 
 #[allow(clippy::result_unit_err)]
-pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Result<(), ()> {
+pub fn setup_logger(log_level: Option<String>, log_file: Option<PathBuf>) -> Result<(), ()> {
     let log_level = match log_level {
         Some(level_str) => match LevelFilter::from_str(&level_str) {
             Ok(level) => level,
@@ -85,22 +87,18 @@ pub fn setup_logger(log_level: Option<String>, log_dir: Option<String>) -> Resul
         None => LevelFilter::Trace,
     };
 
-    let log_dir = log_dir.unwrap_or_else(|| {
+    let log_file = log_file.unwrap_or_else(|| {
         home_dir()
             .unwrap()
-            .join(".lndk")
-            .join("lndk.log")
-            .as_path()
-            .to_str()
-            .unwrap()
-            .to_string()
+            .join(DEFAULT_DATA_DIR)
+            .join(DEFAULT_LOG_FILE)
     });
 
     // Log both to stdout and a log file.
     let stdout = ConsoleAppender::builder().build();
     let lndk_logs = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new("{d} - {m}{n}")))
-        .build(log_dir)
+        .build(log_file)
         .unwrap();
 
     let config = LogConfig::builder()
