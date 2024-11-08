@@ -58,8 +58,6 @@ pub fn init_logger(config: LogConfig) {
     });
 }
 
-pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
-pub const DEFAULT_SERVER_PORT: u16 = 7000;
 pub const LDK_LOGGER_NAME: &str = "ldk";
 pub const DEFAULT_DATA_DIR: &str = ".lndk";
 
@@ -216,8 +214,8 @@ impl LndkOnionMessenger {
         }
 
         // Create an onion messenger that depends on LND's signer client and consume related events.
-        let mut node_client = client.signer().clone();
-        let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
+        let node_client = client.clone().signer_read_only();
+        let node_signer = LndNodeSigner::new(pubkey, node_client);
         let messenger_utils = MessengerUtilities::new();
         let network_graph = &NetworkGraph::new(network, &messenger_utils);
         let message_router = &DefaultMessageRouter::new(network_graph, &messenger_utils);
@@ -232,10 +230,10 @@ impl LndkOnionMessenger {
             IgnoringMessageHandler {},
         );
 
-        let mut peers_client = client.lightning().clone();
+        let peers_client = client.lightning().clone();
         self.run_onion_messenger(
             peer_support,
-            &mut peers_client,
+            &peers_client,
             onion_messenger,
             network,
             args.signals,
