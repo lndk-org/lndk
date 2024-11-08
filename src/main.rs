@@ -15,12 +15,13 @@ use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
 use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
-    DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    DEFAULT_CONFIG_FILE_NAME, DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
+use std::ffi::OsString;
 use std::fs::create_dir_all;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use tokio::select;
@@ -33,14 +34,15 @@ extern crate configure_me;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
-    let config = Config::including_optional_config_files(&["./lndk.conf"])
+    let data_dir = create_data_dir().map_err(|e| {
+        println!("Error creating LNDK's data dir: {:?}", e);
+    })?;
+    let paths = get_conf_file_paths(&data_dir);
+    let config = Config::including_optional_config_files(paths)
         .unwrap_or_exit()
         .0;
 
-    let data_dir =
-        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
     setup_logger(config.log_level, config.log_dir)?;
-
     let creds = validate_lnd_creds(
         config.cert_path,
         config.cert_pem,
@@ -160,4 +162,14 @@ fn create_data_dir() -> Result<PathBuf, std::io::Error> {
     create_dir_all(&path)?;
 
     Ok(path)
+}
+
+fn get_conf_file_paths(data_dir: &Path) -> Vec<OsString> {
+    let data_dir_conf_file = data_dir.join(DEFAULT_CONFIG_FILE_NAME).into_os_string();
+    let current_dir_conf_file = Path::new("./")
+        .join(DEFAULT_CONFIG_FILE_NAME)
+        .into_os_string();
+
+    let paths = vec![current_dir_conf_file, data_dir_conf_file];
+    paths
 }
