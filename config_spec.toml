@@ -71,3 +71,15 @@ name = "response_invoice_timeout"
 type = "u32"
 optional = true
 doc = "Amount of time in seconds that server waits for an offer creator to respond with an invoice. Defaults to 15s."
+
+[[param]]
+name = "rate_limit_count"
+type = "u8"
+default = "10"
+doc = "The number of calls each peer is allowed to make within the rate limit period. This value determines the maximum number of requests a peer can send before being rate limited."
+
+[[param]]
+name = "rate_limit_period_secs"
+type = "u64"
+default = "1"
+doc = "The duration of the rate limit period in seconds. This value specifies the time window over which the rate limit count is applied."

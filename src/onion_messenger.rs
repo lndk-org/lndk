@@ -1,6 +1,6 @@
 use crate::clock::TokioClock;
 use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
-use crate::rate_limit::{RateLimiter, TokenLimiter};
+use crate::rate_limit::{RateLimiter, RateLimiterCfg, TokenLimiter};
 use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
@@ -45,12 +45,6 @@ const ONION_MESSAGE_TYPE: u32 = 513;
 
 /// MSG_POLL_INTERVAL is the interval at which we poll for outgoing onion messages.
 const MSG_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-/// DEFAULT_CALL_COUNT is the default number of calls each peer gets per rate limited period.
-const DEFAULT_CALL_COUNT: u8 = 10;
-
-/// DEFAULT_CALL_FREQUENCY is the default period over which peers are rate limited.
-const DEFAULT_CALL_FREQUENCY: Duration = Duration::from_secs(1);
 
 /// Node Id LookUp is a utility struct implementing NodeIdLookUp trait for LDK's OnionMessenger.
 pub struct LndkNodeIdLookUp {
@@ -167,6 +161,7 @@ impl LndkOnionMessenger {
         onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, CMH>,
         network: Network,
         signals: LifecycleSignals,
+        rate_limiter_cfg: RateLimiterCfg,
     ) -> Result<(), ()>
     where
         ES::Target: EntropySource,
@@ -273,8 +268,8 @@ impl LndkOnionMessenger {
         // events we need).
         let rate_limiter = &mut TokenLimiter::new(
             current_peers.keys().copied(),
-            DEFAULT_CALL_COUNT,
-            DEFAULT_CALL_FREQUENCY,
+            rate_limiter_cfg.call_count,
+            rate_limiter_cfg.call_period_secs,
             TokioClock::new(),
         );
         let mut message_sender = CustomMessenger {

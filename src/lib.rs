@@ -40,6 +40,7 @@ use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use rate_limit::RateLimiterCfg;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Once};
@@ -129,6 +130,8 @@ pub struct Cfg {
     pub lnd: LndCfg,
     pub signals: LifecycleSignals,
     pub skip_version_check: bool,
+    pub rate_limit_count: u8,
+    pub rate_limit_period_secs: u64,
 }
 
 #[derive(Clone)]
@@ -236,6 +239,10 @@ impl LndkOnionMessenger {
             onion_messenger,
             network,
             args.signals,
+            RateLimiterCfg {
+                call_count: args.rate_limit_count,
+                call_period_secs: Duration::from_secs(args.rate_limit_period_secs),
+            },
         )
         .await
     }
