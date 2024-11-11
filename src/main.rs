@@ -39,7 +39,7 @@ async fn main() -> Result<(), ()> {
 
     let data_dir = create_data_dir(config.data_dir)
         .map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
-    setup_logger(config.log_level, config.log_dir)?;
+    setup_logger(config.log_level, config.log_file)?;
 
     let creds = validate_lnd_creds(
         config.cert_path,
