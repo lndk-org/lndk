@@ -15,7 +15,7 @@ use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
 use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
-    DEFAULT_DATA_DIR, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    DEFAULT_DATA_DIR, DEFAULT_LOG_FILE, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
@@ -37,9 +37,14 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
 
-    let data_dir =
-        create_data_dir().map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
-    setup_logger(config.log_level, config.log_dir)?;
+    let data_dir = create_data_dir(&config.data_dir)
+        .map_err(|e| println!("Error creating LNDK's data dir {e:?}"))?;
+
+    let log_file = config.log_file.map(PathBuf::from).or(config
+        .data_dir
+        .map(|data_dir| PathBuf::from(data_dir).join(DEFAULT_LOG_FILE)));
+
+    setup_logger(config.log_level, log_file)?;
 
     let creds = validate_lnd_creds(
         config.cert_path,
@@ -156,9 +161,13 @@ async fn main() -> Result<(), ()> {
     Ok(())
 }
 
-// Creates lndk's data directory at ~/.lndk.
-fn create_data_dir() -> Result<PathBuf, std::io::Error> {
-    let path = home_dir().unwrap().join(DEFAULT_DATA_DIR);
+// Creates lndk's data directory at the specified directory, or ~/.lndk if not specified.
+fn create_data_dir(data_dir: &Option<String>) -> Result<PathBuf, std::io::Error> {
+    let path = match data_dir {
+        Some(dir) => PathBuf::from(&dir),
+        None => home_dir().unwrap().join(DEFAULT_DATA_DIR),
+    };
+
     create_dir_all(&path)?;
 
     Ok(path)

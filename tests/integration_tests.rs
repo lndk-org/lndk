@@ -209,14 +209,8 @@ async fn test_lndk_send_invoice_request() {
         }
     }
 
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
-    setup_logger(None, log_dir).unwrap();
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
     let handler = Arc::new(lndk::OfferHandler::default());
@@ -266,14 +260,8 @@ async fn test_lndk_send_invoice_request() {
         rate_limit_period_secs: 1,
     };
 
-    let log_dir = Some(
-        lndk_dir
-            .join(format!("lndk-logs.txt"))
-            .to_str()
-            .unwrap()
-            .to_string(),
-    );
-    setup_logger(None, log_dir).unwrap();
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
 
     let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
