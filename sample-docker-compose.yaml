@@ -1,0 +1,27 @@
+services:
+  lnd:
+    container_name: lnd
+    image: docker.io/lightninglabs/lnd:v0.18.3-beta.rc3
+    restart: unless-stopped
+    stop_grace_period: 15m30s
+    volumes:
+      - /root/lnd:/root/.lnd
+    ports:
+      - "9735:9735"
+      - "10009:10009"
+      - "4000:4000"
+    command:
+        lnd
+
+  lndk:
+    container_name: lndk
+    image: lndk
+    depends_on: [lnd]
+    restart: on-failure
+    stop_grace_period: 20s
+    volumes:
+      - /root/lnd:/lnd:ro
+    command: >
+      lndk --address=https://lnd:10009 --cert-path=/lnd/tls.cert --macaroon-path=/lnd/data/chain/bitcoin/mainnet/admin.macaroon
+    environment:
+      - RUST_LOG=info
