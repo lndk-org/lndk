@@ -62,8 +62,10 @@ pub fn init_logger(config: LogConfig) {
 pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
 pub const DEFAULT_SERVER_PORT: u16 = 7000;
 pub const LDK_LOGGER_NAME: &str = "ldk";
-pub const DEFAULT_DATA_DIR: &str = ".lndk";
+pub const DEFAULT_DATA_DIR: &str = "data";
+pub const DEFAULT_LNDK_DIR: &str = ".lndk";
 pub const DEFAULT_LOG_FILE: &str = "lndk.log";
+pub const DEFAULT_CONFIG_FILE_NAME: &str = "lndk.conf";
 
 pub const TLS_CERT_FILENAME: &str = "tls-cert.pem";
 pub const TLS_KEY_FILENAME: &str = "tls-key.pem";
