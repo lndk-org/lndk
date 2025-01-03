@@ -199,18 +199,29 @@ impl LndkOnionMessenger {
         let peers_sender = sender.clone();
         let (peers_shutdown, peers_listener) = (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
-            let peer_subscription = peers_client
+            let peer_subscription = match peers_client
                 .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
                 .await
-                .expect("peer subscription failed")
-                .into_inner();
+            {
+                Ok(response) => {
+                    info!("Connected to peer events subscription.");
+                    response.into_inner()
+                }
+                Err(e) => {
+                    peers_shutdown.trigger();
+                    error!("Error subscribing to peer events: {e}.");
+                    return;
+                }
+            };
 
             let peer_stream = PeerStream {
                 peer_subscription,
-                client: peers_client,
+                client: peers_client.clone(),
             };
 
-            match produce_peer_events(peer_stream, peers_sender, peers_listener).await {
+            match produce_peer_events(peer_stream, peers_sender.clone(), peers_listener.clone())
+                .await
+            {
                 Ok(_) => debug!("Peer events producer exited."),
                 Err(e) => {
                     peers_shutdown.trigger();
@@ -225,18 +236,31 @@ impl LndkOnionMessenger {
         let (messages_shutdown, messages_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
-            let message_subscription = messages_client
+            let message_subscription = match messages_client
                 .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
                 .await
-                .expect("message subscription failed")
-                .into_inner();
+            {
+                Ok(response) => {
+                    info!("Connected to message subscription.");
+                    response.into_inner()
+                }
+                Err(e) => {
+                    messages_shutdown.trigger();
+                    error!("Error subscribing to message events: {e}.");
+                    return;
+                }
+            };
 
             let message_stream = MessageStream {
                 message_subscription,
             };
 
-            match produce_incoming_message_events(message_stream, in_msg_sender, messages_listener)
-                .await
+            match produce_incoming_message_events(
+                message_stream,
+                in_msg_sender.clone(),
+                messages_listener.clone(),
+            )
+            .await
             {
                 Ok(_) => debug!("Message events producer exited."),
                 Err(e) => {
