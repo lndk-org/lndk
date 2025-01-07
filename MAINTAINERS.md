@@ -8,38 +8,32 @@ or inconsistencies between releases based on local environments.
 ### Prerequisites
 
 ```shell
-cargo install --locked cargo-dist cargo-release
+cargo install --locked dist cargo-release
 ```
 
-### Use of `cargo-dist` in this project
+### Use of `dist` in this project
 
-This project uses [cargo-dist] for automating the release process as much as possible.
+This project uses [dist] for automating the release process as much as possible.
 Release builds happen via GitHub Actions and the workflow can be seen [here](.github/workflows/release.yml). The file is generated
-by `cargo-dist` and should generally not be modified manually. The `Cargo.toml` file also includes manifest config for `cargo-dist`.
+by `dist` and should generally not be modified manually. The `Cargo.toml` file also includes manifest config for `dist`.
 
-When a new version of `cargo-dist` is released and installed, first run
-
-```shell
-cargo dist init
-```
-
-to update the manifest, and then
+When a new version of `dist` is released and installed, first run
 
 ```shell
-cargo dist generate
+dist init
 ```
 
-to regenerate the `release.yml` workflow.
+to update the configuration and regenerate the `release.yml` workflow.
 
 ### On day of new release
 
 Make sure that [git-cliff](https://github.com/orhun/git-cliff) is installed for changelog generation.
 
-We'll be using `cargo-release` with a pull request in tandem with `cargo-dist` to create a new release.
+We'll be using `cargo-release` with a pull request in tandem with `dist` to create a new release.
 Specifically, we'll use a deferred approach instead of `cargo-release`'s default so that we avoid directly
 pushing changes to the `master` branch.
 
-As an example, assume we want to release `v0.0.1` of LNDK. The following steps (modified from [the cargo-dist book]) must be followed:
+As an example, assume we want to release `v0.0.1` of LNDK. The following steps (modified from [the dist book]) must be followed:
 
 ```shell
 # Create environment variables for the release branch and version
@@ -74,16 +68,16 @@ cargo release --no-publish --no-tag --allow-branch=$BRANCH $VERSION --execute
 #  * tag the commit
 #  * push the tag
 #  * publish all crates to crates.io (handles waiting for dep publishes to propagate)
-#  * trigger cargo-dist when it sees the tag (if applicable)
+#  * trigger dist when it sees the tag (if applicable)
 # THIS WON'T CREATE NEW COMMITS
 #
-# running "cargo dist plan" is totally optional, but this is is the best time to check
-# that your cargo-dist release CI will produce the desired result when you push the tag
+# running "dist plan" is totally optional, but this is is the best time to check
+# that your dist release CI will produce the desired result when you push the tag
 git checkout master
 git pull
-cargo dist plan
+dist plan
 cargo release --no-publish
 
 ```
-[cargo-dist]: https://opensource.axo.dev/cargo-dist
-[the cargo-dist book]: https://opensource.axo.dev/cargo-dist/book/workspaces/cargo-release-guide.html#using-cargo-release-with-pull-requests
+[dist]: https://opensource.axo.dev/cargo-dist
+[the dist book]: https://opensource.axo.dev/cargo-dist/book/workspaces/cargo-release-guide.html#using-cargo-release-with-pull-requests
