@@ -1,0 +1,33 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.27.1"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Which actions to run on pull requests
+pr-run-mode = "plan"
+# Whether to install an updater program
+install-updater = true
+# Whether to enable GitHub Attestations
+github-attestations = true
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+
+# Release dependencies for MacOS
+[dist.dependencies.homebrew]
+protobuf = { version = "27.3_1" }
+
+# Release dependencies for Linux
+[dist.dependencies.apt]
+protobuf-compiler = { version = "3.21.12-8.2build1" }
+
+# Use more recent version of ubuntu
+[dist.github-custom-runners]
+x86_64-unknown-linux-gnu = "ubuntu-24.04"
