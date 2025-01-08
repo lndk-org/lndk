@@ -249,7 +249,7 @@ impl<'a> LndNodeSigner<'a> {
     }
 }
 
-impl<'a> NodeSigner for LndNodeSigner<'a> {
+impl NodeSigner for LndNodeSigner<'_> {
     /// Get node id based on the provided [`Recipient`].
     ///
     /// This method must return the same value each time it is called with a given [`Recipient`]

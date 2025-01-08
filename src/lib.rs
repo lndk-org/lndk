@@ -349,10 +349,9 @@ impl OfferHandler {
             invoice_request,
         )
         .await
-        .map_err(|e| {
+        .inspect_err(|_| {
             let mut active_payments = self.active_payments.lock().unwrap();
             active_payments.remove(&payment_id);
-            e
         })?;
 
         let cfg_timeout = cfg
@@ -430,15 +429,13 @@ impl OfferHandler {
 
         self.send_payment(client, params)
             .await
-            .map(|payment| {
+            .inspect(|_| {
                 let mut active_payments = self.active_payments.lock().unwrap();
                 active_payments.remove(&payment_id);
-                payment
             })
-            .map_err(|e| {
+            .inspect_err(|_| {
                 let mut active_payments = self.active_payments.lock().unwrap();
                 active_payments.remove(&payment_id);
-                e
             })
     }
 
