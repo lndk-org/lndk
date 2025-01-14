@@ -1,0 +1,42 @@
+services:
+  lnd:
+    container_name: lnd
+    image: docker.io/lightninglabs/lnd:v0.18.4-beta
+    restart: unless-stopped
+    stop_grace_period: 5m30s
+    volumes:
+      - ~/lnd:/root/.lnd
+    ports:
+      - "9735:9735"
+      - "10009:10009"
+    command:
+        lnd
+        --listen=0.0.0.0:9735
+        --rpclisten=0.0.0.0:10009
+        --bitcoin.active
+        --bitcoin.mainnet
+        --bitcoin.node=neutrino
+        --neutrino.addpeer=btcd-mainnet.lightning.computer
+        --tlsextradomain=lnd
+        --tlsextradomain=lndk
+        --accept-keysend
+        --fee.url=https://nodes.lightning.computer/fees/v1/btctestnet-fee-estimates.json
+        --protocol.custom-message=513
+        --protocol.custom-nodeann=39
+        --protocol.custom-init=39
+
+  lndk:
+    container_name: lndk
+    image: lndk
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on: [lnd]
+    restart: on-failure
+    stop_grace_period: 20s
+    volumes:
+      - ~/lnd:/lnd:ro
+    command: >
+      lndk --address=https://lnd:10009 --cert-path=/lnd/tls.cert --macaroon-path=/lnd/data/chain/bitcoin/mainnet/admin.macaroon
+    environment:
+      - RUST_LOG=info
