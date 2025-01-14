@@ -92,6 +92,7 @@ pub fn setup_logger(log_level: Option<String>, log_file: Option<PathBuf>) -> Res
     let log_file = log_file.unwrap_or_else(|| {
         home_dir()
             .unwrap()
+            .join(DEFAULT_LNDK_DIR)
             .join(DEFAULT_DATA_DIR)
             .join(DEFAULT_LOG_FILE)
     });
