@@ -4,8 +4,8 @@ use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
 use lndk::lndkrpc::{GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
 use lndk::{
-    Bolt12InvoiceString, DEFAULT_DATA_DIR, DEFAULT_RESPONSE_INVOICE_TIMEOUT, DEFAULT_SERVER_HOST,
-    DEFAULT_SERVER_PORT, TLS_CERT_FILENAME,
+    Bolt12InvoiceString, DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_RESPONSE_INVOICE_TIMEOUT,
+    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, TLS_CERT_FILENAME,
 };
 use std::fs::File;
 use std::io::BufReader;
@@ -46,14 +46,14 @@ struct Cli {
 
     /// This option is for passing a pem-encoded TLS certificate string to establish a connection
     /// with the LNDK server. If this isn't set, the cli will look for the TLS file in the default
-    /// location (~.lndk).
+    /// location (~.lndk/data).
     /// Only one of cert_pem or cert_path can be set at once.
     #[arg(long, global = true, required = false)]
     cert_pem: Option<String>,
 
     /// This option is for passing a file path to a pem-encoded TLS certificate string to establish
     /// a connection with the LNDK server. If this isn't set, the cli will look for the TLS file in
-    /// the default location (~.lndk).
+    /// the default location (~.lndk/data).
     /// Only one of cert_pem or cert_path can be set at once.
     #[arg(long, global = true, required = false)]
     cert_path: Option<PathBuf>,
@@ -361,7 +361,10 @@ fn read_cert_from_args(cert_pem: Option<String>, cert_path: Option<PathBuf>) -> 
         (None, None) => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
             // default location.
-            let data_dir = home::home_dir().unwrap().join(DEFAULT_DATA_DIR);
+            let data_dir = home::home_dir()
+                .unwrap()
+                .join(DEFAULT_LNDK_DIR)
+                .join(DEFAULT_DATA_DIR);
             std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME)).unwrap_or_else(|e| {
                 println!("ERROR reading cert: {e:?}");
                 exit(1)
