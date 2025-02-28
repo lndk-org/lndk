@@ -174,7 +174,7 @@ async fn main() {
             payer_note,
             response_invoice_timeout,
         } => {
-            let tls = read_cert_from_args(args.cert_pem, args.cert_path);
+            let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
@@ -232,7 +232,7 @@ async fn main() {
             payer_note,
             response_invoice_timeout,
         } => {
-            let tls = read_cert_from_args(args.cert_pem, args.cert_path);
+            let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host;
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
@@ -288,7 +288,7 @@ async fn main() {
             ref invoice_string,
             amount,
         } => {
-            let tls = read_cert_from_args(args.cert_pem, args.cert_path);
+            let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host.clone();
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
@@ -345,19 +345,19 @@ fn read_macaroon_from_file(path: PathBuf) -> Result<String, std::io::Error> {
     Ok(hex::encode(buffer))
 }
 
-fn read_cert_from_args(cert_pem: Option<String>, cert_path: Option<PathBuf>) -> ClientTlsConfig {
+fn read_cert_from_args(
+    cert_pem: Option<String>,
+    cert_path: Option<PathBuf>,
+) -> Result<ClientTlsConfig, String> {
     // Make sure both cert options are not set.
     if cert_path.is_some() && cert_pem.is_some() {
-        println!("ERROR: Only one of `cert_path` or `cert_pem` should be set.");
-        exit(1)
+        return Err("ERROR: Only one of `cert_path` or `cert_pem` should be set.".to_string());
     }
 
     let pem = match (&cert_pem, &cert_path) {
         (Some(pem), _) => pem.clone(),
-        (None, Some(cert_path)) => std::fs::read_to_string(cert_path).unwrap_or_else(|e| {
-            println!("ERROR reading cert: {e:?}");
-            exit(1)
-        }),
+        (None, Some(cert_path)) => std::fs::read_to_string(cert_path)
+            .map_err(|e| format!("ERROR reading cert: {:?}", e))?,
         (None, None) => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
             // default location.
@@ -365,16 +365,27 @@ fn read_cert_from_args(cert_pem: Option<String>, cert_path: Option<PathBuf>) -> 
                 .unwrap()
                 .join(DEFAULT_LNDK_DIR)
                 .join(DEFAULT_DATA_DIR);
-            std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME)).unwrap_or_else(|e| {
-                println!("ERROR reading cert: {e:?}");
-                exit(1)
-            })
+            std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
+                .map_err(|e| format!("ERROR reading cert: {:?}", e))?
         }
     };
     let cert = Certificate::from_pem(pem);
-    ClientTlsConfig::new()
+    Ok(ClientTlsConfig::new()
         .ca_certificate(cert)
-        .domain_name("localhost")
+        .domain_name("localhost"))
+}
+
+fn read_cert_from_args_or_exit(
+    cert_pem: Option<String>,
+    cert_path: Option<PathBuf>,
+) -> ClientTlsConfig {
+    match read_cert_from_args(cert_pem, cert_path) {
+        Ok(config) => config,
+        Err(err) => {
+            println!("{}", err);
+            exit(1);
+        }
+    }
 }
 
 fn read_macaroon_from_args(
@@ -405,5 +416,110 @@ fn read_macaroon_from_args(
                 })
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::{tempdir, TempDir};
+
+    fn create_temp_cert_file() -> (PathBuf, String, TempDir) {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test_cert.pem");
+        let cert_content = "-----BEGIN CERTIFICATE-----\nMIIBCgKCAQEA\n-----END CERTIFICATE-----";
+
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(cert_content.as_bytes()).unwrap();
+
+        (file_path, cert_content.to_string(), dir)
+    }
+
+    #[test]
+    fn test_read_cert_from_args_both_options() {
+        let (temp_path, cert_content, _dir) = create_temp_cert_file();
+
+        let result = read_cert_from_args(Some(cert_content), Some(temp_path));
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "ERROR: Only one of `cert_path` or `cert_pem` should be set."
+        );
+    }
+
+    #[test]
+    fn test_read_cert_from_args_cert_pem_only() {
+        let cert_content = "-----BEGIN CERTIFICATE-----\nMIIBCgKCAQEA\n-----END CERTIFICATE-----";
+
+        let result = read_cert_from_args(Some(cert_content.to_string()), None);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_cert_from_args_cert_path_only() {
+        let (file_path, _cert_content, _dir) = create_temp_cert_file();
+
+        let result = read_cert_from_args(None, Some(file_path));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_read_cert_from_args_invalid_path() {
+        let invalid_path = PathBuf::from("/path/does/not/exist.pem");
+
+        let result = read_cert_from_args(None, Some(invalid_path));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().starts_with("ERROR reading cert:"));
+    }
+
+    #[test]
+    fn test_read_cert_from_args_neither_option() {
+        let temp_home = tempdir().unwrap();
+        let temp_home_path = temp_home.path().to_path_buf();
+
+        let lndk_dir = temp_home_path.join(DEFAULT_LNDK_DIR).join(DEFAULT_DATA_DIR);
+        std::fs::create_dir_all(&lndk_dir).unwrap();
+
+        let cert_content = "-----BEGIN CERTIFICATE-----\nMIIBCgKCAQEA\n-----END CERTIFICATE-----";
+        let file_path = lndk_dir.join(TLS_CERT_FILENAME);
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(cert_content.as_bytes()).unwrap();
+
+        let result = {
+            let _guard = EnvironmentGuard::new("HOME", temp_home_path.to_str().unwrap());
+            read_cert_from_args(None, None)
+        };
+
+        assert!(result.is_ok());
+    }
+    struct EnvironmentGuard<'a> {
+        key: &'a str,
+        original_value: Option<String>,
+    }
+
+    impl<'a> EnvironmentGuard<'a> {
+        fn new(key: &'a str, value: &str) -> Self {
+            let original_value = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                key,
+                original_value,
+            }
+        }
+    }
+
+    impl<'a> Drop for EnvironmentGuard<'a> {
+        fn drop(&mut self) {
+            match &self.original_value {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 }
