@@ -32,6 +32,7 @@ configure_me = "0.4.0"
 bytes = "1.4.0"
 triggered = "0.1.2"
 prost = "0.12"
+async_fn_traits = "0.1.1"
 
 [dev-dependencies]
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }

@@ -1,4 +1,5 @@
 use crate::clock::TokioClock;
+use crate::grpc::Retryable;
 use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
 use crate::rate_limit::{RateLimiter, RateLimiterCfg, TokenLimiter};
 use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
@@ -90,7 +91,7 @@ impl NodeIdLookUp for LndkNodeIdLookUp {
 }
 
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait
-/// implementations for LDK’s OnionMessenger.
+/// implementations for LDK's OnionMessenger.
 pub struct MessengerUtilities {}
 
 impl MessengerUtilities {
@@ -195,28 +196,22 @@ impl LndkOnionMessenger {
         // online/offline reports, so it's okay if this ends up creating some duplicate
         // events. The event subscription from LND blocks until it gets its first event (which
         // could take very long), so we get the subscription itself inside of our producer thread.
-        let mut peers_client = ln_client.clone();
+        let mut peers_client = Retryable::new(ln_client.clone());
         let peers_sender = sender.clone();
         let (peers_shutdown, peers_listener) = (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
-            let peer_subscription = match peers_client
-                .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
+            let peer_subscription = peers_client
+                .with_infinite_retries(
+                    LightningClient::subscribe_peer_events,
+                    tonic_lnd::lnrpc::PeerEventSubscription {},
+                )
                 .await
-            {
-                Ok(response) => {
-                    info!("Connected to peer events subscription.");
-                    response.into_inner()
-                }
-                Err(e) => {
-                    peers_shutdown.trigger();
-                    error!("Error subscribing to peer events: {e}.");
-                    return;
-                }
-            };
+                .expect("peer subscription failed")
+                .into_inner();
 
             let peer_stream = PeerStream {
                 peer_subscription,
-                client: peers_client,
+                client: peers_client.into_inner(),
             };
 
             match produce_peer_events(peer_stream, peers_sender, peers_listener).await {
@@ -229,25 +224,19 @@ impl LndkOnionMessenger {
         });
 
         // Subscribe to custom messaging events from LND so that we can receive incoming messages.
-        let mut messages_client = ln_client.clone();
+        let mut messages_client = Retryable::new(ln_client.clone());
         let in_msg_sender = sender.clone();
         let (messages_shutdown, messages_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
-            let message_subscription = match messages_client
-                .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
+            let message_subscription = messages_client
+                .with_infinite_retries(
+                    LightningClient::subscribe_custom_messages,
+                    tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {},
+                )
                 .await
-            {
-                Ok(response) => {
-                    info!("Connected to message subscription.");
-                    response.into_inner()
-                }
-                Err(e) => {
-                    messages_shutdown.trigger();
-                    error!("Error subscribing to message events: {e}.");
-                    return;
-                }
-            };
+                .expect("message subscription failed")
+                .into_inner();
 
             let message_stream = MessageStream {
                 message_subscription,
