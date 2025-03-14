@@ -280,7 +280,7 @@ impl LndkOnionMessenger {
             TokioClock::new(),
         );
         let mut message_sender = CustomMessenger {
-            client: ln_client.clone(),
+            client: Retryable::new(ln_client.clone()),
         };
         let consume_result = consume_messenger_events(
             onion_messenger,
@@ -740,7 +740,7 @@ trait SendCustomMessage {
 }
 
 struct CustomMessenger {
-    client: LightningClient,
+    client: Retryable<LightningClient>,
 }
 
 #[async_trait]
@@ -749,7 +749,11 @@ impl SendCustomMessage for CustomMessenger {
         &mut self,
         request: SendCustomMessageRequest,
     ) -> Result<SendCustomMessageResponse, Status> {
-        match self.client.send_custom_message(request).await {
+        match self
+            .client
+            .with_max_attempts(LightningClient::send_custom_message, request, Some(3))
+            .await
+        {
             Ok(resp) => Ok(resp.into_inner()),
             Err(status) => Err(status),
         }

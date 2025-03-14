@@ -1,13 +1,13 @@
 use crate::error;
-use crate::info;
 use async_fn_traits::AsyncFn2;
+use log::debug;
 use std::time::Duration;
 use tokio::time;
 use tonic_lnd::tonic::{Code, Status};
 /// Delay between retry attempts in seconds
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Maximum number of retry attempts for operations
-const MAX_RETRY_ATTEMPTS: u32 = 5;
+const MAX_RETRY_ATTEMPTS: u8 = 5;
 
 /// Helper function to determine if an error is retryable (network-related)
 fn is_retryable_error(status: &Status) -> bool {
@@ -40,21 +40,63 @@ impl<T> Retryable<T> {
         Req: Clone,
     {
         let delay = RETRY_DELAY;
+        let req_type_name = std::any::type_name::<Req>();
+        debug!("Starting request {req_type_name} with infinite retries");
+        loop {
+            match f(&mut self.client, req.clone()).await {
+                Ok(response) => {
+                    return Ok(response);
+                }
+                Err(e) => {
+                    // Only retry on network-related errors
+                    if is_retryable_error(&e) {
+                        error!("Error requesting {}, retrying: {}", req_type_name, e);
+                        time::sleep(delay).await;
+                        continue;
+                    } else {
+                        error!("Failed to request {} : {}", req_type_name, e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn with_max_attempts<F, R, Req>(
+        &mut self,
+        f: F,
+        req: Req,
+        max_attempts: Option<u8>,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> AsyncFn2<&'a mut T, Req, Output = Result<R, Status>>,
+        Req: Clone,
+    {
+        let delay = RETRY_DELAY;
         let mut attempt = 0;
+        let max_retry_attempts = max_attempts.unwrap_or(MAX_RETRY_ATTEMPTS);
+        let req_type_name = std::any::type_name::<Req>();
 
         loop {
             match f(&mut self.client, req.clone()).await {
                 Ok(response) => {
-                    info!("Connected to subscription");
                     return Ok(response);
                 }
                 Err(e) => {
                     // Only retry on network-related errors
                     if is_retryable_error(&e) {
                         attempt += 1;
+
+                        if attempt >= max_retry_attempts {
+                            error!(
+                                "Failed to request {} with max_attempts after {} attempts: {}",
+                                req_type_name, attempt, e
+                            );
+                            return Err(e);
+                        }
                         error!(
-                            "Error subscribing to events (attempt {}/{}): {e}",
-                            attempt, "no limit"
+                            "Error to request {} (attempt {}/{}): {}",
+                            req_type_name, attempt, max_retry_attempts, e
                         );
                         time::sleep(delay).await;
                         continue;
@@ -157,6 +199,106 @@ mod tests {
         let mut retryable = Retryable::new(mock_client);
         let result = retryable
             .with_infinite_retries(MockLightningClient::some_method, "test_request".to_string())
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_max_attempts_ends_with_error() {
+        let mut mock_client = MockLightningClient::new();
+        let mut call_count = 0;
+        mock_client
+            .expect_some_method()
+            .times(2)
+            .with(eq("test_request".to_string()))
+            .returning(move |_| {
+                call_count += 1;
+                match call_count {
+                    1 => Box::pin(async {
+                        Err(create_status(Code::Unavailable, "temp unavailable"))
+                    }),
+                    2 => Box::pin(async {
+                        Err(create_status(Code::Unavailable, "temp unavailable"))
+                    }),
+                    3 => Box::pin(async { Ok("success".to_string()) }),
+                    _ => panic!("Unexpected call count"),
+                }
+            });
+
+        let mut retryable = Retryable::new(mock_client);
+        let result = retryable
+            .with_max_attempts(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                Some(2),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_max_attempts_ends_with_success() {
+        let mut mock_client = MockLightningClient::new();
+        let mut call_count = 0;
+        mock_client
+            .expect_some_method()
+            .times(2)
+            .with(eq("test_request".to_string()))
+            .returning(move |_| {
+                call_count += 1;
+                match call_count {
+                    1 => Box::pin(async {
+                        Err(create_status(Code::Unavailable, "temp unavailable"))
+                    }),
+                    2 => Box::pin(async { Ok("success".to_string()) }),
+                    _ => panic!("Unexpected call count"),
+                }
+            });
+
+        let mut retryable = Retryable::new(mock_client);
+        let result = retryable
+            .with_max_attempts(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                Some(2),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "success");
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_max_attempts_non_retryable_error() {
+        let mut mock_client = MockLightningClient::new();
+        let mut call_count = 0;
+        mock_client
+            .expect_some_method()
+            .times(1)
+            .with(eq("test_request".to_string()))
+            .returning(move |_| {
+                call_count += 1;
+                match call_count {
+                    1 => Box::pin(async {
+                        Err(create_status(Code::InvalidArgument, "invalid argument"))
+                    }),
+                    _ => panic!("Unexpected call count"),
+                }
+            });
+
+        let mut retryable = Retryable::new(mock_client);
+        let result = retryable
+            .with_max_attempts(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                Some(2),
+            )
             .await;
 
         assert!(result.is_err());
