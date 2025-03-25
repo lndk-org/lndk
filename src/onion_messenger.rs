@@ -29,7 +29,9 @@ use std::fmt;
 use std::io::Cursor;
 use std::marker::Copy;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Notify;
 use tokio::time::{sleep, timeout, Duration, Interval};
 use tokio::{select, time};
 use tonic_lnd::lnrpc::ChanInfoRequest;
@@ -157,7 +159,6 @@ impl LndkOnionMessenger {
         CMH: Deref,
     >(
         &self,
-        current_peers: HashMap<PublicKey, bool>,
         ln_client: &mut tonic_lnd::LightningClient,
         onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, CMH>,
         network: Network,
@@ -173,7 +174,13 @@ impl LndkOnionMessenger {
         OMH::Target: OffersMessageHandler,
         CMH::Target: CustomOnionMessageHandler + Sized,
     {
-        // Setup channels that we'll use to communicate onion messenger events. We buffer our
+        // On startup, we want to get a list of our currently online peers to notify the onion
+        // messenger that they are connected. This sets up our "start state" for the
+        // messenger correctly.
+
+        let current_peers = get_current_peers(&mut ln_client.clone()).await?;
+
+        // Setup channels that we'll use to communicate  messenger events. We buffer our
         // channels by the number of peers (+1 because we require a non-zero buffer) that
         // the node currently has so that we can send all of our startup online events in
         // one go (before we boot up the consumer). The number of peers that we have is also
@@ -191,6 +198,30 @@ impl LndkOnionMessenger {
 
         let mut set = tokio::task::JoinSet::new();
 
+        // Setup channels that we'll use to communicate whenever a restart event happens.
+        // Whenever a new events is consumed we will get current peers and message peers
+        // where reconnected.
+
+        let reconnect_notification = Arc::new(Notify::new());
+        let (reconnection_shutdown, reconnection_listener) =
+            (signals.shutdown.clone(), signals.listener.clone());
+        let reconnection_notification_receiver = reconnect_notification.clone();
+        let mut reconnection_client = Retryable::new(ln_client.clone());
+        let reconnection_sender = sender.clone();
+        set.spawn(async move {
+            match receive_reconnection_event(
+                &mut reconnection_client,
+                reconnection_notification_receiver,
+                reconnection_sender,
+                reconnection_listener,
+            )
+            .await
+            {
+                Ok(_) => debug!("Reconnection listener completed"),
+                Err(_) => reconnection_shutdown.trigger(),
+            }
+        });
+
         // Subscribe to peer events from LND first thing so that we don't miss any online/offline
         // events while we are starting up. The onion messenger can handle superfluous
         // online/offline reports, so it's okay if this ends up creating some duplicate
@@ -204,6 +235,7 @@ impl LndkOnionMessenger {
                 .with_infinite_retries(
                     LightningClient::subscribe_peer_events,
                     tonic_lnd::lnrpc::PeerEventSubscription {},
+                    Some(reconnect_notification),
                 )
                 .await
                 .expect("peer subscription failed")
@@ -233,6 +265,7 @@ impl LndkOnionMessenger {
                 .with_infinite_retries(
                     LightningClient::subscribe_custom_messages,
                     tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {},
+                    None,
                 )
                 .await
                 .expect("message subscription failed")
@@ -316,6 +349,35 @@ impl LndkOnionMessenger {
 
         Ok(())
     }
+}
+
+async fn get_current_peers(
+    client: &mut tonic_lnd::LightningClient,
+) -> Result<HashMap<PublicKey, bool>, ()> {
+    debug!("Getting current peers");
+    let current_peers = client
+        .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+            latest_error: false,
+        })
+        .await
+        .map_err(|e| {
+            error!("Could not lookup current peers: {e}.");
+        })?;
+
+    let peer_support = build_peer_support_from_response(current_peers);
+    Ok(peer_support)
+}
+
+fn build_peer_support_from_response(
+    current_peers: tonic_lnd::tonic::Response<tonic_lnd::lnrpc::ListPeersResponse>,
+) -> HashMap<PublicKey, bool> {
+    let mut peer_support = HashMap::new();
+    for peer in current_peers.into_inner().peers {
+        let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
+        let onion_support = features_support_onion_messages(&peer.features);
+        peer_support.insert(pubkey, onion_support);
+    }
+    peer_support
 }
 
 /// lookup_onion_support performs a best-effort lookup in the node's list of current peers to
@@ -444,6 +506,47 @@ impl PeerEventProducer for PeerStream {
 
     async fn onion_support(&mut self, pubkey: &PublicKey) -> bool {
         lookup_onion_support(pubkey, &mut self.client).await
+    }
+}
+
+async fn receive_reconnection_event(
+    client: &mut Retryable<LightningClient>,
+    reconnection_listener: Arc<Notify>,
+    sender: Sender<MessengerEvents>,
+    shutdown_listener: Listener,
+) -> Result<(), ()> {
+    loop {
+        select! {
+            biased;
+
+            _ = shutdown_listener.clone() => {
+                info!("Received shutdown signal, exiting reconnection listener.");
+                return Ok(())
+            }
+
+            _ = reconnection_listener.notified() => {
+                info!("Received reconnection event.");
+                let request = tonic_lnd::lnrpc::ListPeersRequest {
+                    latest_error: false,
+                };
+                let list_peer_response = client
+                    .with_infinite_retries(LightningClient::list_peers, request, None).await;
+                if list_peer_response.is_ok() {
+                    debug!("Successfully fetched peers from reconnection to LND.");
+                    let current_peers = build_peer_support_from_response(list_peer_response.unwrap());
+                    for (peer, onion_support) in current_peers.clone() {
+                        sender
+                        .send(MessengerEvents::PeerConnected(peer, onion_support))
+                        .await
+                        .map_err(|e| {
+                            error!("Notify peer connected: {e}");
+                        })?;
+                    }
+                    debug!("Reconnection listener completed.");
+                }
+            }
+
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use crate::error;
 use async_fn_traits::AsyncFn2;
 use log::debug;
-use std::time::Duration;
-use tokio::time;
+use std::{sync::Arc, time::Duration};
+use tokio::{sync::Notify, time};
 use tonic_lnd::tonic::{Code, Status};
 /// Delay between retry attempts in seconds
 const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -34,6 +34,7 @@ impl<T> Retryable<T> {
         &mut self,
         f: F,
         req: Req,
+        retry_notify: Option<Arc<Notify>>,
     ) -> Result<R, Status>
     where
         F: for<'a> AsyncFn2<&'a mut T, Req, Output = Result<R, Status>>,
@@ -51,6 +52,9 @@ impl<T> Retryable<T> {
                     // Only retry on network-related errors
                     if is_retryable_error(&e) {
                         error!("Error requesting {}, retrying: {}", req_type_name, e);
+                        if let Some(notifier) = &retry_notify {
+                            notifier.notify_waiters();
+                        }
                         time::sleep(delay).await;
                         continue;
                     } else {
@@ -147,7 +151,11 @@ mod tests {
 
         let mut retryable = Retryable::new(mock_client);
         let result = retryable
-            .with_infinite_retries(MockLightningClient::some_method, "test_request".to_string())
+            .with_infinite_retries(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                None,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -178,7 +186,11 @@ mod tests {
 
         let mut retryable = Retryable::new(mock_client);
         let result = retryable
-            .with_infinite_retries(MockLightningClient::some_method, "test_request".to_string())
+            .with_infinite_retries(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                None,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -198,7 +210,11 @@ mod tests {
 
         let mut retryable = Retryable::new(mock_client);
         let result = retryable
-            .with_infinite_retries(MockLightningClient::some_method, "test_request".to_string())
+            .with_infinite_retries(
+                MockLightningClient::some_method,
+                "test_request".to_string(),
+                None,
+            )
             .await;
 
         assert!(result.is_err());
