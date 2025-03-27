@@ -34,7 +34,8 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Notify;
 use tokio::time::{sleep, timeout, Duration, Interval};
 use tokio::{select, time};
-use tonic_lnd::lnrpc::ChanInfoRequest;
+use tonic_lnd::lnrpc::{ChanInfoRequest, ListPeersRequest, ListPeersResponse};
+use tonic_lnd::tonic::Response;
 use tonic_lnd::Client;
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
@@ -369,7 +370,7 @@ async fn get_current_peers(
 }
 
 fn build_peer_support_from_response(
-    current_peers: tonic_lnd::tonic::Response<tonic_lnd::lnrpc::ListPeersResponse>,
+    current_peers: Response<ListPeersResponse>,
 ) -> HashMap<PublicKey, bool> {
     let mut peer_support = HashMap::new();
     for peer in current_peers.into_inner().peers {
@@ -509,8 +510,27 @@ impl PeerEventProducer for PeerStream {
     }
 }
 
+#[async_trait]
+trait ReconnectionClient: Send + Sync {
+    async fn list_peers_with_retries(
+        &mut self,
+        request: ListPeersRequest,
+    ) -> Result<Response<ListPeersResponse>, Status>;
+}
+
+#[async_trait]
+impl ReconnectionClient for Retryable<LightningClient> {
+    async fn list_peers_with_retries(
+        &mut self,
+        request: ListPeersRequest,
+    ) -> Result<Response<ListPeersResponse>, Status> {
+        self.with_infinite_retries(LightningClient::list_peers, request, None)
+            .await
+    }
+}
+
 async fn receive_reconnection_event(
-    client: &mut Retryable<LightningClient>,
+    client: &mut impl ReconnectionClient,
     reconnection_listener: Arc<Notify>,
     sender: Sender<MessengerEvents>,
     shutdown_listener: Listener,
@@ -530,7 +550,7 @@ async fn receive_reconnection_event(
                     latest_error: false,
                 };
                 let list_peer_response = client
-                    .with_infinite_retries(LightningClient::list_peers, request, None).await;
+                    .list_peers_with_retries(request).await;
                 if list_peer_response.is_ok() {
                     debug!("Successfully fetched peers from reconnection to LND.");
                     let current_peers = build_peer_support_from_response(list_peer_response.unwrap());
@@ -942,6 +962,8 @@ mod tests {
     use mockall::mock;
     use std::io::Cursor;
     use tokio::sync::mpsc::channel;
+    use tonic_lnd::lnrpc::{ListPeersRequest, ListPeersResponse};
+    use tonic_lnd::tonic::Response;
 
     /// Produces an OnionMessage that can be used for tests. We need to manually write individual
     /// bytes because onion messages in LDK can only be created using read/write impls that deal
@@ -1026,6 +1048,105 @@ mod tests {
         }
     }
 
+    mock! {
+        ReconnectionClient {}
+
+        #[async_trait]
+        impl ReconnectionClient for ReconnectionClient {
+            async fn list_peers_with_retries(
+                &mut self,
+                request: ListPeersRequest,
+            ) -> Result<Response<ListPeersResponse>, Status>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_receive_reconection_event() {
+        let (sender, mut receiver) = channel(4);
+        let (_shutdown, listener) = triggered::trigger();
+        let reconnect_notification = Arc::new(Notify::new());
+
+        let mut mock_client = MockReconnectionClient::new();
+
+        let pubkey1 = pubkey(1);
+        let pubkey2 = pubkey(2);
+        let mock_peers = vec![
+            tonic_lnd::lnrpc::Peer {
+                pub_key: pubkey1.to_string(),
+                features: HashMap::new(),
+                ..Default::default()
+            },
+            tonic_lnd::lnrpc::Peer {
+                pub_key: pubkey2.to_string(),
+                features: {
+                    let mut features = HashMap::new();
+                    features.insert(
+                        ONION_MESSAGES_OPTIONAL,
+                        tonic_lnd::lnrpc::Feature::default(),
+                    );
+                    features
+                },
+                ..Default::default()
+            },
+        ];
+
+        mock_client
+            .expect_list_peers_with_retries()
+            .times(1)
+            .returning(move |_| {
+                Ok(Response::new(ListPeersResponse {
+                    peers: mock_peers.clone(),
+                }))
+            });
+
+        let notify_clone = reconnect_notification.clone();
+
+        let task = tokio::spawn(async move {
+            receive_reconnection_event(
+                &mut mock_client,
+                reconnect_notification.clone(),
+                sender,
+                listener,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        notify_clone.notify_one();
+        let timeout_duration = Duration::from_millis(100);
+        let mut received_events = Vec::new();
+        for _ in 0..2 {
+            match tokio::time::timeout(timeout_duration, receiver.recv()).await {
+                Ok(Some(event)) => {
+                    received_events.push(event);
+                }
+                Ok(None) => panic!("Channel closed unexpectedly"),
+                Err(_) => panic!("Timed out waiting for events"),
+            }
+        }
+
+        assert_eq!(received_events.len(), 2);
+        let has_peer1_event = received_events.iter().any(|e| {
+            if let MessengerEvents::PeerConnected(pk, onion_support) = e {
+                *pk == pubkey1 && !*onion_support
+            } else {
+                false
+            }
+        });
+        let has_peer2_event = received_events.iter().any(|e| {
+            if let MessengerEvents::PeerConnected(pk, onion_support) = e {
+                *pk == pubkey2 && *onion_support
+            } else {
+                false
+            }
+        });
+
+        assert!(has_peer1_event, "Missing PeerConnected event for peer1");
+        assert!(has_peer2_event, "Missing PeerConnected event for peer2");
+
+        task.abort();
+    }
+
     #[tokio::test]
     async fn test_consume_messenger_events() {
         let (sender, receiver) = channel(8);
@@ -1057,11 +1178,11 @@ mod tests {
 
         rate_limiter
             .expect_peers()
-            .returning(move || vec![pk_1.clone(), pk_2.clone()]);
+            .returning(move || vec![pk_1, pk_2]);
 
         // Set up our mock to return an onion message for pk_1, and no onion messages for pk_2.
         mock.expect_next_onion_message_for_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1)
             .returning(|_| Some(onion_message()));
 
         mock.expect_next_onion_message_for_peer()
@@ -1101,7 +1222,7 @@ mod tests {
 
         rate_limiter
             .expect_query_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1)
             .returning(|_| true);
         mock.expect_handle_onion_message().return_once(|_, _| ());
 
@@ -1112,7 +1233,7 @@ mod tests {
             .unwrap();
         rate_limiter
             .expect_query_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_2.clone())
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_2)
             .returning(|_| false);
 
         // Finally, send a producer exit event to test exit.

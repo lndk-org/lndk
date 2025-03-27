@@ -38,7 +38,8 @@ impl<T> Retryable<T> {
     ) -> Result<R, Status>
     where
         F: for<'a> AsyncFn2<&'a mut T, Req, Output = Result<R, Status>>,
-        Req: Clone,
+        Req: Clone + Send,
+        R: Send,
     {
         let delay = RETRY_DELAY;
         let req_type_name = std::any::type_name::<Req>();
@@ -128,7 +129,7 @@ mod tests {
 
     // Mock trait for the LightningClient
     #[automock]
-    pub(crate) trait LightningClient {
+    trait LightningClient {
         fn some_method(
             &mut self,
             req: String,
