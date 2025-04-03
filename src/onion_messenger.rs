@@ -4,12 +4,14 @@ use crate::rate_limit::{RateLimiter, RateLimiterCfg, TokenLimiter};
 use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
 use async_trait::async_trait;
 use bitcoin::blockdata::constants::ChainHash;
-use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::Network;
+use lightning::onion_message::async_payments::AsyncPaymentsMessageHandler;
+use lightning::onion_message::dns_resolution::DNSResolverMessageHandler;
+use lightning::types::features::InitFeatures;
 use core::ops::Deref;
 use futures::executor::block_on;
 use lightning::blinded_path::NodeIdLookUp;
-use lightning::ln::features::InitFeatures;
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::onion_message::messenger::{
     CustomOnionMessageHandler, MessageRouter, OnionMessenger,
@@ -153,12 +155,14 @@ impl LndkOnionMessenger {
         NL: Deref,
         MR: Deref,
         OMH: Deref,
+        APH: Deref,
+        DRH: Deref,
         CMH: Deref,
     >(
         &self,
         current_peers: HashMap<PublicKey, bool>,
         ln_client: &mut tonic_lnd::LightningClient,
-        onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, CMH>,
+        onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, APH, DRH, CMH>,
         network: Network,
         signals: LifecycleSignals,
         rate_limiter_cfg: RateLimiterCfg,
@@ -170,6 +174,8 @@ impl LndkOnionMessenger {
         NL::Target: NodeIdLookUp,
         MR::Target: MessageRouter,
         OMH::Target: OffersMessageHandler,
+        APH::Target: AsyncPaymentsMessageHandler,
+        DRH::Target: DNSResolverMessageHandler,
         CMH::Target: CustomOnionMessageHandler + Sized,
     {
         // Setup channels that we'll use to communicate onion messenger events. We buffer our
@@ -693,7 +699,7 @@ async fn consume_messenger_events(
 
                 onion_messenger
                     .peer_connected(
-                        &pubkey,
+                        pubkey,
                         &Init {
                             features: init_features,
                             remote_network_address: None,
@@ -709,7 +715,7 @@ async fn consume_messenger_events(
                 rate_limiter.peer_connected(pubkey);
             }
             MessengerEvents::PeerDisconnected(pubkey) => {
-                onion_messenger.peer_disconnected(&pubkey);
+                onion_messenger.peer_disconnected(pubkey);
 
                 // In addition to keeping the onion messenger up to date with the latest peers, we
                 // need to keep our local version up to date so we send outgoing OMs
@@ -722,7 +728,7 @@ async fn consume_messenger_events(
                     continue;
                 }
 
-                onion_messenger.handle_onion_message(&pubkey, &onion_message)
+                onion_messenger.handle_onion_message(pubkey, &onion_message)
             }
             MessengerEvents::SendOutgoing => {
                 for peer in rate_limiter.peers() {
@@ -835,12 +841,11 @@ async fn relay_outgoing_msg_event(
 mod tests {
     use super::*;
     use crate::tests::test_utils::pubkey;
-    use bitcoin::network::constants::Network;
     use bitcoin::secp256k1::PublicKey;
     use bytes::BufMut;
     use lightning::events::{EventHandler, EventsProvider};
-    use lightning::ln::features::{InitFeatures, NodeFeatures};
     use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
+    use lightning::types::features::NodeFeatures;
     use lightning::util::ser::Readable;
     use lightning::util::ser::Writeable;
     use mockall::mock;
@@ -878,13 +883,13 @@ mod tests {
             OnionHandler{}
 
             impl OnionMessageHandler for OnionHandler {
-                fn handle_onion_message(&self, peer_node_id: &PublicKey, msg: &OnionMessage);
+                fn handle_onion_message(&self, peer_node_id: PublicKey, msg: &OnionMessage);
                 fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
-                fn peer_connected(&self, their_node_id: &PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
-                fn peer_disconnected(&self, their_node_id: &PublicKey);
+                fn peer_connected(&self, their_node_id: PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
+                fn peer_disconnected(&self, their_node_id: PublicKey);
                 fn timer_tick_occurred(&self);
                 fn provided_node_features(&self) -> NodeFeatures;
-                fn provided_init_features(&self, their_node_id: &PublicKey) -> InitFeatures;
+                fn provided_init_features(&self, their_node_id: PublicKey) -> InitFeatures;
             }
     }
 

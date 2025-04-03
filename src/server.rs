@@ -5,12 +5,13 @@ use crate::{
     TLS_KEY_FILENAME,
 };
 use bitcoin::secp256k1::PublicKey;
-use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
+use lightning::blinded_path::payment::{BlindedPayInfo, BlindedPaymentPath};
+use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
-use lightning::ln::features::{BlindedHopFeatures, Bolt12InvoiceFeatures};
-use lightning::offers::invoice::{BlindedPayInfo, Bolt12Invoice};
+use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::offer::Offer;
 use lightning::sign::EntropySource;
+use lightning::types::features::{BlindedHopFeatures, Bolt12InvoiceFeatures};
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
 use lndkrpc::{
@@ -420,9 +421,9 @@ fn extract_payment_paths(invoice: &Bolt12Invoice) -> Vec<PaymentPaths> {
     invoice
         .payment_paths()
         .iter()
-        .map(|(blinded_pay_info, blinded_path)| PaymentPaths {
-            blinded_pay_info: Some(convert_blinded_pay_info(blinded_pay_info)),
-            blinded_path: Some(convert_blinded_path(blinded_path)),
+        .map(|blinded_payment_path| PaymentPaths {
+            blinded_pay_info: Some(convert_blinded_pay_info(&blinded_payment_path.payinfo)),
+            blinded_path: Some(convert_blinded_path(blinded_payment_path)),
         })
         .collect()
 }
@@ -462,10 +463,10 @@ fn convert_blinded_pay_info(native_info: &BlindedPayInfo) -> lndkrpc::BlindedPay
     }
 }
 
-fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
-    let introduction_node = match native_info.introduction_node {
+fn convert_blinded_path(native_info: &BlindedPaymentPath) -> lndkrpc::BlindedPath {
+    let introduction_node = match native_info.introduction_node() {
         IntroductionNode::NodeId(pubkey) => lndkrpc::IntroductionNode {
-            node_id: Some(convert_public_key(pubkey)),
+            node_id: Some(convert_public_key(*pubkey)),
             directed_short_channel_id: None,
         },
         IntroductionNode::DirectedShortChannelId(direction, scid) => {
@@ -478,7 +479,7 @@ fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
                 node_id: None,
                 directed_short_channel_id: Some(lndkrpc::DirectedShortChannelId {
                     direction: rpc_direction.into(),
-                    scid,
+                    scid: *scid,
                 }),
             }
         }
@@ -486,9 +487,9 @@ fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
 
     lndkrpc::BlindedPath {
         introduction_node: Some(introduction_node),
-        blinding_point: Some(convert_public_key(native_info.blinding_point)),
+        blinding_point: Some(convert_public_key(native_info.blinding_point())),
         blinded_hops: native_info
-            .blinded_hops
+            .blinded_hops()
             .iter()
             .map(|hop| lndkrpc::BlindedHop {
                 blinded_node_id: Some(convert_public_key(hop.blinded_node_id)),

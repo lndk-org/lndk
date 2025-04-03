@@ -14,11 +14,11 @@ spec = "config_spec.toml"
 
 [dependencies]
 async-trait = "0.1.66"
-bitcoin = { version = "0.30.2", features = ["rand"] }
+bitcoin = { version = "0.32.2", features = ["rand"] }
 clap = { version = "4.4.6", features = ["derive", "string"] }
 futures = "0.3.26"
 home = "0.5.5"
-lightning = { version = "0.0.123", features = ["max_level_trace", "_test_utils"] }
+lightning = { version = "0.1.1", features = ["_test_utils", "dnssec"] }
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 log = "0.4.17"
@@ -32,6 +32,8 @@ configure_me = "0.4.0"
 bytes = "1.4.0"
 triggered = "0.1.2"
 prost = "0.12"
+lightning-invoice = "0.33.1"
+lightning-dns-resolver = "0.2.0"
 
 [dev-dependencies]
 bitcoincore-rpc = { package="core-rpc", version = "0.17.0" }
