@@ -72,7 +72,7 @@ On macOS, you can install protoc using homebrew:
 brew install protobuf
 ```
 
-Note that you'll need `protoc` `v0.12.0` or later which supports the `--experimental_allow_proto3_optional` flag.
+Note that you'll need `protoc` `v3.12.0` or later which supports the `--experimental_allow_proto3_optional` flag.
 
 If you don't have a Rust toolchain (`cargo` and friends) installed, you can do that via your package manager, or [rustup](https://www.rust-lang.org/tools/install)
 ([non-curl-based methods available](https://forge.rust-lang.org/infra/other-installation-methods.html)).
