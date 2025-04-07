@@ -60,6 +60,23 @@ To accomplish #1, follow the instructions below to get the LNDK binary up and ru
 
 #### Running LNDK
 
+On Ubuntu 22.04 or later, install the following prerequisites:
+
+```
+apt update && apt install -y protobuf-compiler build-essential
+```
+
+On macOS, you can install protoc using homebrew:
+
+```
+brew install protobuf
+```
+
+Note that you'll need `protoc` `v0.12.0` or later which supports the `--experimental_allow_proto3_optional` flag.
+
+If you don't have a Rust toolchain (`cargo` and friends) installed, you can do that via your package manager, or [rustup](https://www.rust-lang.org/tools/install)
+([non-curl-based methods available](https://forge.rust-lang.org/infra/other-installation-methods.html)).
+
 Now we need to set up LNDK. To start:
 
 ```

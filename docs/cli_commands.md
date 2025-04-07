@@ -49,10 +49,10 @@ If your macaroon is in the default location, paying an offer looks like:
 
 If your macaroon is not in the default location, an example command looks like:
 
-`lndk-cli -- --network=mainnet --macaroon-path=/credentials/custom.macaroon pay-offer <OFFER_STRING> <AMOUNT_MSATS>`
+`lndk-cli --network=mainnet --macaroon-path=/credentials/custom.macaroon pay-offer <OFFER_STRING> <AMOUNT_MSATS>`
 
 Or you can pass in the credentials directly with a macaroon string like:
-`lndk-cli -- --network=mainnet --macaroon-hex=<MACAROON_HEX_STR> pay-offer <OFFER_STRING> <AMOUNT_MSATS>`
+`lndk-cli --network=mainnet --macaroon-hex=<MACAROON_HEX_STR> pay-offer <OFFER_STRING> <AMOUNT_MSATS>`
 
 ## gRPC client example
 
