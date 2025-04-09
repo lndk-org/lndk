@@ -1,7 +1,7 @@
 services:
   bitcoin:
     image: bitcoin/bitcoin:28.1
-    platform: linux/amd64
+    platform: linux/arm64
     entrypoint: ["/bin/sh", "/bitcoin/entrypoint.sh"]
     ports:
       - "18443:18443" # Regtest RPC port
@@ -28,7 +28,7 @@ services:
 
   eclair:
     image: ampch/eclair:latest
-    platform: linux/amd64
+    platform: linux/arm64
     depends_on:
       bitcoin:
         condition: service_healthy
