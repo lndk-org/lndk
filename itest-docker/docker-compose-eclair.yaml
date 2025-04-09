@@ -27,8 +27,7 @@ services:
 
 
   eclair:
-    # TODO: Use a stable version of eclair, there is no official since 0.9. 
-    image: acinq/eclair:latest
+    image: ampch/eclair:latest
     platform: linux/amd64
     depends_on:
       bitcoin:
