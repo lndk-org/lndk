@@ -51,7 +51,7 @@ async fn create_offers(
             BlindedPath::new_for_message(reply_path_keys, &messenger_utils, &secp_ctx).unwrap();
 
         let pay_cfg = PayOfferParams {
-            offer: offer,
+            offer,
             amount: Some(20_000),
             payer_note: Some("".to_string()),
             network: Network::Regtest,
