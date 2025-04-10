@@ -88,6 +88,10 @@ jobs:
         run: make eclair-itest
         working-directory: ${{ github.workspace }}
 
+      - name: Print LND logs
+        if: always()
+        run: find /tmp/lndk-tests -path "*/lnd-data/lnd-logs/*" -type f -name "*.log" -exec echo "=== {} ===" \; -exec cat {} \;
+
       - name: Print Eclair logs
         if: always()
         run: docker compose -f itest-docker/docker-compose-eclair.yaml logs eclair
