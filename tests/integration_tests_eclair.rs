@@ -174,7 +174,9 @@ async fn test_lndk_pay_eclair_offer() {
     let lnd_pubkey = PublicKey::from_str(&lnd_info.identity_pubkey).unwrap();
 
     lnd.connect_to_peer(ldk1_pubkey, ldk1_addr).await;
-
+    // Connect LND to Eclair to speed up Graph Sync
+    lnd.connect_to_peer(eclair_node_id, eclair_socket_addr)
+        .await;
     // Fund nodes
     let ldk1_fund_addr = ldk1.bitcoind_client.get_new_address().await;
     let ldk1_addr_str = ldk1_fund_addr.to_string();
@@ -223,19 +225,19 @@ async fn test_lndk_pay_eclair_offer() {
     .await
     .expect("Failed to open channel LDK1 -> Eclair");
 
+    lnd.wait_for_graph_sync().await;
+
     bitcoind
         .node
         .client
-        .generate_to_address(100, &ldk1_addr_rpc)
+        .generate_to_address(75, &ldk1_addr_rpc)
         .unwrap();
 
-    // Connect LND to Eclair to speed up Graph Sync
-    lnd.connect_to_peer(eclair_node_id, eclair_socket_addr)
-        .await;
+    println!("Mined 75 blocks");
 
     lnd.wait_for_chain_sync().await;
 
-    lnd.wait_for_graph_sync().await;
+    println!("LND synced to chain and graph");
 
     // --- Offer Creation (Eclair) ---
     let offer_desc = format!("test-offer-{}", test_name);
@@ -245,6 +247,7 @@ async fn test_lndk_pay_eclair_offer() {
         .await
         .expect("Failed to create offer in Eclair");
 
+    println!("Eclair offer created");
     // --- LNDK Setup ---
     let (lndk_cfg, handler, messenger, shutdown) = common::setup_lndk(
         &lnd.cert_path,
@@ -257,12 +260,16 @@ async fn test_lndk_pay_eclair_offer() {
     let offer = lightning::offers::offer::Offer::from_str(&offer_str.encoded)
         .expect("Failed to parse offer string");
 
+    println!("Offer parsed");
     // --- Offer Payment (LNDK) ---
     let destination = lndk::lndk_offers::get_destination(&offer)
         .await
         .expect("Could not get destination from offer");
 
+    println!("Destination got");
+
     lnd.wait_for_check_node_has_address(eclair_node_id).await;
+    println!("LND checked node has address");
 
     let reply_path = match handler
         .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey)
