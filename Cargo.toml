@@ -40,6 +40,9 @@ chrono = { version = "0.4.26" }
 ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", rev = "57b5e50c8dc306ece28654777b1cfc4792b35df0" }
 mockall = "0.11.3"
 tempfile = "3.5.0"
+reqwest = { version = "0.11", default-features = false, features = ["json"] }
+serde = { version = "1.0.210", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0.128", default-features = false, features = ["std"] }
 
 [build-dependencies]
 configure_me_codegen = "0.4.4"
@@ -49,3 +52,10 @@ tonic-build = "0.11"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[lints.rust.unexpected_cfgs]
+level = "forbid"
+# When adding a new cfg attribute, ensure that it is added to this list.
+check-cfg = [
+	"cfg(eclair_test)"
+]
