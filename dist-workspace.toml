@@ -31,3 +31,4 @@ protobuf-compiler = { version = "3.21.12-8.2build1" }
 # Use more recent version of ubuntu
 [dist.github-custom-runners]
 x86_64-unknown-linux-gnu = "ubuntu-24.04"
+global = "ubuntu-24.04"
