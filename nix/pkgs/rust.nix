@@ -44,6 +44,8 @@ let
     basePkg
     // {
       pname = "lndk";
+    }
+  );
 
 in
 {

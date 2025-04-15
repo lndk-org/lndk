@@ -1,3 +1,5 @@
+#![cfg(itest)]
+
 mod test_utils;
 
 use bitcoin::network::constants::Network;
@@ -256,8 +258,17 @@ pub async fn setup_bitcoind() -> BitcoindNode {
     let zmq_tx_port_arg = &format!("-zmqpubrawtx=tcp://127.0.0.1:{zmq_tx_port}");
     conf.tmpdir = Some(data_dir_path);
     conf.args = vec!["-regtest", zmq_block_port_arg, zmq_tx_port_arg];
-    let bitcoind = Node::from_downloaded_with_conf(&conf).unwrap();
-
+    let bitcoind = match corepc_node::downloaded_exe_path() {
+        Ok(_path) => {
+            println!("Using downloaded bitcoind");
+            Node::from_downloaded_with_conf(&conf).unwrap()
+        }
+        Err(_e) => {
+            println!("Using system bitcoind");
+            let exe = corepc_node::exe_path().unwrap();
+            Node::with_conf(exe, &conf).unwrap()
+        }
+    };
     // Mine 101 blocks in our little regtest network so that the funds are spendable.
     // (See https://bitcoin.stackexchange.com/questions/1991/what-is-the-block-maturation-time)
     let address = bitcoind.client.new_address().unwrap();

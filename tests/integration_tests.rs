@@ -1,3 +1,5 @@
+#![cfg(itest)]
+
 mod common;
 use futures::future::try_join_all;
 use lndk;

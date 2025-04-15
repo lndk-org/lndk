@@ -27,6 +27,8 @@ jobs:
   ubuntu-integration-test:
     name: run ubuntu unit and integration tests
     runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,8 +69,6 @@ jobs:
   check-flake:
     name: Check Nix Flake
     runs-on: ubuntu-latest
-    env:
-      FNAME: bitcoin-22.1-x86_64-linux-gnu.tar.gz
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,7 +82,5 @@ jobs:
         uses: cachix/install-nix-action@V27
         with:
           nix_path: nixpkgs=channel:nixos-24.05
-      - run: echo "BITCOIND_TARBALL_FILE=./${FNAME}" >> $GITHUB_ENV
-      - run: wget -q https://bitcoincore.org/bin/bitcoin-core-22.1/${FNAME}
-      - name: Check flake (excluding integration tests)
-        run: BITCOIND_TARBALL_FILE=./${FNAME} nix flake check --impure
+      - name: Check flake
+        run: nix flake check
