@@ -1,3 +1,5 @@
+#![cfg(itest)]
+
 mod test_utils;
 
 use bitcoin::network::constants::Network;
