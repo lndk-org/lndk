@@ -5,7 +5,6 @@ use lndk;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use bitcoincore_rpc::bitcoin::Network as RpcNetwork;
-use bitcoincore_rpc::RpcApi;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::blinded_path::{BlindedPath, IntroductionNode};
 use lightning::offers::offer::Quantity;
@@ -115,7 +114,7 @@ async fn test_lndk_send_invoice_request() {
 
     // We need to convert funding addresses to the form that the bitcoincore_rpc library recognizes.
     let ldk2_addr_string = ldk2_fund_addr.to_string();
-    let ldk2_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
+    let ldk2_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
         .unwrap()
         .require_network(RpcNetwork::Regtest)
         .unwrap();
