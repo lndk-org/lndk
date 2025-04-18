@@ -440,6 +440,7 @@ pub async fn connect_to_peer(
         }
     }
 
+    debug!("Connecting to peer: {}", node_id_str);
     let node = connector
         .get_node_info(node_id_str.clone(), false)
         .await
@@ -454,6 +455,10 @@ pub async fn connect_to_peer(
         return Err(OfferError::NodeAddressNotFound);
     }
 
+    debug!(
+        "Connecting to peer address: {}",
+        node.addresses[0].clone().addr
+    );
     connector
         .connect_peer(node_id_str, node.addresses[0].clone().addr)
         .await
