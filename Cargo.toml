@@ -35,7 +35,7 @@ prost = "0.12"
 
 [dev-dependencies]
 bitcoincore-rpc = "0.19.0"
-corepc-node = { version = "0.7.0", features = [ "27_2", "download"] }
+corepc-node = { version = "0.7.0", features = [ "28_0", "download"] }
 chrono = { version = "0.4.26" }
 ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", rev = "57b5e50c8dc306ece28654777b1cfc4792b35df0" }
 mockall = "0.11.3"
