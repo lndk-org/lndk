@@ -2,9 +2,8 @@ mod test_utils;
 
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
-use bitcoincore_rpc::{bitcoin::Network as BitcoindNetwork, json, RpcApi};
-use bitcoind::{get_available_port, BitcoinD, Conf, ConnectParams};
 use chrono::Utc;
+use corepc_node::{get_available_port, Conf, ConnectParams, Node};
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
@@ -41,9 +40,11 @@ pub async fn setup_test_infrastructure(
 
     let port = get_available_port().unwrap();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+    let cookie_values = connect_params.unwrap();
+
     let ldk1_config = LdkUserInfo {
-        bitcoind_rpc_username: connect_params.0.clone().unwrap(),
-        bitcoind_rpc_password: connect_params.1.clone().unwrap(),
+        bitcoind_rpc_username: cookie_values.user.clone(),
+        bitcoind_rpc_password: cookie_values.password.clone(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
         ldk_data_dir: ldk_test_dir.clone(),
@@ -58,8 +59,8 @@ pub async fn setup_test_infrastructure(
     let port = get_available_port().unwrap();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let ldk2_config = LdkUserInfo {
-        bitcoind_rpc_username: connect_params.0.unwrap(),
-        bitcoind_rpc_password: connect_params.1.unwrap(),
+        bitcoind_rpc_username: cookie_values.user.clone(),
+        bitcoind_rpc_password: cookie_values.password.clone(),
         bitcoind_rpc_host: String::from("localhost"),
         bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
         ldk_data_dir: ldk_test_dir,
@@ -104,13 +105,13 @@ pub async fn connect_network(
 
     // We need to convert funding addresses to the form that the bitcoincore_rpc library recognizes.
     let ldk2_addr_string = ldk2_fund_addr.to_string();
-    let ldk2_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
+    let ldk2_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
         .unwrap()
-        .require_network(BitcoindNetwork::Regtest)
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
         .unwrap();
-    let lnd_addr = bitcoind::bitcoincore_rpc::bitcoin::Address::from_str(&lnd_fund_addr)
+    let lnd_addr = bitcoincore_rpc::bitcoin::Address::from_str(&lnd_fund_addr)
         .unwrap()
-        .require_network(BitcoindNetwork::Regtest)
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
         .unwrap();
     let lnd_network_addr = lnd
         .address
@@ -239,7 +240,7 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf, PathBuf) {
 
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
 pub struct BitcoindNode {
-    pub node: BitcoinD,
+    pub node: Node,
     _data_dir: TempDir,
     zmq_block_port: u16,
     zmq_tx_port: u16,
@@ -255,15 +256,11 @@ pub async fn setup_bitcoind() -> BitcoindNode {
     let zmq_tx_port_arg = &format!("-zmqpubrawtx=tcp://127.0.0.1:{zmq_tx_port}");
     conf.tmpdir = Some(data_dir_path);
     conf.args = vec!["-regtest", zmq_block_port_arg, zmq_tx_port_arg];
-    let bitcoind = BitcoinD::from_downloaded_with_conf(&conf).unwrap();
+    let bitcoind = Node::from_downloaded_with_conf(&conf).unwrap();
 
     // Mine 101 blocks in our little regtest network so that the funds are spendable.
     // (See https://bitcoin.stackexchange.com/questions/1991/what-is-the-block-maturation-time)
-    let address = bitcoind
-        .client
-        .get_new_address(None, Some(json::AddressType::Bech32))
-        .unwrap();
-    let address = address.require_network(BitcoindNetwork::Regtest).unwrap();
+    let address = bitcoind.client.new_address().unwrap();
     bitcoind.client.generate_to_address(101, &address).unwrap();
 
     BitcoindNode {
@@ -315,10 +312,11 @@ impl LndNode {
 
         // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd
         // node, they won't clash.
-        let port = bitcoind::get_available_port().unwrap();
+        let port = corepc_node::get_available_port().unwrap();
         let rpc_addr = format!("localhost:{}", port);
-        let lnd_port = bitcoind::get_available_port().unwrap();
+        let lnd_port = corepc_node::get_available_port().unwrap();
         let lnd_addr = format!("localhost:{}", lnd_port);
+        let cookie_values = connect_params.unwrap();
         let args = [
             format!("--listen={}", lnd_addr),
             format!("--rpclisten={}", rpc_addr),
@@ -333,8 +331,8 @@ impl LndNode {
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
             format!("--debuglevel=info,PEER=info"),
-            format!("--bitcoind.rpcuser={}", connect_params.0.unwrap()),
-            format!("--bitcoind.rpcpass={}", connect_params.1.unwrap()),
+            format!("--bitcoind.rpcuser={}", cookie_values.user),
+            format!("--bitcoind.rpcpass={}", cookie_values.password),
             format!(
                 "--bitcoind.zmqpubrawblock=tcp://127.0.0.1:{}",
                 zmq_block_port
