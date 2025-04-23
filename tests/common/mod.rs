@@ -11,6 +11,7 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
 use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -358,11 +359,18 @@ impl LndNode {
             format!("--protocol.custom-init=39"),
         ];
 
+        let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
+        let stderr_log_path = lnd_data_dir.join("lnd-itest-stderr.log");
+        let stdout_file =
+            File::create(&stdout_log_path).expect("Failed to create stdout log file for lnd-itest");
+        let stderr_file =
+            File::create(&stderr_log_path).expect("Failed to create stderr log file for lnd-itest");
+
         // TODO: For Windows we might need to add ".exe" at the end.
         let cmd = Command::new("./lnd-itest")
             .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
             .spawn()
             .expect("Failed to execute lnd command");
 
