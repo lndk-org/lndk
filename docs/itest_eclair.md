@@ -39,6 +39,11 @@ This cleans up the `bitcoind` and `eclair` containers. Test data directories und
 
 ### Local development on itest-eclair
 
+### Nix
+
+You must have virtualisation docker enabled in your configuration to use it. Commonly `virtualisation.docker.enable = true`.
+Then using `nix develop` would work like other OS.
+
 #### MacOS
 
 Running integration test on MacOS requires a few extra steps:
