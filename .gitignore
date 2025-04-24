@@ -1,3 +1,7 @@
 /target
 lndk.conf*
 /.vscode
+
+# Ignore nix outputs
+result
+result-[0-9]*

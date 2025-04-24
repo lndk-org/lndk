@@ -122,6 +122,30 @@ Rather than use the admin.macaroon with unrestricted permission to an `LND` node
 lncli bakemacaroon --save_to=<FILEPATH>/lndk.macaroon uri:/lnrpc.Lightning/GetInfo uri:/lnrpc.Lightning/ListPeers uri:/lnrpc.Lightning/SubscribePeerEvents uri:/lnrpc.Lightning/SendCustomMessage uri:/lnrpc.Lightning/SubscribeCustomMessages uri:/peersrpc.Peers/UpdateNodeAnnouncement uri:/signrpc.Signer/DeriveSharedKey uri:/verrpc.Versioner/GetVersion
 ```
 
+### Using Nix
+
+Nix is a package manager for Unix systems that makes package management reliable and reproducible.
+
+To use LNDK on Nix you first need to install [Nix](https://nixos.org/download/).
+
+Then you have few options to run or develop LNDK:
+
+`nix develop` will open a shell with all the dependencies needed to run LNDK and itests.
+`nix flake check` will run all the checks defined in the flake. Also runs cargo audit and formatting checks.
+
+
+#### Running Integration Tests
+
+Integration tests require building an LND binary. You can use Nix to provide a complete environment with all dependencies needed for the tests:
+
+```
+nix develop
+make itest
+```
+
+The integration tests must be run from within the Git repository. The script will handle building LND from source and running the tests with the correct environment variables.
+
+
 ## Security
 
 NOTE: It is recommended to always use [cargo-crev](https://github.com/crev-dev/cargo-crev)

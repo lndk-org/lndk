@@ -1,3 +1,5 @@
+#![cfg(itest)]
+
 mod test_utils;
 
 use bitcoin::network::constants::Network;
@@ -9,6 +11,7 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
 use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -256,8 +259,17 @@ pub async fn setup_bitcoind() -> BitcoindNode {
     let zmq_tx_port_arg = &format!("-zmqpubrawtx=tcp://127.0.0.1:{zmq_tx_port}");
     conf.tmpdir = Some(data_dir_path);
     conf.args = vec!["-regtest", zmq_block_port_arg, zmq_tx_port_arg];
-    let bitcoind = Node::from_downloaded_with_conf(&conf).unwrap();
-
+    let bitcoind = match corepc_node::downloaded_exe_path() {
+        Ok(_path) => {
+            println!("Using downloaded bitcoind");
+            Node::from_downloaded_with_conf(&conf).unwrap()
+        }
+        Err(_e) => {
+            println!("Using system bitcoind");
+            let exe = corepc_node::exe_path().unwrap();
+            Node::with_conf(exe, &conf).unwrap()
+        }
+    };
     // Mine 101 blocks in our little regtest network so that the funds are spendable.
     // (See https://bitcoin.stackexchange.com/questions/1991/what-is-the-block-maturation-time)
     let address = bitcoind.client.new_address().unwrap();
@@ -347,11 +359,18 @@ impl LndNode {
             format!("--protocol.custom-init=39"),
         ];
 
+        let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
+        let stderr_log_path = lnd_data_dir.join("lnd-itest-stderr.log");
+        let stdout_file =
+            File::create(&stdout_log_path).expect("Failed to create stdout log file for lnd-itest");
+        let stderr_file =
+            File::create(&stderr_log_path).expect("Failed to create stderr log file for lnd-itest");
+
         // TODO: For Windows we might need to add ".exe" at the end.
         let cmd = Command::new("./lnd-itest")
             .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
             .spawn()
             .expect("Failed to execute lnd command");
 

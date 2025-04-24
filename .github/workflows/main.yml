@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ['master']
+    branches: ["master"]
   pull_request:
-    branches: ['*']
+    branches: ["*"]
 
 env:
   GO_VERSION: 1.21.0
@@ -27,18 +27,20 @@ jobs:
   ubuntu-integration-test:
     name: run ubuntu unit and integration tests
     runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: 'true'
+          submodules: "true"
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install protobuf-compiler
       - name: setup go ${{ env.GO_VERSION }}
         uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
         with:
-          go-version: '${{ env.GO_VERSION }}'
+          go-version: "${{ env.GO_VERSION }}"
       - name: run unit tests
-        run: cargo test --bin lndk 
+        run: cargo test --bin lndk
       - name: run cli unit tests
         run: cargo test --bin lndk-cli
       - name: run integration tests
@@ -63,3 +65,22 @@ jobs:
           files: lcov.info
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  check-flake:
+    name: Check Nix Flake
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+
+      - name: Check Nix flake inputs
+        uses: DeterminateSystems/flake-checker-action@v8
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@V27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.05
+      - name: Check flake
+        run: nix flake check
