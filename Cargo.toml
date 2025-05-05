@@ -29,7 +29,7 @@ log4rs = { version = "1.2.0", features = ["file_appender"] }
 rcgen = { version = "0.13.1", features = ["pem", "x509-parser"] }
 tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "signal", "test-util"] }
 tonic = { version = "0.11", features = [ "tls", "transport" ] }
-tonic_lnd = { git = "https://github.com/orbitalturtle/tonic_lnd", rev="18c5a71084886024a6b90307bfb8822288c5daea", package="fedimint-tonic-lnd", features = ["lightningrpc", "routerrpc", "versionrpc"] }
+tonic_lnd = { git = "https://github.com/lndk-org/tonic_lnd", rev="201aa3eb18cd82577061c469234a6e299600e0ef", package="fedimint-tonic-lnd", features = ["lightningrpc", "routerrpc", "versionrpc"] }
 hex = "0.4.3"
 configure_me = "0.4.0"
 bytes = "1.4.0"
