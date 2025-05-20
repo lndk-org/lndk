@@ -11,7 +11,7 @@ mod internal {
 
 use home::home_dir;
 use internal::*;
-use lndk::lnd::{get_lnd_client, validate_lnd_creds, LndCfg};
+use lndk::lnd::{build_seed_from_lnd_node, get_lnd_client, validate_lnd_creds, LndCfg};
 use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
@@ -97,10 +97,7 @@ async fn main() -> Result<(), ()> {
             error!("Error: response_invoice_timeout must be more than 0 seconds.");
             exit(1);
         }
-    }
-
-    let handler = Arc::new(OfferHandler::new(config.response_invoice_timeout));
-    let messenger = LndkOnionMessenger::new();
+    };
 
     let mut client = get_lnd_client(args.lnd.clone()).expect("failed to connect to lnd");
     let info = client
@@ -131,6 +128,16 @@ async fn main() -> Result<(), ()> {
     let identity = read_tls(data_dir).map_err(|e| {
         error!("Error reading tls credentials: {e}");
     })?;
+
+    let mut signer = client.clone();
+    let seed = build_seed_from_lnd_node(&mut signer).await.map_err(|e| {
+        error!("Error creating seed: {:?}", e);
+    })?;
+    let handler = Arc::new(OfferHandler::new(
+        config.response_invoice_timeout,
+        Some(seed),
+    ));
+    let messenger = LndkOnionMessenger::new();
 
     let server = LNDKServer::new(
         Arc::clone(&handler),
