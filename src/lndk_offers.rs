@@ -1,18 +1,13 @@
 use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
 use crate::{OfferHandler, PaymentState};
 use async_trait::async_trait;
-use bitcoin::hashes::sha256::Hash;
-use bitcoin::secp256k1::schnorr::Signature;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
-use futures::executor::block_on;
 use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
-use lightning::offers::invoice_request::{
-    InvoiceRequest, SignInvoiceRequestFn, UnsignedInvoiceRequest,
-};
+use lightning::offers::invoice_request::InvoiceRequest;
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
@@ -29,9 +24,8 @@ use tonic_lnd::lnrpc::{
     Payment, QueryRoutesResponse, Route,
 };
 use tonic_lnd::routerrpc::TrackPaymentRequest;
-use tonic_lnd::signrpc::{KeyDescriptor, KeyLocator, SignMessageReq};
+use tonic_lnd::signrpc::{KeyLocator, SignMessageReq};
 use tonic_lnd::tonic::Status;
-use tonic_lnd::walletrpc::KeyReq;
 use tonic_lnd::Client;
 
 #[derive(Debug)]
@@ -506,75 +500,28 @@ impl PeerConnector for Client {
 
 #[async_trait]
 impl MessageSigner for Client {
-    async fn derive_next_key(&mut self, key_req: KeyReq) -> Result<KeyDescriptor, Status> {
-        match self.wallet().derive_next_key(key_req).await {
-            Ok(resp) => Ok(resp.into_inner()),
-            Err(e) => Err(e),
-        }
-    }
-
     async fn sign_message(
         &mut self,
+        msg: &[u8],
         key_loc: KeyLocator,
-        merkle_root: Hash,
-        tag: String,
-    ) -> Result<Vec<u8>, Status> {
-        let tag_vec = tag.as_bytes().to_vec();
+        double_hash: bool,
+        schnorr_sig: bool,
+    ) -> Result<Vec<u8>, ()> {
         let req = SignMessageReq {
-            msg: <bitcoin::hashes::sha256::Hash as AsRef<[u8; 32]>>::as_ref(&merkle_root).to_vec(),
-            tag: tag_vec,
+            msg: msg.to_vec(),
             key_loc: Some(key_loc),
-            schnorr_sig: true,
+            double_hash,
+            schnorr_sig,
             ..Default::default()
         };
 
-        let resp = self.signer().sign_message(req).await?;
-
+        let resp = self
+            .signer()
+            .sign_message(req)
+            .await
+            .expect("Failed to sign message");
         let resp_inner = resp.into_inner();
         Ok(resp_inner.signature)
-    }
-
-    fn sign_uir(
-        &mut self,
-        key_loc: KeyLocator,
-        unsigned_invoice_req: UnsignedInvoiceRequest,
-    ) -> Result<InvoiceRequest, OfferError> {
-        let signer = LndkSigner {
-            client: self.clone(),
-            key_loc,
-        };
-        match unsigned_invoice_req.sign(signer) {
-            Ok(signed_invoice) => Ok(signed_invoice),
-            Err(_) => Err(OfferError::SignError(SignError::Signing)),
-        }
-    }
-}
-
-struct LndkSigner {
-    client: Client,
-    key_loc: KeyLocator,
-}
-
-impl SignInvoiceRequestFn for LndkSigner {
-    fn sign_invoice_request(&self, msg: &UnsignedInvoiceRequest) -> Result<Signature, ()> {
-        let tagged_hash = msg.as_ref();
-        let tag = tagged_hash.tag().to_string();
-
-        let mut signer = self.client.clone();
-        let signature = match block_on(signer.sign_message(
-            self.key_loc.clone(),
-            tagged_hash.merkle_root(),
-            tag,
-        )) {
-            Ok(sig) => sig,
-            Err(_e) => return Err(()),
-        };
-
-        let ret = match Signature::from_slice(&signature) {
-            Ok(s) => s,
-            Err(_) => return Err(()),
-        };
-        Ok(ret)
     }
 }
 
@@ -823,17 +770,6 @@ mod tests {
         )
         .unwrap();
         payment_path
-    }
-
-    mock! {
-        TestBolt12Signer{}
-
-         #[async_trait]
-         impl MessageSigner for TestBolt12Signer {
-             async fn derive_next_key(&mut self, key_req: KeyReq) -> Result<KeyDescriptor, Status>;
-             async fn sign_message(&mut self, key_loc: KeyLocator, merkle_hash: Hash, tag: String) -> Result<Vec<u8>, Status>;
-             fn sign_uir(&mut self, key_loc: KeyLocator, unsigned_invoice_req: UnsignedInvoiceRequest) -> Result<InvoiceRequest, OfferError>;
-         }
     }
 
     mock! {
