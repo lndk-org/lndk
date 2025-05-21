@@ -8,6 +8,7 @@ on:
 
 env:
   GO_VERSION: 1.21.0
+  RUST_TOOLCHAIN: 1.83.0
 
 jobs:
   build_and_format:
@@ -15,7 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
       - run: sudo apt-get install protobuf-compiler
       - run: cargo build --release --all-features
       - run: cargo fmt -- --config unstable_features=true --config wrap_comments=true --config comment_width=100 --check
@@ -33,7 +37,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: "true"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - run: sudo apt-get install protobuf-compiler
       - name: setup go ${{ env.GO_VERSION }}
         uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
@@ -53,7 +59,9 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - run: sudo apt-get install protobuf-compiler
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
