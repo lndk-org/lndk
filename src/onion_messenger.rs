@@ -65,6 +65,7 @@ impl NodeIdLookUp for LndkNodeIdLookUp {
     fn next_node_id(&self, short_channel_id: u64) -> Option<PublicKey> {
         let get_chan_info_request = ChanInfoRequest {
             chan_id: short_channel_id,
+            chan_point: "".to_string(),
         };
         let client = self.client.clone();
         match block_on(

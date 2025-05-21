@@ -409,7 +409,10 @@ impl OfferHandler {
         let intro_node_id = match params.path.introduction_node {
             IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                let get_chan_info_request = ChanInfoRequest { chan_id: scid };
+                let get_chan_info_request = ChanInfoRequest {
+                    chan_id: scid,
+                    chan_point: "".to_string(),
+                };
                 let chan_info = client
                     .clone()
                     .lightning_read_only()

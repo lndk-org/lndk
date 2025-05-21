@@ -624,7 +624,7 @@ impl InvoicePayer for Client {
             blinded_path,
             total_cltv_delta: u32::from(cltv_expiry_delta) + 120,
             base_fee_msat: u64::from(fee_base_msat),
-            proportional_fee_msat: u64::from(fee_ppm),
+            proportional_fee_rate: fee_ppm,
             ..Default::default()
         };
 
@@ -687,7 +687,10 @@ pub(crate) async fn get_node_id(
     scid: u64,
     direction: Direction,
 ) -> Result<PublicKey, OfferError> {
-    let get_info_request = ChanInfoRequest { chan_id: scid };
+    let get_info_request = ChanInfoRequest {
+        chan_id: scid,
+        chan_point: "".to_string(),
+    };
     let channel_info = client
         .lightning_read_only()
         .get_chan_info(get_info_request)
