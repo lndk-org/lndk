@@ -1,4 +1,4 @@
-use crate::OfferError;
+use crate::offers::OfferError;
 use async_trait::async_trait;
 use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
@@ -27,7 +27,6 @@ use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::verrpc::Version;
 use tonic_lnd::{Client, ConnectError};
-
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
 pub(crate) const MIN_LND_MAJOR_VER: u32 = 0;
@@ -401,6 +400,17 @@ pub async fn build_seed_from_lnd_node(signer: &mut impl MessageSigner) -> Result
     let hash = sha256::Hash::hash(&signature);
     let seed = hash.to_byte_array();
     Ok(seed)
+}
+
+/// Converts vector of bits numbers as i32 (0 - 128) to little endian bytes
+fn feature_bits_to_le_bytes(feature_bits: &[i32]) -> Vec<u8> {
+    let mut bits: u128 = 0;
+    for &bit in feature_bits {
+        if (0..=127).contains(&bit) {
+            bits |= 1u128 << bit;
+        }
+    }
+    bits.to_le_bytes().to_vec()
 }
 
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.
