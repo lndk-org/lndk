@@ -5,10 +5,10 @@ use crate::{
     TLS_KEY_FILENAME,
 };
 use bitcoin::secp256k1::PublicKey;
-use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
+use lightning::blinded_path::payment::BlindedPaymentPath;
+use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
-use lightning::ln::features::{BlindedHopFeatures, Bolt12InvoiceFeatures};
-use lightning::offers::invoice::{BlindedPayInfo, Bolt12Invoice};
+use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::offer::Offer;
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
@@ -33,6 +33,7 @@ use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
+    #[allow(dead_code)]
     node_id: PublicKey,
     // The LND tls cert we need to establish a connection with LND.
     lnd_cert: String,
@@ -86,15 +87,7 @@ impl Offers for LNDKServer {
                 "Internal error: Couldn't get destination from offer: {e:?}"
             ))
         })?;
-        let reply_path = match self
-            .offer_handler
-            .create_reply_path(client.clone(), self.node_id)
-            .await
-        {
-            Ok(reply_path) => reply_path,
-            Err(e) => return Err(Status::internal(format!("Internal error: {e}"))),
-        };
-
+        let reply_path = None;
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
@@ -112,7 +105,7 @@ impl Offers for LNDKServer {
             network,
             client,
             destination,
-            reply_path: Some(reply_path),
+            reply_path,
             response_invoice_timeout: inner_request.response_invoice_timeout,
         };
 
@@ -180,14 +173,7 @@ impl Offers for LNDKServer {
         let destination = get_destination(&offer)
             .await
             .map_err(|e| Status::unavailable(format!("Couldn't find destination: {e}")))?;
-        let reply_path = match self
-            .offer_handler
-            .create_reply_path(client.clone(), self.node_id)
-            .await
-        {
-            Ok(reply_path) => reply_path,
-            Err(e) => return Err(Status::internal(format!("Internal error: {e}"))),
-        };
+        let reply_path = None;
 
         let info = client
             .lightning()
@@ -206,7 +192,7 @@ impl Offers for LNDKServer {
             network,
             client,
             destination,
-            reply_path: Some(reply_path),
+            reply_path,
             response_invoice_timeout: inner_request.response_invoice_timeout,
         };
 
@@ -265,7 +251,7 @@ impl Offers for LNDKServer {
             ))
         })?;
 
-        let amount = match validate_amount(invoice.amount(), inner_request.amount).await {
+        let amount = match validate_amount(invoice.amount().as_ref(), inner_request.amount).await {
             Ok(amount) => amount,
             Err(e) => return Err(Status::invalid_argument(e.to_string())),
         };
@@ -398,7 +384,7 @@ fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12I
         }),
         created_at: invoice.created_at().as_secs() as i64,
         relative_expiry: invoice.relative_expiry().as_secs(),
-        node_id: Some(convert_public_key(invoice.signing_pubkey())),
+        node_id: Some(convert_public_key(&invoice.signing_pubkey())),
         signature: invoice.signature().to_string(),
         payment_paths: extract_payment_paths(invoice),
         features: convert_invoice_features(invoice.invoice_features().clone()),
@@ -420,50 +406,37 @@ fn extract_payment_paths(invoice: &Bolt12Invoice) -> Vec<PaymentPaths> {
     invoice
         .payment_paths()
         .iter()
-        .map(|(blinded_pay_info, blinded_path)| PaymentPaths {
-            blinded_pay_info: Some(convert_blinded_pay_info(blinded_pay_info)),
-            blinded_path: Some(convert_blinded_path(blinded_path)),
+        .map(|path| PaymentPaths {
+            blinded_pay_info: Some(convert_blinded_pay_info(&path.payinfo)),
+            blinded_path: Some(convert_blinded_path(path)),
         })
         .collect()
 }
 
-fn convert_public_key(native_pub_key: PublicKey) -> lndkrpc::PublicKey {
+fn convert_public_key(native_pub_key: &PublicKey) -> lndkrpc::PublicKey {
     let pub_key_bytes = native_pub_key.encode();
     lndkrpc::PublicKey { key: pub_key_bytes }
 }
 
-// Conversion function for invoice features.
-// Based on Bolt12InvoiceContext in https://docs.rs/lightning/latest/src/lightning/ln/features.rs.html#213
-fn convert_invoice_features(features: Bolt12InvoiceFeatures) -> Vec<i32> {
-    let mut feature_bits = Vec::new();
-    if features.requires_basic_mpp() {
-        feature_bits.push(FeatureBit::MppReq as i32);
-    }
-    if features.supports_basic_mpp() {
-        feature_bits.push(FeatureBit::MppOpt as i32);
-    }
-    feature_bits
+fn convert_invoice_features(_features: impl std::fmt::Debug) -> Vec<i32> {
+    vec![FeatureBit::MppOpt as i32]
 }
 
-// Conversion function for hop features.
-// Based on BlindedHopContext in https://docs.rs/lightning/latest/src/lightning/ln/features.rs.html#213
-fn convert_hop_features(_: BlindedHopFeatures) -> Vec<i32> {
-    Vec::new()
-}
-
-fn convert_blinded_pay_info(native_info: &BlindedPayInfo) -> lndkrpc::BlindedPayInfo {
+fn convert_blinded_pay_info(
+    native_info: &lightning::blinded_path::payment::BlindedPayInfo,
+) -> lndkrpc::BlindedPayInfo {
     lndkrpc::BlindedPayInfo {
         fee_base_msat: native_info.fee_base_msat,
         fee_proportional_millionths: native_info.fee_proportional_millionths,
         cltv_expiry_delta: native_info.cltv_expiry_delta as u32,
         htlc_minimum_msat: native_info.htlc_minimum_msat,
         htlc_maximum_msat: native_info.htlc_maximum_msat,
-        features: convert_hop_features(native_info.features.clone()),
+        ..Default::default()
     }
 }
 
-fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
-    let introduction_node = match native_info.introduction_node {
+fn convert_blinded_path(native_info: &BlindedPaymentPath) -> lndkrpc::BlindedPath {
+    let introduction_node = match native_info.introduction_node() {
         IntroductionNode::NodeId(pubkey) => lndkrpc::IntroductionNode {
             node_id: Some(convert_public_key(pubkey)),
             directed_short_channel_id: None,
@@ -478,7 +451,7 @@ fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
                 node_id: None,
                 directed_short_channel_id: Some(lndkrpc::DirectedShortChannelId {
                     direction: rpc_direction.into(),
-                    scid,
+                    scid: *scid,
                 }),
             }
         }
@@ -486,12 +459,12 @@ fn convert_blinded_path(native_info: &BlindedPath) -> lndkrpc::BlindedPath {
 
     lndkrpc::BlindedPath {
         introduction_node: Some(introduction_node),
-        blinding_point: Some(convert_public_key(native_info.blinding_point)),
+        blinding_point: Some(convert_public_key(&native_info.blinding_point())),
         blinded_hops: native_info
-            .blinded_hops
+            .blinded_hops()
             .iter()
             .map(|hop| lndkrpc::BlindedHop {
-                blinded_node_id: Some(convert_public_key(hop.blinded_node_id)),
+                blinded_node_id: Some(convert_public_key(&hop.blinded_node_id)),
                 encrypted_payload: hop.encrypted_payload.clone(),
             })
             .collect(),

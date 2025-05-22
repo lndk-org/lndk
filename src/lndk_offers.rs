@@ -2,20 +2,21 @@ use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, P
 use crate::{OfferHandler, PaymentState};
 use async_trait::async_trait;
 use bitcoin::hashes::sha256::Hash;
-use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::schnorr::Signature;
-use bitcoin::secp256k1::{PublicKey, Secp256k1, SignOnly};
+use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::Network;
 use futures::executor::block_on;
-use lightning::blinded_path::{BlindedPath, Direction, IntroductionNode};
+use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, OffersContext};
+use lightning::blinded_path::payment::BlindedPaymentPath;
+use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice_request::{
-    ExplicitPayerId, InvoiceRequest, InvoiceRequestBuilder, SignInvoiceRequestFn,
-    UnsignedInvoiceRequest,
+    InvoiceRequest, SignInvoiceRequestFn, UnsignedInvoiceRequest,
 };
 use lightning::offers::merkle::SignError;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
-use lightning::onion_message::messenger::{Destination, PendingOnionMessage};
+use lightning::onion_message::messenger::{Destination, MessageSendInstructions};
 use lightning::onion_message::offers::OffersMessage;
 use lightning::sign::EntropySource;
 use log::{debug, error};
@@ -23,7 +24,6 @@ use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt::Display;
 use std::str::FromStr;
-use tokio::task;
 use tonic_lnd::lnrpc::{
     ChanInfoRequest, GetInfoRequest, HtlcAttempt, ListPeersRequest, ListPeersResponse, NodeInfo,
     Payment, QueryRoutesResponse, Route,
@@ -114,40 +114,44 @@ impl OfferHandler {
         &self,
         destination: Destination,
         mut client: Client,
-        mut reply_path: Option<BlindedPath>,
         invoice_request: InvoiceRequest,
+        offer_context: OffersContext,
     ) -> Result<(), OfferError> {
         // For now we connect directly to the introduction node of the blinded path so we don't need
         // any intermediate nodes here. In the future we'll query for a full path to the
         // introduction node for better sender privacy.
         match destination {
             Destination::Node(pubkey) => connect_to_peer(client.clone(), pubkey).await?,
-            Destination::BlindedPath(ref path) => match path.introduction_node {
-                IntroductionNode::NodeId(pubkey) => connect_to_peer(client.clone(), pubkey).await?,
+            Destination::BlindedPath(ref path) => match path.introduction_node() {
+                IntroductionNode::NodeId(pubkey) => {
+                    connect_to_peer(client.clone(), *pubkey).await?
+                }
                 IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                    let pubkey = get_node_id(client.clone(), scid, direction).await?;
+                    let pubkey = get_node_id(client.clone(), *scid, *direction).await?;
                     connect_to_peer(client.clone(), pubkey).await?
                 }
             },
         };
 
-        if reply_path.is_none() {
-            let info = client
-                .lightning()
-                .get_info(GetInfoRequest {})
-                .await
-                .expect("failed to get info")
-                .into_inner();
+        let info = client
+            .lightning()
+            .get_info(GetInfoRequest {})
+            .await
+            .expect("failed to get info")
+            .into_inner();
 
-            let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
-            reply_path = Some(self.create_reply_path(client.clone(), pubkey).await?)
-        };
+        let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
+        let message_context = MessageContext::Offers(offer_context);
+        let reply_path = Some(
+            self.create_reply_path(client.clone(), pubkey, message_context)
+                .await?,
+        );
 
         if let Some(ref reply_path) = reply_path {
-            let reply_path_intro_node_id = match reply_path.introduction_node {
+            let reply_path_intro_node_id = match reply_path.introduction_node() {
                 IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
                 IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                    get_node_id(client.clone(), scid, direction)
+                    get_node_id(client.clone(), *scid, *direction)
                         .await?
                         .to_string()
                 }
@@ -159,14 +163,17 @@ impl OfferHandler {
         };
 
         let contents = OffersMessage::InvoiceRequest(invoice_request);
-        let pending_message = PendingOnionMessage {
-            contents,
-            destination,
-            reply_path,
+        let send_instructions = if let Some(reply_path_inner) = reply_path {
+            MessageSendInstructions::WithSpecifiedReplyPath {
+                destination,
+                reply_path: reply_path_inner,
+            }
+        } else {
+            MessageSendInstructions::WithoutReplyPath { destination }
         };
 
         let mut pending_messages = self.pending_messages.lock().unwrap();
-        pending_messages.push(pending_message);
+        pending_messages.push((contents, send_instructions));
         std::mem::drop(pending_messages);
 
         Ok(())
@@ -176,43 +183,24 @@ impl OfferHandler {
     // process of paying an offer.
     pub async fn create_invoice_request(
         &self,
-        mut signer: impl MessageSigner + std::marker::Send + 'static,
         offer: Offer,
         network: Network,
         msats: Option<u64>,
         payer_note: Option<String>,
-    ) -> Result<(InvoiceRequest, PaymentId, u64), OfferError> {
-        let validated_amount = validate_amount(offer.amount(), msats).await?;
+    ) -> Result<(InvoiceRequest, PaymentId, u64, OffersContext), OfferError> {
+        let validated_amount = validate_amount(offer.amount().as_ref(), msats).await?;
 
-        // We use KeyFamily KeyFamilyNodeKey (3) to derive a key. For better privacy, the key
-        // shouldn't correspond to our node id.
-        // https://github.com/lightningnetwork/lnd/blob/a3f8011ed695f6204ec6a13ad5c2a67ac542b109/keychain/derivation.go#L86
-        let key_loc = KeyReq {
-            key_family: 3,
-            ..Default::default()
-        };
-
-        let key_descriptor = signer
-            .derive_next_key(key_loc.clone())
-            .await
-            .map_err(OfferError::DeriveKeyFailure)?;
-        let pubkey = PublicKey::from_slice(&key_descriptor.raw_key_bytes)
-            .expect("failed to deserialize public key");
-
-        // Generate a new payment id for this payment.
+        // Generate a default payment id for this payment.
         let payment_id = PaymentId(self.messenger_utils.get_secure_random_bytes());
 
         // We need to add some metadata to the invoice request to help with verification of the
         // invoice once returned from the offer maker. Once we get an invoice back, this metadata
         // will help us to determine: 1) That the invoice is truly for the invoice request we sent.
         // 2) We don't pay duplicate invoices.
-        let builder: InvoiceRequestBuilder<'_, '_, ExplicitPayerId, SignOnly> = offer
-            .request_invoice_deriving_metadata(
-                pubkey,
-                &self.expanded_key,
-                &self.messenger_utils,
-                payment_id,
-            )
+        let secp_ctx = Secp256k1::new();
+        let nonce = lightning::offers::nonce::Nonce::from_entropy_source(&self.messenger_utils);
+        let builder = offer
+            .request_invoice(&self.expanded_key, nonce, &secp_ctx, payment_id)
             .map_err(OfferError::BuildUIRFailure)?
             .chain(network)
             .map_err(OfferError::BuildUIRFailure)?
@@ -224,16 +212,9 @@ impl OfferHandler {
             None => builder,
         };
 
-        let unsigned_invoice_req = builder.build().map_err(OfferError::BuildUIRFailure)?;
-
-        // To create a valid invoice request, we also need to sign it. This is spawned in a blocking
-        // task because we need to call block_on on sign_message so that sign_closure can be a
-        // synchronous closure.
-        let invoice_request = task::spawn_blocking(move || {
-            signer.sign_uir(key_descriptor.key_loc.unwrap(), unsigned_invoice_req)
-        })
-        .await
-        .unwrap()?;
+        let invoice_request = builder
+            .build_and_sign()
+            .map_err(OfferError::BuildUIRFailure)?;
 
         {
             let mut active_payments = self.active_payments.lock().unwrap();
@@ -247,8 +228,12 @@ impl OfferHandler {
                 }
             };
         }
-
-        Ok((invoice_request, payment_id, validated_amount))
+        let offer_context = OffersContext::OutboundPayment {
+            payment_id,
+            nonce,
+            hmac: None,
+        };
+        Ok((invoice_request, payment_id, validated_amount, offer_context))
     }
 
     /// create_reply_path creates a blinded path to provide to the offer node when requesting an
@@ -263,7 +248,8 @@ impl OfferHandler {
         &self,
         mut connector: impl PeerConnector + std::marker::Send + 'static,
         node_id: PublicKey,
-    ) -> Result<BlindedPath, OfferError> {
+        message_context: MessageContext,
+    ) -> Result<BlindedMessagePath, OfferError> {
         // Find an introduction node for our blinded path.
         let current_peers = connector.list_peers().await.map_err(|e| {
             error!("Could not lookup current peers: {e}.");
@@ -292,23 +278,32 @@ impl OfferHandler {
 
         let secp_ctx = Secp256k1::new();
         if intro_node.is_none() {
-            Ok(
-                BlindedPath::one_hop_for_message(node_id, &self.messenger_utils, &secp_ctx)
-                    .map_err(|_| {
-                        error!("Could not create blinded path.");
-                        OfferError::BuildBlindedPathFailure
-                    })?,
-            )
-        } else {
-            Ok(BlindedPath::new_for_message(
-                &[intro_node.unwrap(), node_id],
+            Ok(BlindedMessagePath::one_hop(
+                node_id,
+                message_context,
                 &self.messenger_utils,
                 &secp_ctx,
             )
             .map_err(|_| {
                 error!("Could not create blinded path.");
                 OfferError::BuildBlindedPathFailure
-            }))?
+            })?)
+        } else {
+            let nodes = vec![lightning::blinded_path::message::MessageForwardNode {
+                node_id: intro_node.unwrap(),
+                short_channel_id: None,
+            }];
+            Ok(BlindedMessagePath::new(
+                &nodes,
+                node_id,
+                message_context,
+                &self.messenger_utils,
+                &secp_ctx,
+            )
+            .map_err(|_| {
+                error!("Could not create blinded path.");
+                OfferError::BuildBlindedPathFailure
+            })?)
         }
     }
 
@@ -350,7 +345,7 @@ impl OfferHandler {
 }
 
 pub struct SendPaymentParams {
-    pub path: BlindedPath,
+    pub path: BlindedPaymentPath,
     pub cltv_expiry_delta: u16,
     pub fee_base_msat: u32,
     pub fee_ppm: u32,
@@ -413,7 +408,7 @@ pub(crate) async fn validate_amount(
 
 pub async fn get_destination(offer: &Offer) -> Result<Destination, OfferError> {
     if offer.paths().is_empty() {
-        if let Some(signing_pubkey) = offer.signing_pubkey() {
+        if let Some(signing_pubkey) = offer.issuer_signing_pubkey() {
             Ok(Destination::Node(signing_pubkey))
         } else {
             Err(OfferError::IntroductionNodeNotFound)
@@ -587,14 +582,14 @@ impl SignInvoiceRequestFn for LndkSigner {
 impl InvoicePayer for Client {
     async fn query_routes(
         &mut self,
-        path: BlindedPath,
+        path: BlindedPaymentPath,
         cltv_expiry_delta: u16,
         fee_base_msat: u32,
         fee_ppm: u32,
         msats: u64,
     ) -> Result<QueryRoutesResponse, Status> {
         let mut blinded_hops = vec![];
-        for hop in path.blinded_hops.iter() {
+        for hop in path.blinded_hops().iter() {
             let new_hop = tonic_lnd::lnrpc::BlindedHop {
                 blinded_node: hop.blinded_node_id.serialize().to_vec(),
                 encrypted_data: hop.clone().encrypted_payload,
@@ -602,21 +597,26 @@ impl InvoicePayer for Client {
             blinded_hops.push(new_hop);
         }
 
-        let introduction_node = match path.introduction_node {
+        // We'll need to store the pubkey outside the match to fix lifetime issues
+        let node_id_from_scid;
+        let introduction_node = match path.introduction_node() {
             IntroductionNode::NodeId(pubkey) => pubkey,
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                match get_node_id(self.clone(), scid, direction).await {
-                    Ok(pubkey) => pubkey,
-                    Err(e) => {
-                        error!("{e}");
-                        return Err(Status::unknown("Could not get node id."));
-                    }
-                }
+                node_id_from_scid =
+                    get_node_id(self.clone(), *scid, *direction)
+                        .await
+                        .map_err(|e| {
+                            error!("{e}");
+                            Status::unknown("Could not get node id.")
+                        })?;
+
+                // Using the longer-lived reference
+                &node_id_from_scid
             }
         };
         let blinded_path = Some(tonic_lnd::lnrpc::BlindedPath {
             introduction_node: introduction_node.serialize().to_vec(),
-            blinding_point: path.blinding_point.serialize().to_vec(),
+            blinding_point: path.blinding_point().serialize().to_vec(),
             blinded_hops,
         });
 
@@ -711,9 +711,19 @@ pub(crate) async fn get_node_id(
 mod tests {
     use super::*;
     use crate::MessengerUtilities;
-    use bitcoin::secp256k1::{KeyPair, Secp256k1, SecretKey};
-    use lightning::offers::merkle::SignError;
-    use lightning::offers::offer::{OfferBuilder, Quantity};
+    use bitcoin::key::Keypair;
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use lightning::blinded_path::payment::{
+        Bolt12OfferContext, ForwardTlvs, PaymentConstraints, PaymentContext, PaymentForwardNode,
+        PaymentRelay, UnauthenticatedReceiveTlvs,
+    };
+    use lightning::bolt11_invoice::PaymentSecret;
+    use lightning::ln::inbound_payment::ExpandedKey;
+    use lightning::offers::invoice_request::InvoiceRequestFields;
+    use lightning::offers::nonce::Nonce;
+    use lightning::offers::offer::{OfferBuilder, OfferId, Quantity};
+    use lightning::types::features::BlindedHopFeatures;
+    use lightning::util::string::UntrustedString;
     use mockall::mock;
     use mockall::predicate::eq;
     use std::collections::HashMap;
@@ -721,13 +731,24 @@ mod tests {
     use std::time::{Duration, SystemTime};
     use tonic_lnd::lnrpc::{ChannelEdge, LightningNode, NodeAddress, Payment};
 
+    const NONCE_BYTES: &[u8] = &[42u8; 16];
+
+    fn get_message_context() -> MessageContext {
+        let offer_context = OffersContext::OutboundPayment {
+            payment_id: PaymentId([42; 32]),
+            nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
+            hmac: None,
+        };
+        MessageContext::Offers(offer_context)
+    }
+
     fn get_offer() -> String {
         "lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqgn3qzsyvfkx26qkyypvr5hfx60h9w9k934lt8s2n6zc0wwtgqlulw7dythr83dqx8tzumg".to_string()
     }
 
     fn build_custom_offer(amount_msats: u64) -> Offer {
         let secp_ctx = Secp256k1::new();
-        let keys = KeyPair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
+        let keys = Keypair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
         let pubkey = PublicKey::from(keys);
 
         let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -749,34 +770,59 @@ mod tests {
         vec![pubkey1, pubkey2]
     }
 
-    fn get_invoice_request(offer: Offer, amount: u64) -> InvoiceRequest {
+    fn get_blinded_payment_path() -> BlindedPaymentPath {
+        let entropy_source = MessengerUtilities::new([42; 32]);
         let secp_ctx = Secp256k1::new();
-        let keys = KeyPair::from_secret_key(&secp_ctx, &SecretKey::from_slice(&[42; 32]).unwrap());
-        let pubkey = PublicKey::from(keys);
-        offer
-            .request_invoice(vec![42; 64], pubkey)
-            .unwrap()
-            .chain(Network::Regtest)
-            .unwrap()
-            .amount_msats(amount)
-            .unwrap()
-            .build()
-            .unwrap()
-            .sign(|message: &UnsignedInvoiceRequest| {
-                Ok(secp_ctx.sign_schnorr_no_aux_rand(message.as_ref().as_digest(), &keys))
-            })
-            .expect("failed verifying signature")
-    }
-
-    fn get_blinded_path() -> BlindedPath {
-        let entropy_source = MessengerUtilities::new();
-        let secp_ctx = Secp256k1::new();
-        BlindedPath::new_for_message(
-            &[PublicKey::from_str(&get_pubkeys()[0]).unwrap()],
+        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
+        let node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let expanded_key = ExpandedKey::new([42; 32]);
+        let payment_context = PaymentContext::Bolt12Offer(Bolt12OfferContext {
+            offer_id: OfferId([42; 32]),
+            invoice_request: InvoiceRequestFields {
+                payer_signing_pubkey: PublicKey::from_str(&get_pubkeys()[0]).unwrap(),
+                quantity: Some(1),
+                payer_note_truncated: Some(UntrustedString("".to_string())),
+                human_readable_name: None,
+            },
+        });
+        let payee_tlvs = UnauthenticatedReceiveTlvs {
+            payment_secret: PaymentSecret([42; 32]),
+            payment_constraints: PaymentConstraints {
+                max_cltv_expiry: 1_000_000,
+                htlc_minimum_msat: 1,
+            },
+            payment_context,
+        };
+        let payee_tlvs = payee_tlvs.authenticate(nonce, &expanded_key);
+        let intermediate_nodes = [PaymentForwardNode {
+            tlvs: ForwardTlvs {
+                short_channel_id: 43,
+                payment_relay: PaymentRelay {
+                    cltv_expiry_delta: 40,
+                    fee_proportional_millionths: 1_000,
+                    fee_base_msat: 1,
+                },
+                payment_constraints: PaymentConstraints {
+                    max_cltv_expiry: payee_tlvs.tlvs().payment_constraints.max_cltv_expiry + 40,
+                    htlc_minimum_msat: 100,
+                },
+                features: BlindedHopFeatures::empty(),
+                next_blinding_override: None,
+            },
+            node_id: node_id,
+            htlc_maximum_msat: 1_000_000_000_000,
+        }];
+        let payment_path = BlindedPaymentPath::new(
+            &intermediate_nodes,
+            node_id,
+            payee_tlvs,
+            u64::MAX,
+            12344,
             &entropy_source,
             &secp_ctx,
         )
-        .unwrap()
+        .unwrap();
+        payment_path
     }
 
     mock! {
@@ -806,7 +852,7 @@ mod tests {
 
         #[async_trait]
         impl InvoicePayer for TestInvoicePayer{
-            async fn query_routes(&mut self, path: BlindedPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
+            async fn query_routes(&mut self, path: BlindedPaymentPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
             async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
         }
@@ -814,105 +860,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_invoice() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock.expect_derive_next_key().returning(|_| {
-            Ok(KeyDescriptor {
-                raw_key_bytes: PublicKey::from_str(&get_pubkeys()[0])
-                    .unwrap()
-                    .serialize()
-                    .to_vec(),
-                key_loc: Some(KeyLocator {
-                    key_family: 3,
-                    ..Default::default()
-                }),
-            })
-        });
-
         let offer = decode(get_offer()).unwrap();
         let offer_amount = offer.amount().unwrap();
         let amount = match offer_amount {
-            Amount::Bitcoin { amount_msats } => *amount_msats,
+            Amount::Bitcoin { amount_msats } => amount_msats,
             _ => panic!("unexpected amount type"),
         };
-
-        signer_mock
-            .expect_sign_uir()
-            .returning(move |_, _| Ok(get_invoice_request(offer.clone(), amount)));
-
         let offer = decode(get_offer()).unwrap();
         let handler = OfferHandler::default();
         let resp = handler
-            .create_invoice_request(
-                signer_mock,
-                offer,
-                Network::Regtest,
-                Some(amount),
-                Some("".to_string()),
-            )
+            .create_invoice_request(offer, Network::Regtest, Some(amount), Some("".to_string()))
             .await;
         assert!(resp.is_ok())
-    }
-
-    #[tokio::test]
-    async fn test_request_invoice_derive_key_error() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock
-            .expect_derive_next_key()
-            .returning(|_| Err(Status::unknown("error testing")));
-
-        signer_mock
-            .expect_sign_uir()
-            .returning(move |_, _| Ok(get_invoice_request(decode(get_offer()).unwrap(), 10000)));
-
-        let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::default();
-        assert!(handler
-            .create_invoice_request(
-                signer_mock,
-                offer,
-                Network::Regtest,
-                Some(10000),
-                Some("".to_string())
-            )
-            .await
-            .is_err())
-    }
-
-    #[tokio::test]
-    async fn test_request_invoice_signer_error() {
-        let mut signer_mock = MockTestBolt12Signer::new();
-
-        signer_mock.expect_derive_next_key().returning(|_| {
-            Ok(KeyDescriptor {
-                raw_key_bytes: PublicKey::from_str(&get_pubkeys()[0])
-                    .unwrap()
-                    .serialize()
-                    .to_vec(),
-                key_loc: Some(KeyLocator {
-                    key_family: 3,
-                    ..Default::default()
-                }),
-            })
-        });
-
-        signer_mock
-            .expect_sign_uir()
-            .returning(move |_, _| Err(OfferError::SignError(SignError::Signing)));
-
-        let offer = decode(get_offer()).unwrap();
-        let handler = OfferHandler::default();
-        assert!(handler
-            .create_invoice_request(
-                signer_mock,
-                offer,
-                Network::Regtest,
-                Some(10000),
-                Some("".to_string())
-            )
-            .await
-            .is_err())
     }
 
     #[tokio::test]
@@ -920,21 +879,31 @@ mod tests {
         // If the amount the user provided is greater than the offer-provided amount, then
         // we should be good.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
+        let offer_amount = offer.amount();
+        assert!(validate_amount(offer_amount.as_ref(), Some(20000))
+            .await
+            .is_ok());
 
         let offer = build_custom_offer(0);
-        assert!(validate_amount(offer.amount(), Some(20000)).await.is_ok());
+        let offer_amount = offer.amount();
+        assert!(validate_amount(offer_amount.as_ref(), Some(20000))
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_invalid_amount() {
         // If the amount the user provided is lower than the offer amount, we error.
         let offer = build_custom_offer(20000);
-        assert!(validate_amount(offer.amount(), Some(1000)).await.is_err());
+        let offer_amount = offer.amount();
+        assert!(validate_amount(offer_amount.as_ref(), Some(1000))
+            .await
+            .is_err());
 
         // Both user amount and offer amount can't be 0.
         let offer = build_custom_offer(0);
-        assert!(validate_amount(offer.amount(), None).await.is_err());
+        let offer_amount = offer.amount();
+        assert!(validate_amount(offer_amount.as_ref(), None).await.is_err());
     }
 
     #[tokio::test]
@@ -1069,13 +1038,14 @@ mod tests {
                 ..Default::default()
             })
         });
-
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+
+        let message_context = get_message_context();
         let handler = OfferHandler::default();
-        assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
-            .await
-            .is_ok())
+        let reply_path = handler
+            .create_reply_path(connector_mock, receiver_node_id, message_context)
+            .await;
+        assert!(reply_path.is_ok());
     }
 
     #[tokio::test]
@@ -1088,9 +1058,10 @@ mod tests {
             .returning(|| Ok(ListPeersResponse { peers: vec![] }));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
         let handler = OfferHandler::default();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, message_context)
             .await
             .is_ok())
     }
@@ -1104,9 +1075,10 @@ mod tests {
             .returning(|| Err(Status::unknown("unknown error")));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
         let handler = OfferHandler::default();
         assert!(handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, message_context)
             .await
             .is_err())
     }
@@ -1137,12 +1109,15 @@ mod tests {
             .returning(|_, _| Err(Status::not_found("node was not found")));
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
         let handler = OfferHandler::default();
         let resp = handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, message_context)
             .await;
         assert!(resp.is_ok());
-        assert!(resp.unwrap().blinded_hops.len() == 1);
+        let reply_path = resp.unwrap();
+        let hops = reply_path.blinded_hops();
+        assert!(hops.len() == 1);
 
         // Now let's test that we have two peers that both have onion support feature flags set.
         // One isn't advertised (i.e. it has no public channels). But the second is. This
@@ -1197,11 +1172,14 @@ mod tests {
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
         let handler = OfferHandler::default();
+        let message_context = get_message_context();
         let resp = handler
-            .create_reply_path(connector_mock, receiver_node_id)
+            .create_reply_path(connector_mock, receiver_node_id, message_context)
             .await;
         assert!(resp.is_ok());
-        assert!(resp.unwrap().blinded_hops.len() == 2);
+        let reply_path = resp.unwrap();
+        let hops = reply_path.blinded_hops();
+        assert!(hops.len() == 2);
     }
 
     #[tokio::test]
@@ -1230,10 +1208,10 @@ mod tests {
             })
         });
 
-        let blinded_path = get_blinded_path();
-        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
         let handler = OfferHandler::default();
-        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
         let params = SendPaymentParams {
             path: blinded_path,
             cltv_expiry_delta: 200,
@@ -1254,9 +1232,9 @@ mod tests {
             .expect_query_routes()
             .returning(|_, _, _, _, _| Err(Status::unknown("unknown error")));
 
-        let blinded_path = get_blinded_path();
-        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
         let handler = OfferHandler::default();
         let params = SendPaymentParams {
             path: blinded_path,
@@ -1288,9 +1266,9 @@ mod tests {
             .expect_send_to_route()
             .returning(|_, _| Err(Status::unknown("unknown error")));
 
-        let blinded_path = get_blinded_path();
-        let payment_hash = MessengerUtilities::new().get_secure_random_bytes();
-        let payment_id = PaymentId(MessengerUtilities::new().get_secure_random_bytes());
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
         let handler = OfferHandler::default();
         let params = SendPaymentParams {
             path: blinded_path,

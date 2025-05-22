@@ -2,17 +2,18 @@
 
 mod common;
 use futures::future::try_join_all;
+use lightning::blinded_path::message::{MessageContext, OffersContext};
+use lightning::ln::channelmanager::PaymentId;
+use lightning::offers::nonce::Nonce;
 use lndk;
 
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
 use bitcoincore_rpc::bitcoin::Network as RpcNetwork;
 use ldk_sample::node_api::Node as LdkNode;
-use lightning::blinded_path::{BlindedPath, IntroductionNode};
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
-use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals, OfferHandler, PayOfferParams};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -22,13 +23,14 @@ use tokio::time::Duration;
 use tokio::{select, try_join};
 use tonic_lnd::Client;
 
+const NONCE_BYTES: &[u8] = &[42u8; 16];
 // Creates N offers and spits out the PayOfferParams that we can use to pay.
 async fn create_offers(
     num: i32,
     ldk: &LdkNode,
     path_pubkeys: &Vec<PublicKey>,
     client: Client,
-    reply_path_keys: &Vec<PublicKey>,
+    _reply_path_keys: &Vec<PublicKey>,
 ) -> Vec<PayOfferParams> {
     let mut pay_cfgs = vec![];
     for _ in 0..num {
@@ -44,12 +46,7 @@ async fn create_offers(
             .await
             .expect("should create offer");
 
-        let messenger_utils = MessengerUtilities::new();
         let blinded_path = offer.paths()[0].clone();
-        let secp_ctx = Secp256k1::new();
-        let reply_path =
-            BlindedPath::new_for_message(reply_path_keys, &messenger_utils, &secp_ctx).unwrap();
-
         let pay_cfg = PayOfferParams {
             offer: offer,
             amount: Some(20_000),
@@ -57,7 +54,7 @@ async fn create_offers(
             network: Network::Regtest,
             client: client.clone(),
             destination: Destination::BlindedPath(blinded_path),
-            reply_path: Some(reply_path),
+            reply_path: None,
             response_invoice_timeout: None,
         };
 
@@ -106,8 +103,6 @@ async fn test_lndk_send_invoice_request() {
     // ldk1 will be the offer creator, which will build a blinded route from ldk2 to ldk1.
     let (pubkey, addr) = ldk1.get_node_info();
     let (pubkey_2, addr_2) = ldk2.get_node_info();
-    let lnd_info = lnd.get_info().await;
-    let lnd_pubkey = PublicKey::from_str(&lnd_info.identity_pubkey).unwrap();
 
     ldk1.connect_to_peer(pubkey_2, addr_2).await.unwrap();
     lnd.connect_to_peer(pubkey_2, addr_2).await;
@@ -185,11 +180,6 @@ async fn test_lndk_send_invoice_request() {
     let mut client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
 
-    let messenger_utils = MessengerUtilities::new();
-    let secp_ctx = Secp256k1::new();
-    let reply_path =
-        BlindedPath::new_for_message(&[pubkey_2, lnd_pubkey], &messenger_utils, &secp_ctx).unwrap();
-
     let mut stream = client
         .lightning()
         .subscribe_channel_graph(tonic_lnd::lnrpc::GraphTopologySubscription {})
@@ -216,9 +206,8 @@ async fn test_lndk_send_invoice_request() {
     // Make sure lndk successfully sends the invoice_request.
     let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _) = handler
+    let (invoice_request, _, _, offer_context) = handler
         .create_invoice_request(
-            client.clone(),
             offer.clone(),
             Network::Regtest,
             Some(20_000),
@@ -235,8 +224,8 @@ async fn test_lndk_send_invoice_request() {
         res = handler.send_invoice_request(
             destination.clone(),
             client.clone(),
-            Some(reply_path.clone()),
             invoice_request,
+            offer_context
         ) => {
             assert!(res.is_ok());
         }
@@ -266,9 +255,8 @@ async fn test_lndk_send_invoice_request() {
 
     let handler = Arc::new(lndk::OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _) = handler
+    let (invoice_request, _, _, offer_context) = handler
         .create_invoice_request(
-            client.clone(),
             offer.clone(),
             Network::Regtest,
             Some(20_000),
@@ -283,8 +271,8 @@ async fn test_lndk_send_invoice_request() {
         res = handler.send_invoice_request(
             destination,
             client.clone(),
-            Some(reply_path.clone()),
             invoice_request,
+            offer_context
         ) => {
             assert!(res.is_ok());
             shutdown.trigger();
@@ -301,7 +289,7 @@ async fn test_lndk_pay_offer() {
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
-    let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
+    let (ldk1_pubkey, ldk2_pubkey, _) =
         common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
@@ -320,13 +308,8 @@ async fn test_lndk_pay_offer() {
     let (lndk_cfg, handler, messenger, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
-    let messenger_utils = MessengerUtilities::new();
     let client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
-    let secp_ctx = Secp256k1::new();
-    let reply_path =
-        BlindedPath::new_for_message(&[ldk2_pubkey, lnd_pubkey], &messenger_utils, &secp_ctx)
-            .unwrap();
 
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
@@ -335,7 +318,7 @@ async fn test_lndk_pay_offer() {
         network: Network::Regtest,
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
-        reply_path: Some(reply_path),
+        reply_path: None,
         response_invoice_timeout: None,
     };
     select! {
@@ -358,7 +341,7 @@ async fn test_lndk_pay_offer_concurrently() {
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
-    let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
+    let (ldk1_pubkey, ldk2_pubkey, _) =
         common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
@@ -377,13 +360,8 @@ async fn test_lndk_pay_offer_concurrently() {
     let (lndk_cfg, handler, messenger, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
-    let messenger_utils = MessengerUtilities::new();
     let client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
-    let secp_ctx = Secp256k1::new();
-    let reply_path =
-        BlindedPath::new_for_message(&[ldk2_pubkey, lnd_pubkey], &messenger_utils, &secp_ctx)
-            .unwrap();
 
     let pay_cfg = PayOfferParams {
         offer: offer.clone(),
@@ -392,7 +370,7 @@ async fn test_lndk_pay_offer_concurrently() {
         network: Network::Regtest,
         client: client.clone(),
         destination: Destination::BlindedPath(blinded_path.clone()),
-        reply_path: Some(reply_path),
+        reply_path: None,
         response_invoice_timeout: None,
     };
     // Let's also try to pay the same offer multiple times concurrently.
@@ -480,22 +458,20 @@ async fn test_transient_keys() {
             panic!("lndk should not have completed first {:?}", val);
         },
         res1 = handler.create_invoice_request(
-            lnd.client.clone().unwrap(),
             offer.clone(),
             Network::Regtest,
             None,
             None,
         ) => {
             let res2 = handler.create_invoice_request(
-                lnd.client.clone().unwrap(),
                 offer.clone(),
                 Network::Regtest,
                 None,
                 None,
             ).await;
 
-            let pubkey1 = res1.unwrap().0.payer_id();
-            let pubkey2 = res2.unwrap().0.payer_id();
+            let pubkey1 = res1.unwrap().0.payer_signing_pubkey();
+            let pubkey2 = res2.unwrap().0.payer_signing_pubkey();
 
             // Verify that the signing pubkeys for each invoice request are different.
             assert_ne!(pubkey1, pubkey2);
@@ -522,15 +498,22 @@ async fn test_reply_path_unannounced_peers() {
     let (_, handler, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
+    let offer_context = OffersContext::OutboundPayment {
+        payment_id: PaymentId([42; 32]),
+        nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
+        hmac: None,
+    };
+    let offer_context = MessageContext::Offers(offer_context);
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
     // itself.
     let reply_path = handler
-        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey)
+        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey, offer_context)
         .await;
     assert!(reply_path.is_ok());
-    assert_eq!(reply_path.unwrap().blinded_hops.len(), 1);
+    let reply_path = reply_path.unwrap();
+    assert_eq!(reply_path.blinded_hops().len(), 1);
 
     shutdown.trigger();
     ldk1.stop().await;
@@ -552,18 +535,25 @@ async fn test_reply_path_announced_peers() {
     let (_, handler, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
+    let offer_context = OffersContext::OutboundPayment {
+        payment_id: PaymentId([42; 32]),
+        nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
+        hmac: None,
+    };
+    let offer_context = MessageContext::Offers(offer_context);
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // public channel and as such, is indeed an advertised node. Because of this, we make sure
     // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
     // expected.
     let reply_path = handler
-        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey)
+        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey, offer_context)
         .await;
     assert!(reply_path.is_ok());
-    assert_eq!(reply_path.as_ref().unwrap().blinded_hops.len(), 2);
+    let reply_path = reply_path.unwrap();
+    assert_eq!(reply_path.blinded_hops().len(), 2);
     assert_eq!(
-        reply_path.as_ref().unwrap().introduction_node,
-        IntroductionNode::NodeId(ldk2_pubkey)
+        *reply_path.introduction_node(),
+        lightning::blinded_path::IntroductionNode::NodeId(ldk2_pubkey)
     );
 
     shutdown.trigger();

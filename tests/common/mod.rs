@@ -2,8 +2,8 @@
 
 mod test_utils;
 
-use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::Network;
 use chrono::Utc;
 use corepc_node::{get_available_port, Conf, ConnectParams, Node};
 use ldk_sample::config::LdkUserInfo;

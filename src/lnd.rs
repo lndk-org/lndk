@@ -1,17 +1,18 @@
 use crate::OfferError;
 use async_trait::async_trait;
-use bitcoin::bech32::u5;
 use bitcoin::hashes::sha256::Hash;
-use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
+use bitcoin::Network;
 use futures::executor::block_on;
-use lightning::blinded_path::BlindedPath;
+use lightning::blinded_path::payment::BlindedPaymentPath;
+use lightning::bolt11_invoice::RawBolt11Invoice;
+use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
-use lightning::sign::{KeyMaterial, NodeSigner, Recipient};
+use lightning::sign::{NodeSigner, Recipient};
 use log::error;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -304,24 +305,16 @@ impl NodeSigner for LndNodeSigner<'_> {
         }
     }
 
-    fn get_inbound_payment_key_material(&self) -> KeyMaterial {
+    fn get_inbound_payment_key(&self) -> ExpandedKey {
         unimplemented!("not required for onion messaging");
     }
 
     fn sign_invoice(
         &self,
-        _hrp_bytes: &[u8],
-        _invoice_data: &[u5],
+        _invoice: &RawBolt11Invoice,
         _recipient: Recipient,
     ) -> Result<RecoverableSignature, ()> {
         unimplemented!("not required for onion messaging");
-    }
-
-    fn sign_bolt12_invoice_request(
-        &self,
-        _: &UnsignedInvoiceRequest,
-    ) -> Result<bitcoin::secp256k1::schnorr::Signature, ()> {
-        unimplemented!("not required for onion messaging")
     }
 
     fn sign_bolt12_invoice(
@@ -415,7 +408,7 @@ pub trait PeerConnector {
 pub trait InvoicePayer {
     async fn query_routes(
         &mut self,
-        path: BlindedPath,
+        path: BlindedPaymentPath,
         cltv_expiry_delta: u16,
         fee_base_msat: u32,
         fee_ppm: u32,
