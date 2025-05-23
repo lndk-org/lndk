@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
 use tokio::time::{sleep, timeout, Duration};
@@ -83,6 +82,7 @@ pub async fn setup_test_infrastructure(
 
 // connect_network establishes connections/channels between our nodes, and mines enough blocks and
 // allows the network to sync so that we can use the channels.
+#[allow(dead_code)]
 pub async fn connect_network(
     ldk1: &LdkNode,
     ldk2: &LdkNode,
@@ -342,7 +342,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
-            format!("--debuglevel=info,PEER=info"),
+            format!("--debuglevel=info,PEER=info,RPCS=info,RPCP=info"),
             format!("--bitcoind.rpcuser={}", cookie_values.user),
             format!("--bitcoind.rpcpass={}", cookie_values.password),
             format!(
@@ -357,6 +357,8 @@ impl LndNode {
             format!("--protocol.custom-message=513"),
             format!("--protocol.custom-nodeann=39"),
             format!("--protocol.custom-init=39"),
+            format!("--gossip.sub-batch-delay=1s"),
+            format!("--gossip.channel-update-interval=1s"),
         ];
 
         let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
@@ -377,8 +379,8 @@ impl LndNode {
         LndNode {
             address: format!("https://{}", rpc_addr),
             _lnd_dir_tmp: lnd_dir_binding,
-            cert_path: cert_path,
-            macaroon_path: macaroon_path,
+            cert_path,
+            macaroon_path,
             _handle: cmd,
             client: None,
         }
@@ -388,10 +390,11 @@ impl LndNode {
     async fn setup_client(&mut self) {
         // We need to give lnd some time to start up before we'll be able to interact with it via
         // the client.
+        tokio::time::sleep(Duration::from_secs(10)).await;
         let mut retry = false;
         let mut retry_num = 0;
         while retry_num == 0 || retry {
-            thread::sleep(Duration::from_secs(3));
+            tokio::time::sleep(Duration::from_secs(3)).await;
 
             let client_result = tonic_lnd::connect(
                 self.address.clone(),
@@ -402,6 +405,7 @@ impl LndNode {
 
             match client_result {
                 Ok(client) => {
+                    println!("LndNode::setup_client: Successfully connected to LND");
                     self.client = Some(client);
 
                     retry = false;
@@ -409,7 +413,7 @@ impl LndNode {
                 }
                 Err(err) => {
                     println!(
-                        "getting client error {err}, retrying call {} time",
+                        "LndNode::setup_client: Connection error {err}, retrying call {} time",
                         retry_num
                     );
                     if retry_num == 6 {
@@ -435,6 +439,32 @@ impl LndNode {
             };
             let resp = test_utils::retry_async(make_request, String::from("get_info"));
             resp.await.unwrap()
+        } else {
+            panic!("No client")
+        };
+
+        resp
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_node_info(
+        &mut self,
+        pub_key: PublicKey,
+    ) -> Result<tonic_lnd::lnrpc::NodeInfo, ()> {
+        let resp = if let Some(client) = self.client.clone() {
+            let get_node_info_req = tonic_lnd::lnrpc::NodeInfoRequest {
+                pub_key: pub_key.to_string(),
+                include_channels: true,
+            };
+            let make_request = || async {
+                client
+                    .clone()
+                    .lightning()
+                    .get_node_info(get_node_info_req.clone())
+                    .await
+            };
+            let resp = test_utils::retry_async(make_request, String::from("get_node_info"));
+            resp.await
         } else {
             panic!("No client")
         };
@@ -519,6 +549,39 @@ impl LndNode {
             if resp.synced_to_chain {
                 return;
             }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn wait_for_check_node_has_address(&mut self, node_id: PublicKey) {
+        match timeout(
+            Duration::from_secs(600),
+            self.check_node_has_address(node_id),
+        )
+        .await
+        {
+            Err(_) => panic!("timeout before lnd knows address"),
+            _ => {}
+        };
+    }
+
+    pub async fn check_node_has_address(&mut self, node_id: PublicKey) {
+        loop {
+            match self.get_node_info(node_id).await {
+                Ok(node_info) => {
+                    if let Some(node) = node_info.node {
+                        if !node.addresses.is_empty() {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+            println!(
+                "Waiting for lnd to have an address of node {:?}, sleeping for 2 seconds",
+                node_id
+            );
             sleep(Duration::from_secs(2)).await;
         }
     }

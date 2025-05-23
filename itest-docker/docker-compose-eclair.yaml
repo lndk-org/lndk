@@ -1,0 +1,65 @@
+services:
+  bitcoin:
+    image: bitcoin/bitcoin:28.1
+    platform: linux/arm64
+    entrypoint: ["/bin/sh", "/bitcoin/entrypoint.sh"]
+    ports:
+      - "18443:18443" # Regtest RPC port
+      - "18444:18444" # Regtest P2P port
+    networks:
+      - lndk-itest
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bitcoin-cli",
+          "-regtest",
+          "-rpcuser=user",
+          "-rpcpassword=pass",
+          "getblockchaininfo",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - "./conf/bitcoind/bitcoin.conf:/bitcoin/bitcoin.conf"
+      - "./conf/bitcoind/entrypoint.sh:/bitcoin/entrypoint.sh"
+
+
+  eclair:
+    image: ampch/eclair:latest
+    platform: linux/arm64
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    environment:
+      - JAVA_OPTS=-Declair.printToConsole -Dakka.loglevel=DEBUG -Dlogback.configurationFile=/data/logback-custom.xml
+    ports:
+      - "9700:9700"
+      - "8080:8080"
+    volumes:
+      - "./conf/eclair/eclair.conf:/data/eclair.conf"
+      - "./conf/eclair/logback-custom.xml:/data/logback-custom.xml"
+      - "eclair-data:/data"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "eclair-cli",
+          "-p",
+          "pass",
+          "getinfo"
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    networks:
+      - lndk-itest
+  
+
+volumes:
+  eclair-data:
+
+networks:
+  lndk-itest:
+    driver: bridge
