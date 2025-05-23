@@ -14,7 +14,7 @@ use lightning::{
     },
     sign::EntropySource,
 };
-use log::{debug, error};
+use log::{debug, error, trace};
 use tonic_lnd::{
     lnrpc::{ChanInfoRequest, GetInfoRequest, Payment},
     Client,
@@ -145,6 +145,7 @@ pub async fn create_reply_path(
 
     let secp_ctx = Secp256k1::new();
     if intro_node.is_none() {
+        trace!("No introduction node found, creating one-hop blinded path.");
         Ok(
             BlindedMessagePath::one_hop(node_id, message_context, messenger_utils, &secp_ctx)
                 .map_err(|_| {
@@ -153,6 +154,7 @@ pub async fn create_reply_path(
                 })?,
         )
     } else {
+        trace!("Introduction node found, creating multi-hop blinded path.");
         let nodes = vec![lightning::blinded_path::message::MessageForwardNode {
             node_id: intro_node.unwrap(),
             short_channel_id: None,

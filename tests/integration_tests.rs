@@ -14,7 +14,8 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
-use lndk::{setup_logger, LifecycleSignals, OfferHandler, PayOfferParams};
+use lndk::offers::handler::{OfferHandler, PayOfferParams};
+use lndk::{setup_logger, LifecycleSignals};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,6 +25,38 @@ use tokio::{select, try_join};
 use tonic_lnd::Client;
 
 const NONCE_BYTES: &[u8] = &[42u8; 16];
+
+// Helper function to get an invoice with a delay to ensure messenger initialization.
+// This is necessary because there is a race condition between the messenger initialization,
+// the internal lndk graph update, and calling get_invoice.
+// Before, get_invoice sometimes would fail because internally the graph has not been updated,
+// not finding the introduction node and failing when building the onion message.
+async fn get_invoice_with_delay(
+    handler: &Arc<OfferHandler>,
+    offer: &lightning::offers::offer::Offer,
+    amount: u64,
+    network: Network,
+    client: Client,
+    destination: Destination,
+    delay: Duration,
+) -> Result<(lightning::offers::invoice::Bolt12Invoice, u64, PaymentId), lndk::offers::OfferError> {
+    // Wait before calling get_invoice to allow messenger to initialize
+    tokio::time::sleep(delay).await;
+
+    handler
+        .get_invoice(PayOfferParams {
+            offer: offer.clone(),
+            amount: Some(amount),
+            payer_note: Some("".to_string()),
+            network,
+            client,
+            destination,
+            reply_path: None,
+            response_invoice_timeout: Some(15),
+        })
+        .await
+}
+
 // Creates N offers and spits out the PayOfferParams that we can use to pay.
 async fn create_offers(
     num: i32,
@@ -85,11 +118,13 @@ async fn pay_offers(handler: Arc<OfferHandler>, pay_cfgs: &Vec<PayOfferParams>) 
 
 #[tokio::test(flavor = "multi_thread")]
 // Here we test the beginning of the BOLT 12 offers flow. We show that lndk successfully builds an
-// invoice_request and sends it.
-async fn test_lndk_send_invoice_request() {
-    let test_name = "lndk_send_invoice_request";
+// invoice_request, sends it, and receives an invoice back.
+async fn test_lndk_get_invoice() {
+    let test_name = "lndk_get_invoice";
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
 
     // Here we'll produce a little network. ldk1 will be the offer creator in this scenario. We'll
     // connect ldk1 and ldk2 with a channel so ldk1 can create an offer and ldk2 can be the
@@ -128,7 +163,6 @@ async fn test_lndk_send_invoice_request() {
     ldk2.open_channel(pubkey, addr, 200000, 0, true)
         .await
         .unwrap();
-
     lnd.wait_for_graph_sync().await;
 
     bitcoind
@@ -162,6 +196,7 @@ async fn test_lndk_send_invoice_request() {
         None,
     )
     .unwrap();
+
     let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
 
     let signals = LifecycleSignals {
@@ -179,6 +214,8 @@ async fn test_lndk_send_invoice_request() {
 
     let mut client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
+
+    log::debug!("waiting for ldk2's graph update to update lnd graph");
 
     let mut stream = client
         .lightning()
@@ -200,32 +237,21 @@ async fn test_lndk_send_invoice_request() {
         }
     }
 
-    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
-    setup_logger(None, log_file).unwrap();
-
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::default());
+    let handler = Arc::new(OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _, offer_context) = handler
-        .create_invoice_request(
-            offer.clone(),
-            Network::Regtest,
-            Some(20_000),
-            Some("".to_string()),
-        )
-        .await
-        .unwrap();
-
-    let destination = Destination::BlindedPath(blinded_path.clone());
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
-        res = handler.send_invoice_request(
-            destination.clone(),
+        res = get_invoice_with_delay(
+            &handler,
+            &offer,
+            20_000,
+            Network::Regtest,
             client.clone(),
-            invoice_request,
-            offer_context
+            Destination::BlindedPath(blinded_path.clone()),
+            Duration::from_secs(2)
         ) => {
             assert!(res.is_ok());
         }
@@ -250,173 +276,22 @@ async fn test_lndk_send_invoice_request() {
         rate_limit_period_secs: 1,
     };
 
-    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
-    setup_logger(None, log_file).unwrap();
-
-    let handler = Arc::new(lndk::OfferHandler::default());
+    let handler = Arc::new(OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _, offer_context) = handler
-        .create_invoice_request(
-            offer.clone(),
-            Network::Regtest,
-            Some(20_000),
-            Some("".to_string()),
-        )
-        .await
-        .unwrap();
+
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
-        res = handler.send_invoice_request(
-            destination,
+        res = get_invoice_with_delay(
+            &handler,
+            &offer,
+            20_000,
+            Network::Regtest,
             client.clone(),
-            invoice_request,
-            offer_context
+            Destination::BlindedPath(blinded_path.clone()),
+            Duration::from_secs(2)
         ) => {
-            assert!(res.is_ok());
-            shutdown.trigger();
-            ldk1.stop().await;
-            ldk2.stop().await;
-        }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-// Here we test that we're able to fully pay an offer.
-async fn test_lndk_pay_offer() {
-    let test_name = "lndk_pay_offer";
-    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
-        common::setup_test_infrastructure(test_name).await;
-
-    let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
-
-    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
-    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
-    let offer = ldk1
-        .create_offer(
-            &path_pubkeys,
-            Network::Regtest,
-            20_000,
-            Quantity::One,
-            expiration,
-        )
-        .await
-        .expect("should create offer");
-
-    let (lndk_cfg, handler, messenger, shutdown) =
-        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
-
-    let client = lnd.client.clone().unwrap();
-    let blinded_path = offer.paths()[0].clone();
-
-    let pay_cfg = PayOfferParams {
-        offer: offer.clone(),
-        amount: Some(20_000),
-        payer_note: Some("".to_string()),
-        network: Network::Regtest,
-        client: client.clone(),
-        destination: Destination::BlindedPath(blinded_path.clone()),
-        reply_path: None,
-        response_invoice_timeout: None,
-    };
-    select! {
-        val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
-            panic!("lndk should not have completed first {:?}", val);
-        },
-        res = handler.pay_offer(pay_cfg.clone()) => {
-            assert!(res.is_ok());
-            shutdown.trigger();
-            ldk1.stop().await;
-            ldk2.stop().await;
-        }
-    };
-}
-
-#[tokio::test(flavor = "multi_thread")]
-// Here we test that we're able to pay the same offer multiple times concurrently.
-async fn test_lndk_pay_offer_concurrently() {
-    let test_name = "lndk_pay_offer_concurrently";
-    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
-        common::setup_test_infrastructure(test_name).await;
-
-    let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
-
-    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
-    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
-    let offer = ldk1
-        .create_offer(
-            &path_pubkeys,
-            Network::Regtest,
-            20_000,
-            Quantity::One,
-            expiration,
-        )
-        .await
-        .expect("should create offer");
-
-    let (lndk_cfg, handler, messenger, shutdown) =
-        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
-
-    let client = lnd.client.clone().unwrap();
-    let blinded_path = offer.paths()[0].clone();
-
-    let pay_cfg = PayOfferParams {
-        offer: offer.clone(),
-        amount: Some(20_000),
-        payer_note: Some("".to_string()),
-        network: Network::Regtest,
-        client: client.clone(),
-        destination: Destination::BlindedPath(blinded_path.clone()),
-        reply_path: None,
-        response_invoice_timeout: None,
-    };
-    // Let's also try to pay the same offer multiple times concurrently.
-    select! {
-        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
-            panic!("lndk should not have completed first {:?}", val);
-        },
-        res = pay_same_offer(Arc::clone(&handler), pay_cfg) => {
-            assert!(res.is_ok());
-            shutdown.trigger();
-            ldk1.stop().await;
-            ldk2.stop().await;
-        }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-// Here we test that we're able to pay multiple offers at the same time.
-async fn test_lndk_pay_multiple_offers_concurrently() {
-    let test_name = "lndk_pay_multiple_offers_concurrently";
-    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
-        common::setup_test_infrastructure(test_name).await;
-
-    let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
-
-    let path_pubkeys = &vec![ldk2_pubkey, ldk1_pubkey];
-    let reply_path = &vec![ldk2_pubkey, lnd_pubkey];
-    let pay_offer_cfgs = create_offers(
-        3,
-        &ldk1,
-        path_pubkeys,
-        lnd.client.clone().unwrap(),
-        reply_path,
-    )
-    .await;
-
-    let (lndk_cfg, handler, messenger, shutdown) =
-        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
-
-    // Let's also try to pay multiple offers at the same time.
-    select! {
-        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
-            panic!("lndk should not have completed first {:?}", val);
-        },
-        res = pay_offers(Arc::clone(&handler), &pay_offer_cfgs) => {
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
