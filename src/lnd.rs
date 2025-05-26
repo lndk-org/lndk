@@ -1,6 +1,7 @@
 use crate::OfferError;
 use async_trait::async_trait;
-use bitcoin::hashes::sha256::Hash;
+use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::ecdh::SharedSecret;
 use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
@@ -11,7 +12,6 @@ use lightning::bolt11_invoice::RawBolt11Invoice;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
-use lightning::offers::invoice_request::{InvoiceRequest, UnsignedInvoiceRequest};
 use lightning::sign::{NodeSigner, Recipient};
 use log::error;
 use std::cell::RefCell;
@@ -23,10 +23,9 @@ use std::{fmt, fs};
 use tonic_lnd::lnrpc::{
     GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment, QueryRoutesResponse, Route,
 };
-use tonic_lnd::signrpc::{KeyDescriptor, KeyLocator};
+use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::verrpc::Version;
-use tonic_lnd::walletrpc::KeyReq;
 use tonic_lnd::{Client, ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
@@ -36,6 +35,13 @@ pub(crate) const MIN_LND_MINOR_VER: u32 = 18;
 pub(crate) const MIN_LND_PATCH_VER: u32 = 0;
 pub(crate) const MIN_LND_PRE_RELEASE_VER: &str = "beta";
 pub(crate) const BUILD_TAGS_REQUIRED: [&str; 3] = ["peersrpc", "signrpc", "walletrpc"];
+
+// Seed key family and index for the seed generation using lnd API.
+// They were "randomly" chosen, could be changed.
+// Family 4 as we used to use family 3 for other message signing.
+// Index 425 as it's the sum of "l n d k" ascii values.
+const SEED_KEY_FAMILY: i32 = 4;
+const SEED_KEY_INDEX: i32 = 425;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection
 /// is established.
@@ -374,21 +380,39 @@ pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError
     }
 }
 
+/// build_seed_from_lnd_node builds a seed from the LND node.
+pub async fn build_seed_from_lnd_node(signer: &mut impl MessageSigner) -> Result<[u8; 32], ()> {
+    // TODO: We should be able to rotate the key if needed.
+    let key_loc = KeyLocator {
+        key_family: SEED_KEY_FAMILY,
+        key_index: SEED_KEY_INDEX,
+    };
+
+    // Derives a seed using LND's message signing API to ensure LNDK remains stateless and avoids
+    // direct access to LND's node secret, maintaining security and restart-proof operation.
+    // We use a warning message to deter manual signing, inspired by other lighting-related
+    // implementations (e.g., bLIP-50's caution on signing risks), to prevent signature misuse. If
+    // the resulting seed is leaked, it may enable de-anonymization attacks but does not risk funds.
+    let msg = "LNDK:DO NOT SIGN THIS MANUALLY:SEED";
+
+    let signature = signer
+        .sign_message(msg.as_bytes(), key_loc, false, true)
+        .await?;
+    let hash = sha256::Hash::hash(&signature);
+    let seed = hash.to_byte_array();
+    Ok(seed)
+}
+
 /// MessageSigner provides a layer of abstraction over the LND API for message signing.
 #[async_trait]
 pub trait MessageSigner {
-    async fn derive_next_key(&mut self, key_loc: KeyReq) -> Result<KeyDescriptor, Status>;
     async fn sign_message(
         &mut self,
+        msg: &[u8],
         key_loc: KeyLocator,
-        merkle_hash: Hash,
-        tag: String,
-    ) -> Result<Vec<u8>, Status>;
-    fn sign_uir(
-        &mut self,
-        key_loc: KeyLocator,
-        unsigned_invoice_req: UnsignedInvoiceRequest,
-    ) -> Result<InvoiceRequest, OfferError>;
+        double_hash: bool,
+        schnorr_sig: bool,
+    ) -> Result<Vec<u8>, ()>;
 }
 
 /// PeerConnector provides a layer of abstraction over the LND API for connecting to a peer.
@@ -425,6 +449,7 @@ pub trait InvoicePayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::mock;
     use tonic_lnd::verrpc::Version;
 
     fn get_tls_cert_string() -> String {
@@ -678,5 +703,39 @@ mod tests {
             ..Default::default()
         };
         assert!(has_build_tags(&version, Some(get_build_tags_requirement())))
+    }
+
+    mock! {
+        TestMessageSigner{}
+
+        #[async_trait]
+        impl MessageSigner for TestMessageSigner{
+            async fn sign_message(&mut self, msg: &[u8], key_loc: KeyLocator, double_hash: bool, schnorr_sig: bool) -> Result<Vec<u8>, ()>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_seed_from_lnd_node() {
+        let mut signer = MockTestMessageSigner::new();
+        signer
+            .expect_sign_message()
+            .returning(|_msg, _key_loc, _double_hash, _schnorr_sig| Ok(vec![0; 64]));
+        let seed = build_seed_from_lnd_node(&mut signer).await.unwrap();
+        let expected_seed = [
+            245, 165, 253, 66, 209, 106, 32, 48, 39, 152, 239, 110, 211, 9, 151, 155, 67, 0, 61,
+            35, 32, 217, 240, 232, 234, 152, 49, 169, 39, 89, 251, 75,
+        ];
+        assert_eq!(seed, expected_seed);
+    }
+
+    #[tokio::test]
+    async fn test_build_seed_from_lnd_node_error() {
+        let mut signer = MockTestMessageSigner::new();
+        signer
+            .expect_sign_message()
+            .returning(|_msg, _key_loc, _double_hash, _schnorr_sig| Err(()));
+
+        let result = build_seed_from_lnd_node(&mut signer).await;
+        assert!(result.is_err());
     }
 }
