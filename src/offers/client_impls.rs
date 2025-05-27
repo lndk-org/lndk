@@ -2,7 +2,9 @@ use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
 use log::error;
 use tonic::async_trait;
-use tonic_lnd::lnrpc::{FeeLimit, HtlcAttempt, Payment, QueryRoutesResponse, Route};
+use tonic_lnd::lnrpc::{
+    FeeLimit, GetInfoRequest, GetInfoResponse, HtlcAttempt, Payment, QueryRoutesResponse, Route,
+};
 use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::LightningClient;
@@ -12,7 +14,7 @@ use tonic_lnd::{
     Client,
 };
 
-use crate::lnd::{InvoicePayer, MessageSigner, PeerConnector};
+use crate::lnd::{InvoicePayer, MessageSigner, OfferCreator, PeerConnector};
 
 use super::lnd_requests::get_node_id;
 use super::OfferError;
@@ -187,6 +189,14 @@ impl InvoicePayer for Client {
     }
 }
 
+#[async_trait]
+impl OfferCreator for LightningClient {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status> {
+        let req = GetInfoRequest::default();
+        self.get_info(req).await.map(|resp| resp.into_inner())
+    }
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -216,6 +226,22 @@ pub(super) mod tests {
             async fn query_routes(&mut self, path: BlindedPaymentPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64, fee_limit: Option<FeeLimit>) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
             async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
+        }
+    }
+
+    mock! {
+        pub TestOfferCreator{}
+
+        #[async_trait]
+        impl OfferCreator for TestOfferCreator {
+            async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
+        }
+
+        #[async_trait]
+        impl PeerConnector for TestOfferCreator {
+            async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
+            async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<NodeInfo, Status>;
+            async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
         }
     }
 }
