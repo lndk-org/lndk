@@ -50,6 +50,10 @@ pub enum OfferError {
     IntroductionNodeNotFound,
     /// Cannot fetch channel info.
     GetChannelInfo(Status),
+    /// Failed to create offer.
+    CreateOfferFailure(Bolt12SemanticError),
+    /// Failed to create offer with expiry time given system clock.
+    CreateOfferTimeFailure,
 }
 
 impl Display for OfferError {
@@ -79,6 +83,11 @@ impl Display for OfferError {
             OfferError::InvoiceTimeout(e) => write!(f, "Did not receive invoice in {e:?} seconds."),
             OfferError::IntroductionNodeNotFound => write!(f, "Could not find introduction node."),
             OfferError::GetChannelInfo(e) => write!(f, "Could not fetch channel info: {e:?}"),
+            OfferError::CreateOfferFailure(e) => write!(f, "Could not create offer: {e:?}"),
+            OfferError::CreateOfferTimeFailure => write!(
+                f,
+                "Could not create offer with expiry time given system clock"
+            ),
         }
     }
 }

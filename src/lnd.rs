@@ -459,6 +459,10 @@ pub trait InvoicePayer {
     async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
 }
 
+#[async_trait]
+pub trait OfferCreator {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
+}
 #[cfg(test)]
 mod tests {
     use super::*;

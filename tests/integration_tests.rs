@@ -2,9 +2,12 @@
 
 mod common;
 use futures::future::try_join_all;
+use lightning::bitcoin::constants::ChainHash;
 use lightning::blinded_path::message::{MessageContext, OffersContext};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::nonce::Nonce;
+use lightning::offers::offer::Amount;
+use lightning::util::string::PrintableString;
 use lndk;
 use log::error;
 
@@ -16,7 +19,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::create_reply_path;
-use lndk::offers::handler::{OfferHandler, PayOfferParams};
+use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
 use std::path::PathBuf;
@@ -656,4 +659,48 @@ async fn check_pay_offer_with_reconnection(
     // We check that the second pay_offer success using the same handler
     // because the LND node has been restarted.
     assert!(res2.is_ok());
+}
+#[tokio::test(flavor = "multi_thread")]
+// Test that we can create an offer and that the offer is valid.
+async fn test_create_offer() {
+    let test_name = "lndk_create_offer";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (_, _ldk2_pubkey, _lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+
+    let (_, handler, _, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
+
+    let create_offer_params = CreateOfferParams {
+        client: lnd.client.clone().unwrap(),
+        amount_msats: 20_000,
+        chain: Network::Regtest,
+        description: None,
+        issuer: None,
+        quantity: None,
+        expiry: None,
+    };
+    let offer = handler.create_offer(create_offer_params).await;
+    assert!(offer.is_ok());
+    let offer = offer.unwrap();
+    assert_eq!(
+        offer.amount().unwrap(),
+        Amount::Bitcoin {
+            amount_msats: 20_000
+        }
+    );
+    assert_eq!(offer.chains(), vec![ChainHash::REGTEST]);
+    assert_eq!(offer.description(), Some(PrintableString("")));
+    assert_eq!(offer.issuer(), None);
+    assert_eq!(offer.supported_quantity(), Quantity::One);
+    assert_eq!(offer.absolute_expiry(), None);
+    log::info!("Sending InvoiceRequest ldk2 --> lnd");
+    let payment = ldk2.pay_offer(offer, None).await;
+    log::info!("Payment sent: {:?}", payment);
+    assert!(payment.is_ok());
+    shutdown.trigger();
+    ldk1.stop().await;
+    ldk2.stop().await;
 }
