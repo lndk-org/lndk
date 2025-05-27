@@ -339,7 +339,7 @@ impl OffersMessageHandler for OfferHandler {
                                 error!("We received an invoice request for a payment id that we don't recognize or already paid: {payment_id:?}. We will ignore the invoice.");
                             }
                         }
-                        responder.map(|r| (OffersMessage::Invoice(invoice), r.respond()))
+                        None
                     }
                     Err(()) => {
                         error!("Invoice verification failed for invoice: {invoice:?}");

@@ -371,6 +371,44 @@ mod tests {
     }
 
     #[tokio::test]
+    // Test that a new key is created with each call to create_invoice_request. Transient keys
+    // improve privacy and we also need them to successfully make multiple payments to the same CLN
+    // offer.
+    async fn test_transient_keys() {
+        let offer = decode(get_offer()).unwrap();
+        let offer_amount = offer.amount().unwrap();
+        let amount = match offer_amount {
+            Amount::Bitcoin { amount_msats } => amount_msats,
+            _ => panic!("unexpected amount type"),
+        };
+        let offer = decode(get_offer()).unwrap();
+        let entropy_source = MessengerUtilities::new([42; 32]);
+        let expanded_key = ExpandedKey::new([42; 32]);
+        let resp_1 = create_invoice_request(
+            offer.clone(),
+            Network::Regtest,
+            &entropy_source,
+            expanded_key,
+            Some(amount),
+            Some("".to_string()),
+        )
+        .await;
+        let resp_2 = create_invoice_request(
+            offer,
+            Network::Regtest,
+            &entropy_source,
+            expanded_key,
+            Some(amount),
+            Some("".to_string()),
+        )
+        .await;
+        assert_ne!(
+            resp_1.unwrap().0.payer_signing_pubkey(),
+            resp_2.unwrap().0.payer_signing_pubkey()
+        );
+    }
+
+    #[tokio::test]
     async fn test_connect_peer() {
         let mut connector_mock = MockTestPeerConnector::new();
         connector_mock.expect_list_peers().returning(|| {

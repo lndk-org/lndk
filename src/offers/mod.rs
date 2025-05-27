@@ -12,6 +12,7 @@ mod requests;
 mod traits;
 
 pub use offer::{decode, get_destination, validate_amount};
+pub use requests::create_reply_path;
 
 #[derive(Debug)]
 /// OfferError is an error that occurs during the process of paying an offer.
