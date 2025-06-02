@@ -8,6 +8,7 @@ use lightning::ln::channelmanager::{PaymentId, Verification};
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::invoice_error::InvoiceError;
+use lightning::offers::invoice_request::InvoiceRequest;
 use lightning::offers::nonce::Nonce;
 use lightning::offers::offer::{Offer, Quantity};
 use lightning::onion_message::messenger::{
@@ -25,7 +26,8 @@ use tonic_lnd::lnrpc::{FeeLimit, Payment};
 use tonic_lnd::Client;
 
 use super::lnd_requests::{
-    create_invoice_request, create_offer, get_node_id_from_scid, send_invoice_request,
+    create_invoice_info_from_request, create_invoice_request, create_offer, get_node_id_from_scid,
+    send_invoice_request, LndkBolt12InvoiceInfo,
 };
 use super::OfferError;
 use crate::offers::lnd_requests::{send_payment, track_payment, CreateOfferArgs};
@@ -323,6 +325,14 @@ impl OfferHandler {
         let args = CreateOfferArgs::from_params(&params);
         let client = params.client.lightning().clone();
         create_offer(client, args, &self.messenger_utils, &self.expanded_key).await
+    }
+
+    pub async fn create_invoice(
+        &self,
+        client: Client,
+        invoice_request: InvoiceRequest,
+    ) -> Result<LndkBolt12InvoiceInfo, OfferError> {
+        create_invoice_info_from_request(client, invoice_request).await
     }
 }
 

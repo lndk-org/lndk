@@ -3,10 +3,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use bitcoin::{key::Secp256k1, secp256k1::PublicKey, Network};
+use bitcoin::{hashes::Hash, key::Secp256k1, secp256k1::PublicKey, Network};
 use lightning::{
     blinded_path::{
         message::{BlindedMessagePath, MessageContext, OffersContext},
+        payment::BlindedPaymentPath,
         Direction, IntroductionNode,
     },
     ln::{
@@ -23,6 +24,7 @@ use lightning::{
         offers::OffersMessage,
     },
     sign::EntropySource,
+    types::payment::PaymentHash,
 };
 use log::{debug, error, trace};
 use tonic_lnd::{
@@ -31,12 +33,21 @@ use tonic_lnd::{
 };
 
 use crate::{
-    lnd::{features_support_onion_messages, InvoicePayer, OfferCreator, PeerConnector},
+    lnd::{
+        features_support_onion_messages, parse_blinded_paths, Bolt12InvoiceCreator, InvoicePayer,
+        OfferCreator, PeerConnector,
+    },
     offers::handler::{CreateOfferParams, SendPaymentParams},
     onion_messenger::MessengerUtilities,
 };
 
 use super::{validate_amount, OfferError};
+
+#[derive(Debug)]
+pub struct LndkBolt12InvoiceInfo {
+    pub payment_hash: PaymentHash,
+    pub payment_paths: Vec<BlindedPaymentPath>,
+}
 
 pub(super) async fn create_invoice_request(
     offer: Offer,
@@ -191,12 +202,37 @@ pub(super) async fn create_offer(
         }
         None => builder,
     };
-    let offer = builder
-        .build()
-        .map_err(|e| OfferError::CreateOfferFailure(e))?;
+    let offer = builder.build().map_err(OfferError::CreateOfferFailure)?;
     Ok(offer)
 }
 
+pub(super) async fn create_invoice_info_from_request(
+    mut creator: impl Bolt12InvoiceCreator + std::marker::Send + 'static,
+    invoice_request: InvoiceRequest,
+) -> Result<LndkBolt12InvoiceInfo, OfferError> {
+    let invoice_response = creator
+        .add_invoice(invoice_request)
+        .await
+        .map_err(OfferError::AddInvoiceFailure)?;
+    let payment_request = invoice_response.payment_request;
+    let payreq = creator
+        .decode_payment_request(payment_request)
+        .await
+        .map_err(OfferError::DecodePaymentRequestFailure)?;
+    let payment_hash =
+        bitcoin::hashes::sha256::Hash::from_str(&payreq.payment_hash).map_err(|e| {
+            error!("Could not parse payment hash. {e}");
+            OfferError::ParsePaymentHashFailure(e.to_string())
+        })?;
+
+    let payment_hash = PaymentHash(*payment_hash.as_byte_array());
+
+    let payment_paths = parse_blinded_paths(payreq.blinded_paths);
+    Ok(LndkBolt12InvoiceInfo {
+        payment_hash,
+        payment_paths,
+    })
+}
 /// create_reply_path creates a blinded path to provide to the offer node when requesting an
 /// invoice so they know where to send the invoice back to. We try to find a peer that we're
 /// connected to with the necessary requirements to form a blinded path. The peer needs two
@@ -403,7 +439,8 @@ mod tests {
 
     use super::*;
     use crate::offers::client_impls::tests::{
-        MockTestInvoicePayer, MockTestOfferCreator, MockTestPeerConnector,
+        MockTestBolt12InvoiceCreator, MockTestInvoicePayer, MockTestOfferCreator,
+        MockTestPeerConnector,
     };
     use crate::offers::decode;
     use lightning::{
@@ -423,8 +460,8 @@ mod tests {
     use mockall::predicate::eq;
     use tonic_lnd::{
         lnrpc::{
-            ChannelEdge, GetInfoResponse, HtlcAttempt, LightningNode, ListPeersResponse,
-            NodeAddress, NodeInfo, QueryRoutesResponse, Route,
+            AddInvoiceResponse, ChannelEdge, GetInfoResponse, HtlcAttempt, LightningNode,
+            ListPeersResponse, NodeAddress, NodeInfo, PayReq, QueryRoutesResponse, Route,
         },
         tonic::Status,
     };
@@ -1191,5 +1228,136 @@ mod tests {
             offer2.issuer_signing_pubkey().unwrap()
         );
         assert_ne!(offer1.id(), offer2.id());
+    }
+
+    // Helper function to create a dummy invoice request for testing
+    async fn create_dummy_invoice_request() -> InvoiceRequest {
+        let offer = decode(get_offer()).unwrap();
+        let offer_amount = offer.amount().unwrap();
+        let amount = match offer_amount {
+            Amount::Bitcoin { amount_msats } => amount_msats,
+            _ => panic!("unexpected amount type"),
+        };
+        let entropy_source = MessengerUtilities::new([42; 32]);
+        let expanded_key = ExpandedKey::new([42; 32]);
+        let (invoice_request, _, _, _) = create_invoice_request(
+            offer,
+            Network::Regtest,
+            &entropy_source,
+            expanded_key,
+            Some(amount),
+            None,
+        )
+        .await
+        .unwrap();
+        invoice_request
+    }
+
+    #[tokio::test]
+    async fn test_create_invoice_info_from_request_success() {
+        let mut creator_mock = MockTestBolt12InvoiceCreator::new();
+
+        // Mock successful add_invoice
+        creator_mock.expect_add_invoice().returning(|_| {
+            Ok(AddInvoiceResponse {
+                payment_request: "dummy_payment_request".to_string(),
+                ..Default::default()
+            })
+        });
+
+        // Mock successful decode_payment_request with valid 32-byte hex payment hash
+        creator_mock.expect_decode_payment_request().returning(|_| {
+            Ok(PayReq {
+                payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                    .to_string(),
+                blinded_paths: vec![],
+                ..Default::default()
+            })
+        });
+
+        let invoice_request = create_dummy_invoice_request().await;
+        let result = create_invoice_info_from_request(creator_mock, invoice_request).await;
+
+        assert!(result.is_ok());
+        let invoice_info = result.unwrap();
+        assert_eq!(invoice_info.payment_hash.0.len(), 32);
+        assert_eq!(invoice_info.payment_paths.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_invoice_info_from_request_add_invoice_failure() {
+        let mut creator_mock = MockTestBolt12InvoiceCreator::new();
+
+        // Mock add_invoice failure
+        creator_mock
+            .expect_add_invoice()
+            .returning(|_| Err(Status::internal("Failed to add invoice")));
+
+        let invoice_request = create_dummy_invoice_request().await;
+        let result = create_invoice_info_from_request(creator_mock, invoice_request).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OfferError::AddInvoiceFailure(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_create_invoice_info_from_request_decode_payment_request_failure() {
+        let mut creator_mock = MockTestBolt12InvoiceCreator::new();
+
+        // Mock successful add_invoice
+        creator_mock.expect_add_invoice().returning(|_| {
+            Ok(AddInvoiceResponse {
+                payment_request: "dummy_payment_request".to_string(),
+                ..Default::default()
+            })
+        });
+
+        // Mock decode_payment_request failure
+        creator_mock
+            .expect_decode_payment_request()
+            .returning(|_| Err(Status::invalid_argument("Failed to decode payment request")));
+
+        let invoice_request = create_dummy_invoice_request().await;
+        let result = create_invoice_info_from_request(creator_mock, invoice_request).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OfferError::DecodePaymentRequestFailure(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_create_invoice_info_from_request_invalid_hex_payment_hash() {
+        let mut creator_mock = MockTestBolt12InvoiceCreator::new();
+
+        // Mock successful add_invoice
+        creator_mock.expect_add_invoice().returning(|_| {
+            Ok(AddInvoiceResponse {
+                payment_request: "dummy_payment_request".to_string(),
+                ..Default::default()
+            })
+        });
+
+        // Mock decode_payment_request with invalid hex payment hash
+        creator_mock.expect_decode_payment_request().returning(|_| {
+            Ok(PayReq {
+                payment_hash: "invalid_hex_string_gggg".to_string(),
+                blinded_paths: vec![],
+                ..Default::default()
+            })
+        });
+
+        let invoice_request = create_dummy_invoice_request().await;
+        let result = create_invoice_info_from_request(creator_mock, invoice_request).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OfferError::ParsePaymentHashFailure(_)
+        ));
     }
 }

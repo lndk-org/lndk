@@ -54,6 +54,12 @@ pub enum OfferError {
     CreateOfferFailure(Bolt12SemanticError),
     /// Failed to create offer with expiry time given system clock.
     CreateOfferTimeFailure,
+    /// Failed to add invoice.
+    AddInvoiceFailure(Status),
+    /// Failed to decode payment request.
+    DecodePaymentRequestFailure(Status),
+    /// Failed to parse payment hash.
+    ParsePaymentHashFailure(String),
 }
 
 impl Display for OfferError {
@@ -88,6 +94,15 @@ impl Display for OfferError {
                 f,
                 "Could not create offer with expiry time given system clock"
             ),
+            OfferError::AddInvoiceFailure(e) => {
+                write!(f, "Could not add invoice to lnd node: {e:?}")
+            }
+            OfferError::DecodePaymentRequestFailure(e) => {
+                write!(f, "Could not decode payment request: {e:?}")
+            }
+            OfferError::ParsePaymentHashFailure(e) => {
+                write!(f, "Could not parse payment hash: {e:?}")
+            }
         }
     }
 }
