@@ -7,12 +7,16 @@ use bitcoin::secp256k1::ecdsa::{RecoverableSignature, Signature};
 use bitcoin::secp256k1::{self, PublicKey, Scalar, Secp256k1};
 use bitcoin::Network;
 use futures::executor::block_on;
+use lightning::blinded_path::payment::BlindedPayInfo;
 use lightning::blinded_path::payment::BlindedPaymentPath;
+use lightning::blinded_path::BlindedHop;
 use lightning::bolt11_invoice::RawBolt11Invoice;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
+use lightning::offers::invoice_request::InvoiceRequest;
 use lightning::sign::{NodeSigner, Recipient};
+use lightning::types::features::BlindedHopFeatures;
 use log::error;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,6 +24,8 @@ use std::error::Error;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::{fmt, fs};
+use tonic_lnd::lnrpc::AddInvoiceResponse;
+use tonic_lnd::lnrpc::PayReq;
 use tonic_lnd::lnrpc::{
     FeeLimit, GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment,
     QueryRoutesResponse, Route,
@@ -403,6 +409,53 @@ pub async fn build_seed_from_lnd_node(signer: &mut impl MessageSigner) -> Result
     let seed = hash.to_byte_array();
     Ok(seed)
 }
+pub fn parse_blinded_paths(
+    blinded_paths: Vec<tonic_lnd::lnrpc::BlindedPaymentPath>,
+) -> Vec<BlindedPaymentPath> {
+    blinded_paths
+        .iter()
+        .map(|blinded_path| {
+            let features_le_bytes = feature_bits_to_le_bytes(&blinded_path.features);
+            let features = BlindedHopFeatures::from_le_bytes(features_le_bytes);
+            let blinded_pay_info = BlindedPayInfo {
+                fee_base_msat: blinded_path.base_fee_msat as u32,
+                fee_proportional_millionths: blinded_path.proportional_fee_rate,
+                cltv_expiry_delta: blinded_path.total_cltv_delta as u16,
+                htlc_minimum_msat: blinded_path.htlc_min_msat,
+                htlc_maximum_msat: blinded_path.htlc_max_msat,
+                features,
+            };
+
+            let lnd_blinded_path = blinded_path.blinded_path.as_ref().unwrap();
+            let node_id = PublicKey::from_slice(&lnd_blinded_path.introduction_node)
+                .expect("Failed to parse introduction node public key");
+            let blinding_point = PublicKey::from_slice(&lnd_blinded_path.blinding_point)
+                .expect("Failed to parse blinding point");
+
+            BlindedPaymentPath::from_blinded_path_and_payinfo(
+                node_id,
+                blinding_point,
+                parse_blinded_hops(&lnd_blinded_path.blinded_hops.clone()),
+                blinded_pay_info,
+            )
+        })
+        .collect()
+}
+
+fn parse_blinded_hops(blinded_hops: &[tonic_lnd::lnrpc::BlindedHop]) -> Vec<BlindedHop> {
+    blinded_hops
+        .iter()
+        .map(|hop| {
+            let blinded_node_id =
+                PublicKey::from_slice(&hop.blinded_node).expect("Failed to parse blinding point");
+            let encrypted_payload = hop.encrypted_data.clone();
+            BlindedHop {
+                blinded_node_id,
+                encrypted_payload,
+            }
+        })
+        .collect()
+}
 
 /// Converts vector of bits numbers as i32 (0 - 128) to little endian bytes
 fn feature_bits_to_le_bytes(feature_bits: &[i32]) -> Vec<u8> {
@@ -463,6 +516,17 @@ pub trait InvoicePayer {
 pub trait OfferCreator {
     async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
 }
+
+#[async_trait]
+pub trait Bolt12InvoiceCreator {
+    async fn add_invoice(
+        &mut self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<AddInvoiceResponse, Status>;
+
+    async fn decode_payment_request(&mut self, payment_request: String) -> Result<PayReq, Status>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
