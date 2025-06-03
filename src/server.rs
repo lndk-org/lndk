@@ -1,5 +1,6 @@
 use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
-use crate::offers::handler::PayOfferParams;
+use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
+use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
 use crate::offers::{get_destination, OfferError};
 use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
@@ -8,7 +9,7 @@ use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice::Bolt12Invoice;
-use lightning::offers::offer::Offer;
+use lightning::offers::offer::{Offer, Quantity};
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
@@ -22,10 +23,12 @@ use std::error::Error;
 use std::fmt::Display;
 use std::fs::{metadata, set_permissions, File};
 use std::io::Write;
+use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Identity;
 use tonic::{Request, Response, Status};
@@ -281,6 +284,73 @@ impl Offers for LNDKServer {
 
         Ok(Response::new(reply))
     }
+
+    async fn create_offer(
+        &self,
+        request: Request<CreateOfferRequest>,
+    ) -> Result<Response<CreateOfferResponse>, Status> {
+        log::info!("Received a request: {:?}", request.get_ref());
+
+        let metadata = request.metadata();
+        let macaroon = check_auth_metadata(metadata)?;
+        let creds = Creds::String {
+            cert: self.lnd_cert.clone(),
+            macaroon,
+        };
+        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let mut client = get_lnd_client(lnd_cfg)
+            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let inner_request = request.get_ref();
+        let info = client
+            .lightning()
+            .get_info(GetInfoRequest {})
+            .await
+            .expect("failed to get info")
+            .into_inner();
+        let network = get_network(info)
+            .await
+            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let quantity = parse_quantity(inner_request.quantity)
+            .map_err(|_| Status::invalid_argument("Invalid quantity provided"))?;
+
+        let request = CreateOfferParams {
+            client,
+            amount_msats: inner_request.amount.unwrap_or(0),
+            chain: network,
+            description: inner_request.description.clone(),
+            issuer: inner_request.issuer.clone(),
+            quantity,
+            expiry: inner_request.expiry.map(Duration::from_secs),
+        };
+        let offer = match self.offer_handler.create_offer(request).await {
+            Ok(offer) => offer,
+            Err(e) => return Err(Status::internal(format!("Error creating offer: {e}"))),
+        };
+
+        let reply = CreateOfferResponse {
+            offer: offer.to_string(),
+        };
+        Ok(Response::new(reply))
+    }
+}
+
+fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, ()> {
+    let quantity = match rpc_quantity {
+        Some(quantity) => quantity,
+        None => return Ok(None),
+    };
+
+    if quantity == 0 {
+        return Ok(Some(Quantity::Unbounded));
+    }
+    if quantity == 1 {
+        return Ok(Some(Quantity::One));
+    }
+    let amount = NonZeroU64::new(quantity);
+    if amount.is_none() {
+        return Err(());
+    }
+    Ok(Some(Quantity::Bounded(amount.unwrap())))
 }
 
 // We need to check that the client passes in a tls cert pem string, hexadecimal macaroon,

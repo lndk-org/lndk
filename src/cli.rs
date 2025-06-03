@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use lightning::offers::invoice::Bolt12Invoice;
 use lndk::lndkrpc::offers_client::OffersClient;
-use lndk::lndkrpc::{GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
+use lndk::lndkrpc::{CreateOfferRequest, GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
 use lndk::offers::decode;
 use lndk::offers::handler::DEFAULT_RESPONSE_INVOICE_TIMEOUT;
 use lndk::{
@@ -145,6 +145,25 @@ enum Commands {
         /// Mutually exclusive with fee_limit - only one can be set.
         #[arg(long, required = false, conflicts_with = "fee_limit")]
         fee_limit_percent: Option<u32>,
+    },
+    /// CreateOffer creates a BOLT 12 offer.
+    CreateOffer {
+        /// The amount of the offer in millisatoshis.
+        #[arg(required = false)]
+        amount: Option<u64>,
+        /// The description of the offer.
+        #[arg(required = false)]
+        description: Option<String>,
+        /// The issuer of the offer.
+        #[arg(required = false)]
+        issuer: Option<String>,
+        /// Relative expiry of the offer in seconds.
+        #[arg(required = false)]
+        expiry: Option<u64>,
+        /// The quantity of the offer. If 0, unbounded quantity is assumed. If None,
+        /// quantity defaults to 1.
+        #[arg(required = false)]
+        quantity: Option<u64>,
     },
 }
 
@@ -346,6 +365,54 @@ async fn main() {
                 Ok(_) => println!("Successfully paid for offer!"),
                 Err(err) => {
                     println!("Error paying invoice: {err:?}");
+                    exit(1)
+                }
+            }
+        }
+        Commands::CreateOffer {
+            amount,
+            description,
+            issuer,
+            expiry,
+            quantity,
+        } => {
+            let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
+            let grpc_host = args.grpc_host.clone();
+            let grpc_port = args.grpc_port;
+            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
+                .unwrap_or_else(|e| {
+                    println!("ERROR creating endpoint: {e:?}");
+                    exit(1)
+                })
+                .tls_config(tls)
+                .unwrap_or_else(|e| {
+                    println!("ERROR tls config: {e:?}");
+                    exit(1)
+                })
+                .connect()
+                .await
+                .unwrap_or_else(|e| {
+                    println!("ERROR connecting: {e:?}");
+                    exit(1)
+                });
+
+            let mut client = OffersClient::new(channel);
+            let macaroon =
+                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
+            let mut request = Request::new(CreateOfferRequest {
+                amount,
+                quantity,
+                description,
+                issuer,
+                expiry,
+            });
+            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            match client.create_offer(request).await {
+                Ok(response) => {
+                    println!("Offer: {:?}.", response.get_ref())
+                }
+                Err(err) => {
+                    println!("Error creating offer: {err:?}");
                     exit(1)
                 }
             }
