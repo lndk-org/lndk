@@ -48,7 +48,7 @@ async fn create_offers(
 
         let blinded_path = offer.paths()[0].clone();
         let pay_cfg = PayOfferParams {
-            offer: offer,
+            offer,
             amount: Some(20_000),
             payer_note: Some("".to_string()),
             network: Network::Regtest,
