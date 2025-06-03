@@ -210,6 +210,7 @@ pub(super) async fn create_invoice_info_from_request(
     mut creator: impl Bolt12InvoiceCreator + std::marker::Send + 'static,
     invoice_request: InvoiceRequest,
 ) -> Result<LndkBolt12InvoiceInfo, OfferError> {
+    log::trace!("Creating invoice");
     let invoice_response = creator
         .add_invoice(invoice_request)
         .await
@@ -227,6 +228,7 @@ pub(super) async fn create_invoice_info_from_request(
 
     let payment_hash = PaymentHash(*payment_hash.as_byte_array());
 
+    log::trace!("Parsing blinded paths");
     let payment_paths = parse_blinded_paths(payreq.blinded_paths);
     Ok(LndkBolt12InvoiceInfo {
         payment_hash,

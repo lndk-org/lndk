@@ -1,7 +1,8 @@
 use bitcoin::hashes::Hmac;
 use bitcoin::key::Secp256k1;
 use bitcoin::Network;
-use lightning::blinded_path::message::{BlindedMessagePath, OffersContext};
+use futures::executor::block_on;
+use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
 use lightning::ln::channelmanager::{PaymentId, Verification};
@@ -55,6 +56,7 @@ pub struct OfferHandler {
     /// The amount of time in seconds that we will wait for the offer creator to respond with
     /// an invoice. If not provided, we will use the default value of 15 seconds.
     pub response_invoice_timeout: u32,
+    client: Option<Client>,
 }
 
 #[derive(Clone)]
@@ -107,7 +109,11 @@ pub struct CreateOfferParams {
 }
 
 impl OfferHandler {
-    pub fn new(response_invoice_timeout: Option<u32>, seed: Option<[u8; 32]>) -> Self {
+    pub fn new(
+        response_invoice_timeout: Option<u32>,
+        seed: Option<[u8; 32]>,
+        client: Option<Client>,
+    ) -> Self {
         let messenger_utils = MessengerUtilities::default();
         let random_bytes = match seed {
             Some(seed) => seed,
@@ -123,6 +129,7 @@ impl OfferHandler {
             messenger_utils,
             expanded_key,
             response_invoice_timeout,
+            client,
         }
     }
 
@@ -338,7 +345,7 @@ impl OfferHandler {
 
 impl Default for OfferHandler {
     fn default() -> Self {
-        Self::new(None, None)
+        Self::new(None, None, None)
     }
 }
 
@@ -350,7 +357,89 @@ impl OffersMessageHandler for OfferHandler {
         responder: Option<Responder>,
     ) -> Option<(OffersMessage, ResponseInstruction)> {
         match message {
-            OffersMessage::InvoiceRequest(_) => None,
+            OffersMessage::InvoiceRequest(invoice_request) => {
+                let responder = responder?;
+                let offer_context = context?;
+
+                let nonce = match offer_context {
+                    OffersContext::InvoiceRequest { nonce } => nonce,
+                    _ => {
+                        return None;
+                    }
+                };
+
+                let secp_ctx = &Secp256k1::new();
+
+                // Clone invoice_request before verification since it consumes the value.
+                // TODO: create_invoice should use VerifiedInvoiceRequest instead of InvoiceRequest.
+                let invoice_request_clone = invoice_request.clone();
+                let verfied_invoice = match invoice_request.verify_using_recipient_data(
+                    nonce,
+                    &self.expanded_key,
+                    secp_ctx,
+                ) {
+                    Ok(invoice) => invoice,
+                    Err(_) => return None,
+                };
+
+                let client = match self.client {
+                    Some(_) => self.client.clone().unwrap(),
+                    None => {
+                        error!("No client provided to create invoice");
+                        return None;
+                    }
+                };
+                log::trace!("Creating invoice");
+                let invoice_info =
+                    match block_on(self.create_invoice(client, invoice_request_clone)) {
+                        Ok(invoice) => invoice,
+                        Err(e) => {
+                            error!("Error creating invoice: {e}");
+                            return None;
+                        }
+                    };
+                log::trace!("Invoice created: {:?}", invoice_info);
+
+                let invoice_builder = match verfied_invoice.respond_using_derived_keys(
+                    invoice_info.payment_paths,
+                    invoice_info.payment_hash,
+                ) {
+                    Ok(invoice_builder) => invoice_builder,
+                    Err(e) => {
+                        error!("Error building invoice: {:?}", e);
+                        return None;
+                    }
+                };
+
+                // Lnd doesn't support MPP in blinded paths, so we need to build the invoice without
+                // it.
+                let invoice_result = invoice_builder
+                    .build_and_sign(secp_ctx)
+                    .map_err(InvoiceError::from);
+
+                match invoice_result {
+                    Ok(invoice) => {
+                        let nonce = Nonce::from_entropy_source(&*self.messenger_utils);
+                        let hmac = invoice_info
+                            .payment_hash
+                            .hmac_for_offer_payment(nonce, &self.expanded_key);
+                        let context = MessageContext::Offers(OffersContext::InboundPayment {
+                            payment_hash: invoice_info.payment_hash,
+                            nonce,
+                            hmac,
+                        });
+                        log::trace!("Responding with invoice");
+                        Some((
+                            OffersMessage::Invoice(invoice),
+                            responder.respond_with_reply_path(context),
+                        ))
+                    }
+                    Err(error) => {
+                        log::error!("Error building invoice: {:?}", error);
+                        Some((OffersMessage::InvoiceError(error), responder.respond()))
+                    }
+                }
+            }
             OffersMessage::Invoice(invoice) => {
                 let secp_ctx = &Secp256k1::new();
                 let offer_context = context?;
