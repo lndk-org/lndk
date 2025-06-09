@@ -525,6 +525,14 @@ impl OffersMessageHandler for OfferHandler {
             }
             OffersMessage::InvoiceError(error) => {
                 trace!("Received an invoice error: {error}.");
+                if let Some(OffersContext::OutboundPayment {
+                    payment_id,
+                    nonce,
+                    hmac: Some(hmac),
+                }) = context
+                {
+                    self.handle_invoice_error(payment_id, nonce, hmac)
+                }
                 None
             }
         }
