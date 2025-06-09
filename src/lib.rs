@@ -511,7 +511,8 @@ impl OffersMessageHandler for OfferHandler {
                                 pay_info.invoice = Some(invoice.clone());
                             }
                         }
-                        responder.map(|r| (OffersMessage::Invoice(invoice), r.respond()))
+
+                        None
                     }
                     Err(()) => responder.map(|r| {
                         (
