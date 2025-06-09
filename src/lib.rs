@@ -481,7 +481,7 @@ impl OffersMessageHandler for OfferHandler {
             OffersMessage::Invoice(invoice) => {
                 info!("Received an invoice: {invoice:?}");
                 let secp_ctx = &Secp256k1::new();
-                let offer_context = context.unwrap();
+                let offer_context = context?;
                 let (payment_id, nonce) = match offer_context {
                     OffersContext::OutboundPayment {
                         nonce, payment_id, ..
