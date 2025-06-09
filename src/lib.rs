@@ -37,7 +37,7 @@ use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use lightning::routing::gossip::NetworkGraph;
 use lightning::sign::EntropySource;
 use lnd::BUILD_TAGS_REQUIRED;
-use log::{debug, error, info, LevelFilter};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
@@ -474,12 +474,8 @@ impl OffersMessageHandler for OfferHandler {
         responder: Option<Responder>,
     ) -> Option<(OffersMessage, ResponseInstruction)> {
         match message {
-            OffersMessage::InvoiceRequest(_) => {
-                log::error!("Invoice request received, payment not yet supported.");
-                None
-            }
+            OffersMessage::InvoiceRequest(_) => None,
             OffersMessage::Invoice(invoice) => {
-                info!("Received an invoice: {invoice:?}");
                 let secp_ctx = &Secp256k1::new();
                 let offer_context = context?;
                 let (payment_id, nonce) = match offer_context {
@@ -487,7 +483,6 @@ impl OffersMessageHandler for OfferHandler {
                         nonce, payment_id, ..
                     } => (payment_id, nonce),
                     _ => {
-                        error!("Received an invoice request for a payment id that we don't recognize or already paid. We will ignore the invoice.");
                         return None;
                     }
                 };
@@ -500,37 +495,36 @@ impl OffersMessageHandler for OfferHandler {
                     Ok(payment_id) => {
                         info!("Successfully verified invoice for payment_id {payment_id}");
                         let mut active_payments = self.active_payments.lock().unwrap();
-                        match active_payments.get_mut(&payment_id) {
-                            Some(pay_info) => match pay_info.invoice {
-                                Some(_) => {
-                                    error!("We already received an invoice with this payment id.")
-                                }
-                                None => {
-                                    pay_info.state = PaymentState::InvoiceReceived;
-                                    pay_info.invoice = Some(invoice.clone());
-                                }
-                            },
+                        let pay_info = match active_payments.get_mut(&payment_id) {
+                            Some(pay_info) => pay_info,
                             None => {
-                                error!("We received an invoice request for a payment id that we don't recognize or already paid: {payment_id:?}. We will ignore the invoice.");
+                                warn!("We received an invoice for a payment that does not exist: {payment_id:?}. Invoice is ignored.");
+                                return None;
+                            }
+                        };
+                        match pay_info.invoice {
+                            Some(_) => {
+                                warn!("We already received an invoice with this payment id. Invoice is ignored.");
+                            }
+                            None => {
+                                pay_info.state = PaymentState::InvoiceReceived;
+                                pay_info.invoice = Some(invoice.clone());
                             }
                         }
                         responder.map(|r| (OffersMessage::Invoice(invoice), r.respond()))
                     }
-                    Err(()) => {
-                        error!("Invoice verification failed for invoice: {invoice:?}");
-                        responder.map(|r| {
-                            (
-                                OffersMessage::InvoiceError(InvoiceError::from_string(
-                                    String::from("invoice verification failure"),
-                                )),
-                                r.respond(),
-                            )
-                        })
-                    }
+                    Err(()) => responder.map(|r| {
+                        (
+                            OffersMessage::InvoiceError(InvoiceError::from_string(String::from(
+                                "invoice verification failure",
+                            ))),
+                            r.respond(),
+                        )
+                    }),
                 }
             }
             OffersMessage::InvoiceError(error) => {
-                log::error!("Invoice error received: {}", error);
+                trace!("Received an invoice error: {error}.");
                 None
             }
         }
