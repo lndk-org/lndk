@@ -414,7 +414,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
-            format!("--debuglevel=info,PEER=debug,INVC=debug,HSWC=debug"),
+            format!("--debuglevel=info,PEER=debug,INVC=debug,HSWC=trace,BLPT=trace"),
             format!("--bitcoind.rpcuser={}", cookie_values.user),
             format!("--bitcoind.rpcpass={}", cookie_values.password),
             format!(
@@ -429,7 +429,7 @@ impl LndNode {
             format!("--protocol.custom-message=513"),
             format!("--protocol.custom-nodeann=39"),
             format!("--protocol.custom-init=39"),
-            format!("--routing.blinding.num-hops=0"),
+            format!("--routing.blinding.num-hops=1"),
             format!("--routing.blinding.min-num-real-hops=0"),
         ];
 
