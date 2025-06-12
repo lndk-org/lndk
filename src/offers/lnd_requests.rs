@@ -216,10 +216,12 @@ pub(super) async fn create_invoice_info_from_request(
         .await
         .map_err(OfferError::AddInvoiceFailure)?;
     let payment_request = invoice_response.payment_request;
+    log::trace!("Payment request: {:?}", payment_request);
     let payreq = creator
         .decode_payment_request(payment_request)
         .await
         .map_err(OfferError::DecodePaymentRequestFailure)?;
+    log::trace!("Decoded payment request: {:?}", payreq);
     let payment_hash =
         bitcoin::hashes::sha256::Hash::from_str(&payreq.payment_hash).map_err(|e| {
             error!("Could not parse payment hash. {e}");
@@ -228,7 +230,6 @@ pub(super) async fn create_invoice_info_from_request(
 
     let payment_hash = PaymentHash(*payment_hash.as_byte_array());
 
-    log::trace!("Parsing blinded paths");
     let payment_paths = parse_blinded_paths(payreq.blinded_paths);
     Ok(LndkBolt12InvoiceInfo {
         payment_hash,
@@ -375,6 +376,10 @@ pub(crate) async fn connect_to_peer(
     let node_id_str = node_id.to_string();
     for peer in resp.peers.iter() {
         if peer.pub_key == node_id_str {
+            log::trace!(
+                "Peer already known while connecting as introduction node: {}",
+                node_id_str
+            );
             return Ok(());
         }
     }

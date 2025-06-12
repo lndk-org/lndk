@@ -1216,7 +1216,7 @@ checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 [[package]]
 name = "lightning"
 version = "0.1.3"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bech32 0.11.0",
  "bitcoin",
@@ -1232,7 +1232,7 @@ dependencies = [
 [[package]]
 name = "lightning-background-processor"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
  "bitcoin-io",
@@ -1244,7 +1244,7 @@ dependencies = [
 [[package]]
 name = "lightning-block-sync"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
  "chunked_transfer",
@@ -1256,7 +1256,7 @@ dependencies = [
 [[package]]
 name = "lightning-dns-resolver"
 version = "0.2.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "dnssec-prover",
  "lightning",
@@ -1267,7 +1267,7 @@ dependencies = [
 [[package]]
 name = "lightning-invoice"
 version = "0.33.2"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bech32 0.11.0",
  "bitcoin",
@@ -1277,7 +1277,7 @@ dependencies = [
 [[package]]
 name = "lightning-net-tokio"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
  "lightning",
@@ -1287,7 +1287,7 @@ dependencies = [
 [[package]]
 name = "lightning-persister"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
  "lightning",
@@ -1297,7 +1297,7 @@ dependencies = [
 [[package]]
 name = "lightning-rapid-gossip-sync"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
  "bitcoin-io",
@@ -1308,7 +1308,7 @@ dependencies = [
 [[package]]
 name = "lightning-types"
 version = "0.2.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "bitcoin",
 ]
@@ -1710,7 +1710,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 [[package]]
 name = "possiblyrandom"
 version = "0.2.0"
-source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#8a0a6ce36e12f8a503cc1cd644148cfa6a2ebbe2"
+source = "git+https://github.com/a-mpch/rust-lightning?branch=2025-06-cherry-pick-exposed#878619b2a95af44a5c5ab811805ae41846fb0cc4"
 dependencies = [
  "getrandom",
 ]
