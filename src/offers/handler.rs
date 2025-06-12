@@ -2,7 +2,7 @@ use bitcoin::hashes::Hmac;
 use bitcoin::key::Secp256k1;
 use bitcoin::Network;
 use futures::executor::block_on;
-use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, OffersContext};
+use lightning::blinded_path::message::{BlindedMessagePath, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
 use lightning::ln::channelmanager::{PaymentId, Verification};
@@ -419,20 +419,18 @@ impl OffersMessageHandler for OfferHandler {
 
                 match invoice_result {
                     Ok(invoice) => {
-                        let nonce = Nonce::from_entropy_source(&*self.messenger_utils);
-                        let hmac = invoice_info
-                            .payment_hash
-                            .hmac_for_offer_payment(nonce, &self.expanded_key);
-                        let context = MessageContext::Offers(OffersContext::InboundPayment {
-                            payment_hash: invoice_info.payment_hash,
-                            nonce,
-                            hmac,
-                        });
+                        {
+                            let mut pending_messages = self.pending_messages.lock().unwrap();
+                            pending_messages.push((
+                                OffersMessage::Invoice(invoice),
+                                responder.respond().into_instructions(),
+                            ));
+                            std::mem::drop(pending_messages);
+                        }
                         log::trace!("Responding with invoice");
-                        Some((
-                            OffersMessage::Invoice(invoice),
-                            responder.respond_with_reply_path(context),
-                        ))
+
+                        // We don't use default responder as messages need to be sent through LND.
+                        None
                     }
                     Err(error) => {
                         log::error!("Error building invoice: {:?}", error);
