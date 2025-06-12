@@ -135,7 +135,7 @@ pub async fn connect_network(
 
     lnd.wait_for_chain_sync().await;
 
-    ldk2.open_channel(ldk1_pubkey, addr, 200_000, 10_000_000, false)
+    ldk2.open_channel(ldk1_pubkey, addr, 300_000, 100_000_000, false)
         .await
         .unwrap();
 
@@ -144,8 +144,8 @@ pub async fn connect_network(
     ldk2.open_channel(
         lnd_pubkey,
         SocketAddr::from_str(&lnd_network_addr).unwrap(),
-        200_000,
-        10_000_000,
+        300_000,
+        100_000_000,
         announce_channel,
     )
     .await
