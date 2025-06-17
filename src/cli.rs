@@ -75,7 +75,7 @@ enum Commands {
         /// The offer string to decode.
         offer_string: String,
     },
-    /// Decodes a bech32-encoded invoice string into a BOLT 12 invoice.
+    /// Decodes a hex-encoded invoice string into a BOLT 12 invoice.
     DecodeInvoice {
         /// The invoice string to decode.
         invoice_string: String,
