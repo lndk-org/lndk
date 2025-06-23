@@ -19,12 +19,13 @@ use lightning::{
 };
 use log::{debug, error, trace};
 use tonic_lnd::{
-    lnrpc::{ChanInfoRequest, GetInfoRequest},
+    lnrpc::{ChanInfoRequest, GetInfoRequest, Payment},
     Client,
 };
 
 use crate::{
-    lnd::{features_support_onion_messages, PeerConnector},
+    lnd::{features_support_onion_messages, InvoicePayer, PeerConnector},
+    offers::handler::SendPaymentParams,
     onion_messenger::MessengerUtilities,
 };
 
@@ -72,6 +73,47 @@ pub(super) async fn create_invoice_request(
         hmac: Some(hmac),
     };
     Ok((invoice_request, payment_id, validated_amount, offer_context))
+}
+
+/// Sends a payment using the provided payer client and payment parameters.
+///
+/// This function performs a two-step payment process:
+/// 1. Queries available routes using the payment parameters (destination, amount, fees, etc.)
+/// 2. Sends the payment using the first available route
+///
+/// The function will return an error if either route querying or payment sending fails.
+/// On success, it returns `Ok(())` indicating the payment was successfully dispatched.
+pub(crate) async fn send_payment(
+    mut payer: impl InvoicePayer + std::marker::Send + 'static,
+    params: SendPaymentParams,
+) -> Result<(), OfferError> {
+    let resp = payer
+        .query_routes(
+            params.path,
+            params.cltv_expiry_delta,
+            params.fee_base_msat,
+            params.fee_ppm,
+            params.msats,
+        )
+        .await
+        .map_err(OfferError::RouteFailure)?;
+
+    let _ = payer
+        .send_to_route(params.payment_hash, resp.routes[0].clone())
+        .await
+        .map_err(OfferError::RouteFailure)?;
+
+    Ok(())
+}
+
+pub(super) async fn track_payment(
+    mut payer: impl InvoicePayer + std::marker::Send + 'static,
+    payment_hash: [u8; 32],
+) -> Result<Payment, OfferError> {
+    payer
+        .track_payment(payment_hash)
+        .await
+        .map_err(|_| OfferError::PaymentFailure)
 }
 
 /// create_reply_path creates a blinded path to provide to the offer node when requesting an
@@ -269,12 +311,28 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::offers::client_impls::tests::MockTestPeerConnector;
+    use crate::offers::client_impls::tests::{MockTestInvoicePayer, MockTestPeerConnector};
     use crate::offers::decode;
-    use lightning::offers::{nonce::Nonce, offer::Amount};
+    use lightning::{
+        blinded_path::payment::{
+            BlindedPaymentPath, Bolt12OfferContext, ForwardTlvs, PaymentConstraints,
+            PaymentContext, PaymentForwardNode, PaymentRelay, UnauthenticatedReceiveTlvs,
+        },
+        bolt11_invoice::PaymentSecret,
+        offers::{
+            invoice_request::InvoiceRequestFields,
+            nonce::Nonce,
+            offer::{Amount, OfferId},
+        },
+        types::features::BlindedHopFeatures,
+        util::string::UntrustedString,
+    };
     use mockall::predicate::eq;
     use tonic_lnd::{
-        lnrpc::{ChannelEdge, LightningNode, ListPeersResponse, NodeAddress, NodeInfo},
+        lnrpc::{
+            ChannelEdge, HtlcAttempt, LightningNode, ListPeersResponse, NodeAddress, NodeInfo,
+            QueryRoutesResponse, Route,
+        },
         tonic::Status,
     };
     const NONCE_BYTES: &[u8] = &[42u8; 16];
@@ -612,5 +670,157 @@ mod tests {
         let reply_path = response.unwrap();
         let hops = reply_path.blinded_hops();
         assert!(hops.len() == 2);
+    }
+
+    fn get_blinded_payment_path() -> BlindedPaymentPath {
+        let entropy_source = MessengerUtilities::new([42; 32]);
+        let secp_ctx = Secp256k1::new();
+        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
+        let node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let expanded_key = ExpandedKey::new([42; 32]);
+        let payment_context = PaymentContext::Bolt12Offer(Bolt12OfferContext {
+            offer_id: OfferId([42; 32]),
+            invoice_request: InvoiceRequestFields {
+                payer_signing_pubkey: PublicKey::from_str(&get_pubkeys()[0]).unwrap(),
+                quantity: Some(1),
+                payer_note_truncated: Some(UntrustedString("".to_string())),
+                human_readable_name: None,
+            },
+        });
+        let payee_tlvs = UnauthenticatedReceiveTlvs {
+            payment_secret: PaymentSecret([42; 32]),
+            payment_constraints: PaymentConstraints {
+                max_cltv_expiry: 1_000_000,
+                htlc_minimum_msat: 1,
+            },
+            payment_context,
+        };
+        let payee_tlvs = payee_tlvs.authenticate(nonce, &expanded_key);
+        let intermediate_nodes = [PaymentForwardNode {
+            tlvs: ForwardTlvs {
+                short_channel_id: 43,
+                payment_relay: PaymentRelay {
+                    cltv_expiry_delta: 40,
+                    fee_proportional_millionths: 1_000,
+                    fee_base_msat: 1,
+                },
+                payment_constraints: PaymentConstraints {
+                    max_cltv_expiry: payee_tlvs.tlvs().payment_constraints.max_cltv_expiry + 40,
+                    htlc_minimum_msat: 100,
+                },
+                features: BlindedHopFeatures::empty(),
+                next_blinding_override: None,
+            },
+            node_id: node_id,
+            htlc_maximum_msat: 1_000_000_000_000,
+        }];
+        let payment_path = BlindedPaymentPath::new(
+            &intermediate_nodes,
+            node_id,
+            payee_tlvs,
+            u64::MAX,
+            12344,
+            &entropy_source,
+            &secp_ctx,
+        )
+        .unwrap();
+        payment_path
+    }
+
+    #[tokio::test]
+    async fn test_send_payment() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
+            let route = Route {
+                ..Default::default()
+            };
+            Ok(QueryRoutesResponse {
+                routes: vec![route],
+                ..Default::default()
+            })
+        });
+
+        payer_mock.expect_send_to_route().returning(|_, _| {
+            Ok(HtlcAttempt {
+                ..Default::default()
+            })
+        });
+
+        payer_mock.expect_track_payment().returning(|_| {
+            Ok(Payment {
+                ..Default::default()
+            })
+        });
+
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
+        let params = SendPaymentParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            fee_ppm: 0,
+            payment_hash: payment_hash,
+            msats: 2000,
+            payment_id,
+        };
+        assert!(send_payment(payer_mock, params).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_payment_query_error() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock
+            .expect_query_routes()
+            .returning(|_, _, _, _, _| Err(Status::unknown("unknown error")));
+
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
+        let params = SendPaymentParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            fee_ppm: 0,
+            payment_hash: payment_hash,
+            msats: 2000,
+            payment_id,
+        };
+        assert!(send_payment(payer_mock, params).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_send_payment_send_error() {
+        let mut payer_mock = MockTestInvoicePayer::new();
+
+        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
+            let route = Route {
+                ..Default::default()
+            };
+            Ok(QueryRoutesResponse {
+                routes: vec![route],
+                ..Default::default()
+            })
+        });
+
+        payer_mock
+            .expect_send_to_route()
+            .returning(|_, _| Err(Status::unknown("unknown error")));
+
+        let blinded_path = get_blinded_payment_path();
+        let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
+        let payment_id = PaymentId(MessengerUtilities::default().get_secure_random_bytes());
+        let params = SendPaymentParams {
+            path: blinded_path,
+            cltv_expiry_delta: 200,
+            fee_base_msat: 1,
+            fee_ppm: 0,
+            payment_hash: payment_hash,
+            msats: 2000,
+            payment_id,
+        };
+        assert!(send_payment(payer_mock, params).await.is_err());
     }
 }
