@@ -495,22 +495,16 @@ impl OffersMessageHandler for OfferHandler {
                     Ok(payment_id) => {
                         info!("Successfully verified invoice for payment_id {payment_id}");
                         let mut active_payments = self.active_payments.lock().unwrap();
-                        let pay_info = match active_payments.get_mut(&payment_id) {
-                            Some(pay_info) => pay_info,
-                            None => {
-                                warn!("We received an invoice for a payment that does not exist: {payment_id:?}. Invoice is ignored.");
-                                return None;
-                            }
+                        let Some(pay_info) = active_payments.get_mut(&payment_id) else {
+                            warn!("We received an invoice for a payment that does not exist: {payment_id:?}. Invoice is ignored.");
+                            return None;
                         };
-                        match pay_info.invoice {
-                            Some(_) => {
-                                warn!("We already received an invoice with this payment id. Invoice is ignored.");
-                            }
-                            None => {
-                                pay_info.state = PaymentState::InvoiceReceived;
-                                pay_info.invoice = Some(invoice.clone());
-                            }
+                        if pay_info.invoice.is_some() {
+                            warn!("We already received an invoice with this payment id. Invoice is ignored.");
+                            return None;
                         }
+                        pay_info.state = PaymentState::InvoiceReceived;
+                        pay_info.invoice = Some(invoice.clone());
 
                         None
                     }
