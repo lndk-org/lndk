@@ -26,7 +26,7 @@ use tonic_lnd::Client;
 
 use super::lnd_requests::{create_invoice_request, send_invoice_request};
 use super::OfferError;
-use crate::lnd::InvoicePayer;
+use crate::offers::lnd_requests::{send_payment, track_payment};
 use crate::onion_messenger::MessengerUtilities;
 
 pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
@@ -237,48 +237,33 @@ impl OfferHandler {
             intro_node_id
         );
 
-        self.send_payment(client.clone(), params)
+        send_payment(client.clone(), params)
             .await
+            .inspect_err(|_| {
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments.remove(&payment_id);
+            })?;
+
+        {
+            let mut active_payments = self.active_payments.lock().unwrap();
+            active_payments
+                .entry(payment_id)
+                .and_modify(|entry| entry.state = PaymentState::PaymentDispatched);
+        }
+
+        // We'll track the payment until it settles.
+        track_payment(client, payment_hash)
+            .await
+            .inspect(|_| {
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments.remove(&payment_id);
+            })
             .inspect_err(|_| {
                 let mut active_payments = self.active_payments.lock().unwrap();
                 active_payments.remove(&payment_id);
             })
     }
 
-    pub(crate) async fn send_payment(
-        &self,
-        mut payer: impl InvoicePayer + std::marker::Send + 'static,
-        params: SendPaymentParams,
-    ) -> Result<Payment, OfferError> {
-        let resp = payer
-            .query_routes(
-                params.path,
-                params.cltv_expiry_delta,
-                params.fee_base_msat,
-                params.fee_ppm,
-                params.msats,
-            )
-            .await
-            .map_err(OfferError::RouteFailure)?;
-
-        let _ = payer
-            .send_to_route(params.payment_hash, resp.routes[0].clone())
-            .await
-            .map_err(OfferError::RouteFailure)?;
-
-        {
-            let mut active_payments = self.active_payments.lock().unwrap();
-            active_payments
-                .entry(params.payment_id)
-                .and_modify(|entry| entry.state = PaymentState::PaymentDispatched);
-        }
-
-        // We'll track the payment until it settles.
-        payer
-            .track_payment(params.payment_hash)
-            .await
-            .map_err(|_| OfferError::PaymentFailure)
-    }
     /// wait_for_invoice waits for the offer creator to respond with an invoice.
     async fn wait_for_invoice(&self, payment_id: PaymentId) -> Bolt12Invoice {
         loop {
