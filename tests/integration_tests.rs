@@ -14,7 +14,10 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
-use lndk::{setup_logger, LifecycleSignals, OfferHandler, PayOfferParams};
+use lndk::offers::create_reply_path;
+use lndk::offers::handler::{OfferHandler, PayOfferParams};
+use lndk::onion_messenger::MessengerUtilities;
+use lndk::{setup_logger, LifecycleSignals};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -437,7 +440,7 @@ async fn test_reply_path_unannounced_peers() {
     let (_, _, lnd_pubkey) =
         common::connect_network(&ldk1, &ldk2, false, &mut lnd, &bitcoind).await;
 
-    let (_, handler, _, shutdown) =
+    let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
     let offer_context = OffersContext::OutboundPayment {
@@ -446,13 +449,19 @@ async fn test_reply_path_unannounced_peers() {
         hmac: None,
     };
     let offer_context = MessageContext::Offers(offer_context);
+    let messenger_utils = MessengerUtilities::new([42; 32]);
+
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
     // itself.
-    let reply_path = handler
-        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey, offer_context)
-        .await;
+    let reply_path = create_reply_path(
+        lnd.client.clone().unwrap(),
+        lnd_pubkey,
+        offer_context,
+        &messenger_utils,
+    )
+    .await;
     assert!(reply_path.is_ok());
     let reply_path = reply_path.unwrap();
     assert_eq!(reply_path.blinded_hops().len(), 1);
@@ -474,7 +483,7 @@ async fn test_reply_path_announced_peers() {
     let (_, ldk2_pubkey, lnd_pubkey) =
         common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
 
-    let (_, handler, _, shutdown) =
+    let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
 
     let offer_context = OffersContext::OutboundPayment {
@@ -483,13 +492,19 @@ async fn test_reply_path_announced_peers() {
         hmac: None,
     };
     let offer_context = MessageContext::Offers(offer_context);
+    let messenger_utils = MessengerUtilities::new([42; 32]);
+
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // public channel and as such, is indeed an advertised node. Because of this, we make sure
     // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
     // expected.
-    let reply_path = handler
-        .create_reply_path(lnd.client.clone().unwrap(), lnd_pubkey, offer_context)
-        .await;
+    let reply_path = create_reply_path(
+        lnd.client.clone().unwrap(),
+        lnd_pubkey,
+        offer_context,
+        &messenger_utils,
+    )
+    .await;
     assert!(reply_path.is_ok());
     let reply_path = reply_path.unwrap();
     assert_eq!(reply_path.blinded_hops().len(), 2);

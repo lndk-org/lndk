@@ -11,6 +11,7 @@ pub mod handler;
 mod lnd_requests;
 mod parse;
 
+pub use lnd_requests::create_reply_path;
 pub use parse::{decode, get_destination, validate_amount};
 
 #[derive(Debug)]
