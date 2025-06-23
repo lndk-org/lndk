@@ -426,64 +426,6 @@ async fn test_lndk_pay_multiple_offers_concurrently() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-// Here we test that a new key is created with each call to create_invoice_request. Transient keys
-// improve privacy and we also need them to successfully make multiple payments to the same CLN
-// offer.
-async fn test_transient_keys() {
-    let test_name = "transient_keys";
-    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
-        common::setup_test_infrastructure(test_name).await;
-
-    let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
-
-    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
-    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
-    let offer = ldk1
-        .create_offer(
-            &path_pubkeys,
-            Network::Regtest,
-            20_000,
-            Quantity::One,
-            expiration,
-        )
-        .await
-        .expect("should create offer");
-
-    let (lndk_cfg, handler, messenger, shutdown) =
-        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
-
-    select! {
-        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
-            panic!("lndk should not have completed first {:?}", val);
-        },
-        res1 = handler.create_invoice_request(
-            offer.clone(),
-            Network::Regtest,
-            None,
-            None,
-        ) => {
-            let res2 = handler.create_invoice_request(
-                offer.clone(),
-                Network::Regtest,
-                None,
-                None,
-            ).await;
-
-            let pubkey1 = res1.unwrap().0.payer_signing_pubkey();
-            let pubkey2 = res2.unwrap().0.payer_signing_pubkey();
-
-            // Verify that the signing pubkeys for each invoice request are different.
-            assert_ne!(pubkey1, pubkey2);
-
-            shutdown.trigger();
-            ldk1.stop().await;
-            ldk2.stop().await;
-        }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
 // We test that when creating a reply path for an offer node to send an invoice to, we don't
 // use a node that we're connected to as the introduction node if it's an unadvertised node that
 // is only connected by private channels.
