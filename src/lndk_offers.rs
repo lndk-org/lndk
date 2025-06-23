@@ -1,14 +1,17 @@
 use crate::lnd::{features_support_onion_messages, InvoicePayer, MessageSigner, PeerConnector};
 use crate::{OfferHandler, PaymentState};
 use async_trait::async_trait;
+use bitcoin::hashes::Hmac;
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use bitcoin::Network;
 use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
+use lightning::ln::channelmanager::Verification;
 use lightning::offers::invoice_request::InvoiceRequest;
 use lightning::offers::merkle::SignError;
+use lightning::offers::nonce::Nonce;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::onion_message::messenger::{Destination, MessageSendInstructions};
@@ -222,10 +225,12 @@ impl OfferHandler {
                 }
             };
         }
+
+        let hmac = payment_id.hmac_for_offer_payment(nonce, &self.expanded_key);
         let offer_context = OffersContext::OutboundPayment {
             payment_id,
             nonce,
-            hmac: None,
+            hmac: Some(hmac),
         };
         Ok((invoice_request, payment_id, validated_amount, offer_context))
     }
@@ -335,6 +340,21 @@ impl OfferHandler {
             .track_payment(params.payment_hash)
             .await
             .map_err(|_| OfferError::PaymentFailure)
+    }
+
+    /// Handles an invoice error for a payment ID.
+    /// Verifies the payment ID and removes it from active payments if valid.
+    pub fn handle_invoice_error(
+        &self,
+        payment_id: PaymentId,
+        nonce: Nonce,
+        hmac: Hmac<bitcoin::hashes::sha256::Hash>,
+    ) {
+        if let Ok(()) = payment_id.verify_for_offer_payment(hmac, nonce, &self.expanded_key) {
+            error!("Received an invoice error for payment_id {payment_id}. Payment is abandoned.");
+            let mut active_payments = self.active_payments.lock().unwrap();
+            active_payments.remove(&payment_id);
+        }
     }
 }
 
@@ -658,6 +678,8 @@ pub(crate) async fn get_node_id(
 mod tests {
     use super::*;
     use crate::MessengerUtilities;
+    use crate::PaymentInfo;
+    use crate::PaymentState;
     use bitcoin::key::Keypair;
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use lightning::blinded_path::payment::{
@@ -1216,5 +1238,49 @@ mod tests {
             payment_id,
         };
         assert!(handler.send_payment(payer_mock, params).await.is_err());
+    }
+
+    #[test]
+    fn test_handle_invoice_error_existing_payment() {
+        // Create an OfferHandler with a payment ID in active_payments
+        let handler = OfferHandler::default();
+        let payment_id = PaymentId([42; 32]);
+        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
+
+        // Insert a payment into active_payments
+        {
+            let mut active_payments = handler.active_payments.lock().unwrap();
+            active_payments.insert(
+                payment_id,
+                PaymentInfo {
+                    state: PaymentState::InvoiceRequestSent,
+                    invoice: None,
+                },
+            );
+        }
+
+        // Calculate a valid HMAC
+        let hmac = payment_id.hmac_for_offer_payment(nonce, &handler.expanded_key);
+
+        // Call handle_invoice_error
+        handler.handle_invoice_error(payment_id, nonce, hmac);
+
+        // Verify payment was removed
+        let active_payments = handler.active_payments.lock().unwrap();
+        assert!(!active_payments.contains_key(&payment_id));
+    }
+
+    #[test]
+    fn test_handle_invoice_error_nonexistent_payment() {
+        // Create an OfferHandler with an empty active_payments
+        let handler = OfferHandler::default();
+        let payment_id = PaymentId([42; 32]);
+        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
+
+        // Calculate a valid HMAC
+        let hmac = payment_id.hmac_for_offer_payment(nonce, &handler.expanded_key);
+
+        // Call handle_invoice_error and nothing should happen.
+        handler.handle_invoice_error(payment_id, nonce, hmac);
     }
 }
