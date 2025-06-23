@@ -1,11 +1,12 @@
 use clap::{Parser, Subcommand};
 use lightning::offers::invoice::Bolt12Invoice;
-use lndk::lndk_offers::decode;
 use lndk::lndkrpc::offers_client::OffersClient;
 use lndk::lndkrpc::{GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
+use lndk::offers::decode;
+use lndk::offers::handler::DEFAULT_RESPONSE_INVOICE_TIMEOUT;
 use lndk::{
-    Bolt12InvoiceString, DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_RESPONSE_INVOICE_TIMEOUT,
-    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, TLS_CERT_FILENAME,
+    Bolt12InvoiceString, DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_SERVER_HOST,
+    DEFAULT_SERVER_PORT, TLS_CERT_FILENAME,
 };
 use std::fs::File;
 use std::io::BufReader;
