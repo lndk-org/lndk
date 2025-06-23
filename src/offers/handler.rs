@@ -33,10 +33,8 @@ pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
 
 pub(crate) enum PaymentState {
     InvoiceRequestCreated,
-    InvoiceRequestSent,
     InvoiceReceived,
     PaymentDispatched,
-    Paid,
 }
 pub(crate) struct PaymentInfo {
     state: PaymentState,
@@ -416,7 +414,7 @@ mod tests {
             active_payments.insert(
                 payment_id,
                 PaymentInfo {
-                    state: PaymentState::InvoiceRequestSent,
+                    state: PaymentState::InvoiceRequestCreated,
                     invoice: None,
                 },
             );
