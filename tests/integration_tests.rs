@@ -6,6 +6,7 @@ use lightning::blinded_path::message::{MessageContext, OffersContext};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::nonce::Nonce;
 use lndk;
+use log::error;
 
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Network;
@@ -27,6 +28,49 @@ use tokio::{select, try_join};
 use tonic_lnd::Client;
 
 const NONCE_BYTES: &[u8] = &[42u8; 16];
+
+// Helper function to get an invoice with a retry to ensure messenger initialization.
+// This is necessary because there is a race condition between the messenger initialization,
+// the internal lndk graph update, and calling get_invoice.
+// Before, get_invoice sometimes would fail because internally the graph has not been updated, not
+// finding the introduction node and failing when building the onion message.
+async fn get_invoice_with_retry(
+    handler: &Arc<OfferHandler>,
+    offer: &lightning::offers::offer::Offer,
+    amount: u64,
+    network: Network,
+    client: Client,
+    destination: Destination,
+) -> Result<(lightning::offers::invoice::Bolt12Invoice, u64, PaymentId), lndk::offers::OfferError> {
+    let mut retries = 0;
+    let max_retries = 3;
+    let delay = Duration::from_secs(2);
+
+    while retries < max_retries {
+        tokio::time::sleep(delay).await;
+
+        let result = handler
+            .get_invoice(PayOfferParams {
+                offer: offer.clone(),
+                amount: Some(amount),
+                payer_note: Some("".to_string()),
+                network,
+                client: client.clone(),
+                destination: destination.clone(),
+                reply_path: None,
+                response_invoice_timeout: Some(15),
+            })
+            .await
+            .map_err(|_| lndk::offers::OfferError::InvoiceTimeout(15));
+        if result.is_ok() {
+            return result;
+        }
+        retries += 1;
+    }
+    error!("Failed to get invoice after {} retries", max_retries);
+    Err(lndk::offers::OfferError::InvoiceTimeout(15))
+}
+
 // Creates N offers and spits out the PayOfferParams that we can use to pay.
 async fn create_offers(
     num: i32,
@@ -88,12 +132,13 @@ async fn pay_offers(handler: Arc<OfferHandler>, pay_cfgs: &Vec<PayOfferParams>) 
 
 #[tokio::test(flavor = "multi_thread")]
 // Here we test the beginning of the BOLT 12 offers flow. We show that lndk successfully builds an
-// invoice_request and sends it.
-async fn test_lndk_send_invoice_request() {
-    let test_name = "lndk_send_invoice_request";
+// invoice_request, sends it, and receives an invoice back.
+async fn test_lndk_get_invoice() {
+    let test_name = "lndk_get_invoice";
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
-
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
     // Here we'll produce a little network. ldk1 will be the offer creator in this scenario. We'll
     // connect ldk1 and ldk2 with a channel so ldk1 can create an offer and ldk2 can be the
     // introduction node for the blinded path.
@@ -183,6 +228,8 @@ async fn test_lndk_send_invoice_request() {
     let mut client = lnd.client.clone().unwrap();
     let blinded_path = offer.paths()[0].clone();
 
+    log::debug!("waiting for ldk2's graph update to update lnd graph");
+
     let mut stream = client
         .lightning()
         .subscribe_channel_graph(tonic_lnd::lnrpc::GraphTopologySubscription {})
@@ -207,28 +254,21 @@ async fn test_lndk_send_invoice_request() {
     setup_logger(None, log_file).unwrap();
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::default());
+    let handler = Arc::new(OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _, offer_context) = handler
-        .create_invoice_request(
-            offer.clone(),
-            Network::Regtest,
-            Some(20_000),
-            Some("".to_string()),
-        )
-        .await
-        .unwrap();
 
     let destination = Destination::BlindedPath(blinded_path.clone());
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
-        res = handler.send_invoice_request(
-            destination.clone(),
+        res = get_invoice_with_retry(
+            &handler,
+            &offer,
+            20_000,
+            Network::Regtest,
             client.clone(),
-            invoice_request,
-            offer_context
+            destination.clone(),
         ) => {
             assert!(res.is_ok());
         }
@@ -256,26 +296,20 @@ async fn test_lndk_send_invoice_request() {
     let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_file).unwrap();
 
-    let handler = Arc::new(lndk::OfferHandler::default());
+    let handler = Arc::new(OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
-    let (invoice_request, _, _, offer_context) = handler
-        .create_invoice_request(
-            offer.clone(),
-            Network::Regtest,
-            Some(20_000),
-            Some("".to_string()),
-        )
-        .await
-        .unwrap();
+
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
-        res = handler.send_invoice_request(
-            destination,
+        res = get_invoice_with_retry(
+            &handler,
+            &offer,
+            20_000,
+            Network::Regtest,
             client.clone(),
-            invoice_request,
-            offer_context
+            destination.clone(),
         ) => {
             assert!(res.is_ok());
             shutdown.trigger();

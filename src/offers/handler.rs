@@ -113,7 +113,7 @@ impl OfferHandler {
     /// Sends an invoice request and waits for an invoice to be sent back to us.
     /// Reminder that if this method returns an error after create_invoice_request is called, we
     /// *must* remove the payment_id from self.active_payments.
-    pub(crate) async fn get_invoice(
+    pub async fn get_invoice(
         &self,
         cfg: PayOfferParams,
     ) -> Result<(Bolt12Invoice, u64, PaymentId), OfferError> {
