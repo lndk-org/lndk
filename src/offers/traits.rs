@@ -1,6 +1,6 @@
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
-use log::error;
+use log::{error, trace};
 use tonic::async_trait;
 use tonic_lnd::lnrpc::{HtlcAttempt, Payment, QueryRoutesResponse, Route};
 use tonic_lnd::routerrpc::TrackPaymentRequest;
@@ -179,13 +179,20 @@ impl InvoicePayer for Client {
         // Wait for a failed or successful payment.
         while let Some(payment) = stream.message().await.map_err(OfferError::TrackFailure)? {
             if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Succeeded {
+                trace!("Payment {} received success status", payment.payment_hash);
                 return Ok(payment);
             } else if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Failed {
+                trace!("Payment {} received failure status", payment.payment_hash);
                 return Err(OfferError::PaymentFailure);
             } else {
                 continue;
             }
         }
+
+        error!(
+            "Payment tracking stream for {} never received a success or failure status",
+            hex::encode(payment_hash)
+        );
 
         Err(OfferError::PaymentFailure)
     }
