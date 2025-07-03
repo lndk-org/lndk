@@ -785,4 +785,64 @@ impl LndNode {
 
         self.handle = cmd;
     }
+
+    // wait_for_nodes_addresses waits until all LDK nodes have addresses in the LND node's graph.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_nodes_addresses(&mut self, ldk_nodes: &[&LdkNode]) {
+        match timeout(
+            Duration::from_secs(100),
+            self.check_nodes_addresses(ldk_nodes),
+        )
+        .await
+        {
+            Err(_) => panic!("timeout before all LDK nodes have addresses in graph"),
+            _ => {}
+        };
+    }
+
+    pub async fn check_nodes_addresses(&mut self, ldk_nodes: &[&LdkNode]) {
+        loop {
+            let mut all_have_addresses = true;
+
+            for ldk_node in ldk_nodes {
+                let (pubkey, _) = ldk_node.get_node_info();
+
+                let node_info_req = tonic_lnd::lnrpc::NodeInfoRequest {
+                    pub_key: pubkey.to_string(),
+                    include_channels: false,
+                };
+
+                let client = self.client.clone().unwrap();
+                let resp = client
+                    .clone()
+                    .lightning()
+                    .get_node_info(node_info_req.clone())
+                    .await;
+
+                match resp {
+                    Ok(response) => {
+                        if let Some(node) = response.into_inner().node {
+                            if node.addresses.is_empty() {
+                                all_have_addresses = false;
+                                break;
+                            }
+                        } else {
+                            all_have_addresses = false;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        all_have_addresses = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_have_addresses {
+                return;
+            }
+
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
 }
