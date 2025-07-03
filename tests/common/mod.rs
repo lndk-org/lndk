@@ -33,7 +33,7 @@ const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
 pub async fn setup_test_infrastructure(
     test_name: &str,
-) -> (BitcoindNode, LndNode, LdkNode, LdkNode, PathBuf) {
+) -> (BitcoindNode, LndNode, LdkNode, LdkNode, PathBuf, PathBuf) {
     let bitcoind = setup_bitcoind().await;
     let (ldk_test_dir, lnd_test_dir, lndk_test_dir) = setup_test_dirs(test_name);
     let mut lnd = LndNode::new(
@@ -44,13 +44,24 @@ pub async fn setup_test_infrastructure(
     );
     lnd.setup_client().await;
 
-    let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
+    let ldk1 = setup_ldk_node(&bitcoind, 1, &ldk_test_dir, test_name).await;
+    let ldk2 = setup_ldk_node(&bitcoind, 2, &ldk_test_dir, test_name).await;
 
+    (bitcoind, lnd, ldk1, ldk2, lndk_test_dir, ldk_test_dir)
+}
+
+pub async fn setup_ldk_node(
+    bitcoind: &BitcoindNode,
+    node_num: u8,
+    ldk_test_dir: &PathBuf,
+    test_name: &str,
+) -> LdkNode {
+    let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
     let port = get_available_port().unwrap();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let cookie_values = connect_params.unwrap();
 
-    let ldk1_config = LdkUserInfo {
+    let ldk_config = LdkUserInfo {
         bitcoind_rpc_username: cookie_values.user.clone(),
         bitcoind_rpc_password: cookie_values.password.clone(),
         bitcoind_rpc_host: String::from("localhost"),
@@ -61,29 +72,10 @@ pub async fn setup_test_infrastructure(
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
         log_level: Level::Trace,
-        node_num: 1,
+        node_num: node_num,
     };
 
-    let port = get_available_port().unwrap();
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
-    let ldk2_config = LdkUserInfo {
-        bitcoind_rpc_username: cookie_values.user.clone(),
-        bitcoind_rpc_password: cookie_values.password.clone(),
-        bitcoind_rpc_host: String::from("localhost"),
-        bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
-        ldk_data_dir: ldk_test_dir,
-        ldk_announced_listen_addr: vec![addr.into()],
-        ldk_peer_listening_port: port,
-        ldk_announced_node_name: [0; 32],
-        network: Network::Regtest,
-        log_level: Level::Trace,
-        node_num: 2,
-    };
-
-    let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
-    let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
-
-    (bitcoind, lnd, ldk1, ldk2, lndk_test_dir)
+    ldk_sample::start_ldk(ldk_config, test_name).await
 }
 
 // connect_network establishes connections/channels between our nodes, and mines enough blocks and
