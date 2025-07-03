@@ -207,6 +207,40 @@ pub async fn setup_lndk(
     return (lndk_cfg, handler, messenger, shutdown);
 }
 
+pub async fn isolate_node(ldk_node: &LdkNode, bitcoind: &BitcoindNode) {
+    let channels_info = ldk_node.list_channels().await;
+    let address = bitcoind.node.client.new_address().unwrap();
+
+    log::info!("Closing channels...");
+
+    for channel in channels_info {
+        ldk_node.close_channel(channel.0, channel.1).await.unwrap();
+
+        // We need to generate a block so we avoid that transaction output is unspendable.
+        bitcoind
+            .node
+            .client
+            .generate_to_address(1, &address)
+            .unwrap();
+    }
+
+    log::info!("Waiting for list channels to be empty...");
+
+    match timeout(Duration::from_secs(100), async {
+        loop {
+            let channels_info = ldk_node.list_channels().await;
+            if channels_info.len() == 0 {
+                break;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    })
+    .await
+    {
+        Err(_) => panic!("timeout before channel closed"),
+        _ => {}
+    };
+}
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
 // for our tests.
 //
