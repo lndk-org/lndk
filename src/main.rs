@@ -12,11 +12,11 @@ mod internal {
 use home::home_dir;
 use internal::*;
 use lndk::lnd::{build_seed_from_lnd_node, get_lnd_client, validate_lnd_creds, LndCfg};
+use lndk::offers::handler::OfferHandler;
 use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
 use lndk::{
-    lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, OfferHandler,
-    DEFAULT_CONFIG_FILE_NAME, DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_LOG_FILE,
-    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, DEFAULT_CONFIG_FILE_NAME,
+    DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_LOG_FILE, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
