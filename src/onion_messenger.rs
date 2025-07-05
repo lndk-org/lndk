@@ -1,5 +1,6 @@
 use crate::clock::TokioClock;
-use crate::lnd::{features_support_onion_messages, ONION_MESSAGES_OPTIONAL};
+use crate::lnd::{features_support_onion_messages, PeerConnector, ONION_MESSAGES_OPTIONAL};
+use crate::offers::connect_to_peer;
 use crate::rate_limit::{RateLimiter, RateLimiterCfg, TokenLimiter};
 use crate::{LifecycleSignals, LndkOnionMessenger, LDK_LOGGER_NAME};
 use async_trait::async_trait;
@@ -9,6 +10,7 @@ use bitcoin::Network;
 use core::ops::Deref;
 use futures::executor::block_on;
 use lightning::blinded_path::NodeIdLookUp;
+use lightning::events::{Event, EventHandler, EventsProvider, ReplayEvent};
 use lightning::ln::msgs::{Init, OnionMessage, OnionMessageHandler};
 use lightning::onion_message::async_payments::AsyncPaymentsMessageHandler;
 use lightning::onion_message::dns_resolution::DNSResolverMessageHandler;
@@ -284,7 +286,10 @@ impl LndkOnionMessenger {
 
         // Spin up a ticker that polls at an interval for any outgoing messages so that we can pass
         // on outgoing messages to LND.
-        let interval = time::interval(MSG_POLL_INTERVAL);
+        let mut interval = time::interval(MSG_POLL_INTERVAL);
+        // Set the missed tick behaviour to skip as we don't want to fill the queue with
+        // `MessengerEvents::SendOutgoing` events in case of a delay.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let (events_shutdown, events_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
@@ -311,11 +316,15 @@ impl LndkOnionMessenger {
         let mut message_sender = CustomMessenger {
             client: ln_client.clone(),
         };
+        let event_handler = LndkEventHandler {
+            lnd_client: ln_client.clone(),
+        };
         let consume_result = consume_messenger_events(
             onion_messenger,
             receiver,
             &mut message_sender,
             rate_limiter,
+            event_handler,
             network,
         )
         .await;
@@ -685,10 +694,11 @@ impl fmt::Display for MessengerEvents {
 /// consume_messenger_events receives a series of onion messaging related events and delivers them
 /// to the OnionMessenger provided, using the RateLimiter to limit resources consumed by each peer.
 async fn consume_messenger_events(
-    onion_messenger: impl OnionMessageHandler,
+    onion_messenger: impl OnionMessageHandler + EventsProvider,
     mut events: Receiver<MessengerEvents>,
     message_sender: &mut impl SendCustomMessage,
     rate_limiter: &mut impl RateLimiter,
+    event_handler: impl EventHandler,
     network: Network,
 ) -> Result<(), ConsumerError> {
     let chain_hash = ChainHash::using_genesis_block_const(network);
@@ -744,6 +754,8 @@ async fn consume_messenger_events(
                 onion_messenger.handle_onion_message(pubkey, &onion_message)
             }
             MessengerEvents::SendOutgoing => {
+                onion_messenger.process_pending_events(&event_handler);
+
                 for peer in rate_limiter.peers() {
                     if let Some(msg) = onion_messenger.next_onion_message_for_peer(peer) {
                         info!("Sending outgoing onion message to {peer}.");
@@ -850,12 +862,41 @@ async fn relay_outgoing_msg_event(
     }
 }
 
+struct LndkEventHandler<T: PeerConnector + Send + 'static + Clone> {
+    lnd_client: T,
+}
+
+impl<T: PeerConnector + Send + 'static + Clone> EventHandler for LndkEventHandler<T> {
+    fn handle_event(&self, event: Event) -> Result<(), ReplayEvent> {
+        match event {
+            Event::ConnectionNeeded {
+                node_id,
+                addresses: _,
+            } => {
+                debug!("ConnectionNeeded event received for node: {}", node_id);
+                let lnd_client = self.lnd_client.clone();
+
+                // TODO: we probably want to retry this connect_to_peer call if it fails
+                tokio::spawn(async move {
+                    if let Err(e) = connect_to_peer(lnd_client, node_id).await {
+                        error!("Failed to connect to peer: {}", e);
+                    }
+                });
+                Ok(())
+            }
+            Event::OnionMessageIntercepted { .. } => Ok(()),
+            Event::OnionMessagePeerConnected { .. } => Ok(()),
+            _ => Ok(()),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::test_utils::pubkey;
     use bitcoin::secp256k1::PublicKey;
     use bitcoin::Network;
+    use std::sync::Arc;
 
     use bytes::BufMut;
     use lightning::events::{EventHandler, EventsProvider};
@@ -907,6 +948,21 @@ mod tests {
             }
     }
 
+    mock! {
+        TestPeerConnector{}
+
+        impl Clone for TestPeerConnector {
+            fn clone(&self) -> Self;
+        }
+
+         #[async_trait]
+         impl PeerConnector for TestPeerConnector {
+             async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
+             async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<tonic_lnd::lnrpc::NodeInfo, Status>;
+             async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+         }
+    }
+
     // Mockall can't automatically produce a mock for EventsProvider since mockall requires generic
     // parameters be 'static. See: https://docs.rs/mockall/latest/mockall/#generic-traits-and-structs. So we add the trait to our
     // mock manually here.
@@ -915,7 +971,6 @@ mod tests {
         where
             H::Target: EventHandler,
         {
-            todo!()
         }
     }
 
@@ -980,11 +1035,11 @@ mod tests {
 
         rate_limiter
             .expect_peers()
-            .returning(move || vec![pk_1.clone(), pk_2.clone()]);
+            .returning(move || vec![pk_1, pk_2]);
 
         // Set up our mock to return an onion message for pk_1, and no onion messages for pk_2.
         mock.expect_next_onion_message_for_peer()
-            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1.clone())
+            .withf(move |actual_pk: &PublicKey| *actual_pk == pk_1)
             .returning(|_| Some(onion_message()));
 
         mock.expect_next_onion_message_for_peer()
@@ -1051,6 +1106,9 @@ mod tests {
             receiver,
             &mut sender_mock,
             &mut rate_limiter,
+            LndkEventHandler {
+                lnd_client: MockTestPeerConnector::new(),
+            },
             Network::Regtest,
         )
         .await
@@ -1080,6 +1138,9 @@ mod tests {
             receiver,
             &mut sender_mock,
             &mut rate_limiter,
+            LndkEventHandler {
+                lnd_client: MockTestPeerConnector::new(),
+            },
             Network::Regtest,
         )
         .await
@@ -1101,10 +1162,155 @@ mod tests {
             receiver_done,
             &mut sender_mock,
             &mut rate_limiter,
+            LndkEventHandler {
+                lnd_client: MockTestPeerConnector::new()
+            },
             Network::Regtest,
         )
         .await
         .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_lndk_event_handler_connection_needed() {
+        let mut connector_mock = MockTestPeerConnector::new();
+        let expected_node_id = pubkey(1);
+
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+
+        connector_mock.expect_clone().times(1).returning(move || {
+            let notify = notify_clone.clone();
+            let mut mock = MockTestPeerConnector::new();
+
+            mock.expect_list_peers()
+                .returning(|| Ok(tonic_lnd::lnrpc::ListPeersResponse { peers: vec![] }));
+
+            mock.expect_get_node_info().returning(|_, _| {
+                let node_addr = tonic_lnd::lnrpc::NodeAddress {
+                    network: String::from("regtest"),
+                    addr: String::from("127.0.0.1:9735"),
+                };
+                let node = tonic_lnd::lnrpc::LightningNode {
+                    addresses: vec![node_addr],
+                    ..Default::default()
+                };
+                Ok(tonic_lnd::lnrpc::NodeInfo {
+                    node: Some(node),
+                    ..Default::default()
+                })
+            });
+
+            mock.expect_connect_peer().times(1).returning(move |_, _| {
+                notify.notify_one(); // Signal completion
+                Ok(())
+            });
+            mock
+        });
+
+        let handler = LndkEventHandler {
+            lnd_client: connector_mock,
+        };
+
+        let event = Event::ConnectionNeeded {
+            node_id: expected_node_id,
+            addresses: vec![],
+        };
+
+        let result = handler.handle_event(event);
+        assert!(result.is_ok());
+        tokio::select! {
+            _ = notify.notified() => {
+                // Successfully called
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {
+                panic!("Spawned connection should have completed within timeout");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lndk_event_handler_other_events() {
+        let connector_mock = MockTestPeerConnector::new();
+        let handler = LndkEventHandler {
+            lnd_client: connector_mock,
+        };
+
+        // Test that other events just return ok.
+        let events = vec![
+            Event::OnionMessageIntercepted {
+                peer_node_id: pubkey(1),
+                message: onion_message(),
+            },
+            Event::OnionMessagePeerConnected {
+                peer_node_id: pubkey(2),
+            },
+        ];
+
+        for event in events {
+            let result = handler.handle_event(event);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lndk_event_handler_connection_failed() {
+        let mut connector_mock = MockTestPeerConnector::new();
+        let expected_node_id = pubkey(1);
+
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+
+        connector_mock.expect_clone().times(1).returning(move || {
+            let notify = notify_clone.clone();
+            let mut mock = MockTestPeerConnector::new();
+
+            mock.expect_list_peers()
+                .returning(|| Ok(tonic_lnd::lnrpc::ListPeersResponse { peers: vec![] }));
+
+            mock.expect_get_node_info().returning(|_, _| {
+                let node_addr = tonic_lnd::lnrpc::NodeAddress {
+                    network: String::from("regtest"),
+                    addr: String::from("127.0.0.1:9735"),
+                };
+                let node = tonic_lnd::lnrpc::LightningNode {
+                    addresses: vec![node_addr],
+                    ..Default::default()
+                };
+                Ok(tonic_lnd::lnrpc::NodeInfo {
+                    node: Some(node),
+                    ..Default::default()
+                })
+            });
+
+            mock.expect_connect_peer().times(1).returning(move |_, _| {
+                notify.notify_one();
+                Err(tonic_lnd::tonic::Status::unavailable("Connection failed"))
+            });
+            mock
+        });
+
+        let handler = LndkEventHandler {
+            lnd_client: connector_mock,
+        };
+
+        let event = Event::ConnectionNeeded {
+            node_id: expected_node_id,
+            addresses: vec![],
+        };
+
+        let result = handler.handle_event(event);
+        // Handler should still return Ok even if connection fails
+        assert!(result.is_ok());
+
+        tokio::select! {
+            _ = notify.notified() => {
+                // Successfully called
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {
+                panic!("Spawned connection should have completed within timeout");
+            }
+        }
     }
 
     #[tokio::test]

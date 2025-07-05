@@ -244,7 +244,7 @@ pub async fn send_invoice_request(
     Ok((contents, send_instructions))
 }
 
-async fn connect_to_peer(
+pub(crate) async fn connect_to_peer(
     mut connector: impl PeerConnector,
     node_id: PublicKey,
 ) -> Result<(), OfferError> {
