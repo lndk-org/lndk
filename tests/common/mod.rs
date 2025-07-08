@@ -10,7 +10,8 @@ use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
 use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
-use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger, OfferHandler};
+use lndk::offers::handler::OfferHandler;
+use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger};
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -194,7 +195,7 @@ pub async fn setup_lndk(
     };
 
     // Make sure lndk successfully sends the invoice_request.
-    let handler = Arc::new(lndk::OfferHandler::default());
+    let handler = Arc::new(OfferHandler::default());
     let messenger = lndk::LndkOnionMessenger::new();
 
     let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
@@ -342,7 +343,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
-            format!("--debuglevel=info,PEER=info"),
+            format!("--debuglevel=info,PEER=debug"),
             format!("--bitcoind.rpcuser={}", cookie_values.user),
             format!("--bitcoind.rpcpass={}", cookie_values.password),
             format!(
