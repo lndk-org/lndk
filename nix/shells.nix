@@ -18,6 +18,7 @@
           packages = [
             pkgs.rust-bin.stable.${rustChannel}.rust-analyzer
             bitcoinPkgs.bitcoind
+            pkgs.docker
           ];
 
           nativeBuildInputs = with pkgs; [

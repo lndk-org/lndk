@@ -92,3 +92,45 @@ jobs:
           nix_path: nixpkgs=channel:nixos-24.05
       - name: Check flake
         run: nix flake check
+
+  ############################################################
+  # run eclair integration tests
+  ############################################################
+  check-eclair:
+    name: Eclair integration tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "true"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get install protobuf-compiler
+      - name: setup go ${{ env.GO_VERSION }}
+        uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - name: Start bitcoind and eclair
+        run: docker compose -f itest-docker/docker-compose-eclair.yaml up -d --wait
+        working-directory: ${{ github.workspace }}
+
+      - name: Run Eclair integration tests
+        run: make eclair-itest
+        working-directory: ${{ github.workspace }}
+
+      - name: Print LND logs
+        if: always()
+        run: find /tmp/lndk-tests -path "*/lnd-data/lnd-logs/*" -type f -name "*.log" -exec echo "=== {} ===" \; -exec cat {} \;
+
+      - name: Print Eclair logs
+        if: always()
+        run: docker compose -f itest-docker/docker-compose-eclair.yaml logs eclair
+
+      - name: Print Bitcoin logs
+        if: always()
+        run: docker compose -f itest-docker/docker-compose-eclair.yaml logs bitcoin
+
+      # Always run docker compose down even if tests fail
+      - name: Stop containers
+        if: always()
+        run: docker compose -f itest-docker/docker-compose-eclair.yaml down
+        working-directory: ${{ github.workspace }}

@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::ops::FnMut;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::tonic::{Response, Status};
 
 // If a grpc call returns an error, retry_async will retry the grpc function call in case lnd is
@@ -19,17 +19,28 @@ where
     let resp = Err(());
     while retry_num < 3 {
         sleep(Duration::from_secs(3)).await;
-        match f().await {
-            Err(_) => {
-                println!("retrying {} call", func_name.clone());
-                retry_num += 1;
-                if retry_num == 5 {
-                    panic!("{} call failed after 3 retries", func_name);
+        match timeout(Duration::from_secs(60), f()).await {
+            Ok(call_result) => match call_result {
+                Err(e) => {
+                    println!("retry_async: error from {}: {:?}", func_name.clone(), e);
                 }
-                continue;
+                Ok(resp) => {
+                    return Ok(resp.into_inner());
+                }
+            },
+            Err(_) => {
+                println!(
+                    "retry_async: timeout after 60 seconds for {} call",
+                    func_name.clone()
+                );
             }
-            Ok(resp) => return Ok(resp.into_inner()),
-        };
+        }
+
+        retry_num += 1;
+        if retry_num == 5 {
+            println!("retry_async: {} call failed after 5 retries", func_name);
+            panic!("{} call failed after 5 retries", func_name);
+        }
     }
     resp
 }

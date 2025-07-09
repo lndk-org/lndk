@@ -6,9 +6,15 @@ LND_PKG := github.com/lightningnetwork/lnd
 TMP_DIR=$(if ${TMPDIR},${TMPDIR},/tmp)
 
 
-itest:
+build-lnd:
 	@$(call print, "Building lnd for itests.")
 	git submodule update --init --recursive
 	cd lnd/cmd/lnd; $(GO_BUILD) -tags="peersrpc signrpc walletrpc dev" -o $(TMP_DIR)/lndk-tests/bin/lnd-itest$(EXEC_SUFFIX)
-	RUSTFLAGS="--cfg itest" $(CARGO_TEST) --features itest --test '*' -- --test-threads=1 --nocapture
 
+eclair-itest:
+	$(MAKE) build-lnd
+	RUSTFLAGS="--cfg eclair_test --cfg itest" $(CARGO_TEST) --features itest --test integration_tests_eclair -- --test-threads=1 --nocapture
+
+itest:
+	$(MAKE) build-lnd
+	RUSTFLAGS="--cfg itest" $(CARGO_TEST) --features itest --test '*' -- --test-threads=1 --nocapture
