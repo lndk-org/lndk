@@ -1,9 +1,8 @@
 use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
-use crate::lndk_offers::{get_destination, validate_amount};
-use crate::{
-    lndkrpc, Bolt12InvoiceString, OfferError, OfferHandler, PayOfferParams, TLS_CERT_FILENAME,
-    TLS_KEY_FILENAME,
-};
+use crate::offers::handler::PayOfferParams;
+use crate::offers::validate_amount;
+use crate::offers::{get_destination, OfferError};
+use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
@@ -213,9 +212,10 @@ impl Offers for LNDKServer {
         };
 
         // We need to remove the payment from our tracking map now.
+        // TODO: This is a hack to remove the payment from the tracking map. We should do it when
+        // get_invoice params option or other way.
         {
-            let mut active_payments = self.offer_handler.active_payments.lock().unwrap();
-            active_payments.remove(&payment_id);
+            self.offer_handler.remove_active_payment(payment_id);
         }
 
         let reply: GetInvoiceResponse = GetInvoiceResponse {

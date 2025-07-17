@@ -1,7 +1,7 @@
 mod clock;
 #[allow(dead_code)]
 pub mod lnd;
-pub mod lndk_offers;
+pub mod offers;
 pub mod onion_messenger;
 mod rate_limit;
 pub mod server;
@@ -15,42 +15,30 @@ use crate::lnd::{
     LndCfg, LndNodeSigner, MIN_LND_MAJOR_VER, MIN_LND_MINOR_VER, MIN_LND_PATCH_VER,
     MIN_LND_PRE_RELEASE_VER,
 };
-use crate::lndk_offers::{OfferError, SendPaymentParams};
 use crate::onion_messenger::{LndkNodeIdLookUp, MessengerUtilities};
-use bitcoin::secp256k1::{PublicKey, Secp256k1};
-use bitcoin::Network;
+use bitcoin::secp256k1::PublicKey;
 use home::home_dir;
-use lightning::blinded_path::message::{BlindedMessagePath, OffersContext};
-use lightning::blinded_path::{Direction, IntroductionNode};
-use lightning::ln::channelmanager::PaymentId;
-use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::DecodeError;
 use lightning::ln::peer_handler::IgnoringMessageHandler;
 use lightning::offers::invoice::Bolt12Invoice;
-use lightning::offers::invoice_error::InvoiceError;
-use lightning::offers::offer::Offer;
-use lightning::onion_message::messenger::{
-    DefaultMessageRouter, Destination, MessageSendInstructions, OnionMessenger, Responder,
-    ResponseInstruction,
-};
-use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
+use lightning::onion_message::messenger::{DefaultMessageRouter, OnionMessenger};
+use lightning::onion_message::offers::OffersMessageHandler;
 use lightning::routing::gossip::NetworkGraph;
-use lightning::sign::EntropySource;
 use lnd::BUILD_TAGS_REQUIRED;
-use log::{debug, error, info, trace, warn, LevelFilter};
+use log::{error, info, LevelFilter};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use offers::handler::OfferHandler;
 use rate_limit::RateLimiterCfg;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, Once};
-use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::{ChanInfoRequest, GetInfoRequest, Payment};
+use std::sync::{Arc, Once};
+use tokio::time::Duration;
+use tonic_lnd::lnrpc::GetInfoRequest;
 use tonic_lnd::verrpc::VersionRequest;
-use tonic_lnd::Client;
 use triggered::{Listener, Trigger};
 
 static INIT: Once = Once::new();
@@ -71,7 +59,6 @@ pub const DEFAULT_CONFIG_FILE_NAME: &str = "lndk.conf";
 
 pub const TLS_CERT_FILENAME: &str = "tls-cert.pem";
 pub const TLS_KEY_FILENAME: &str = "tls-key.pem";
-pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
 
 #[allow(clippy::result_unit_err)]
 pub fn setup_logger(log_level: Option<String>, log_file: Option<PathBuf>) -> Result<(), ()> {
@@ -256,285 +243,6 @@ impl LndkOnionMessenger {
 impl Default for LndkOnionMessenger {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[allow(dead_code)]
-enum PaymentState {
-    InvoiceRequestCreated,
-    InvoiceRequestSent,
-    InvoiceReceived,
-    PaymentDispatched,
-    Paid,
-}
-
-pub struct OfferHandler {
-    // active_payments holds a list of payments we're currently attempting to make. When we create
-    // a new invoice request for a payment, we set a PaymentId in its metadata, which we also store
-    // here. Then we wait until we receive an invoice with the same PaymentId.
-    active_payments: Mutex<HashMap<PaymentId, PaymentInfo>>,
-    pending_messages: Mutex<Vec<(OffersMessage, MessageSendInstructions)>>,
-    pub messenger_utils: MessengerUtilities,
-    expanded_key: ExpandedKey,
-    /// The amount of time in seconds that we will wait for the offer creator to respond with
-    /// an invoice. If not provided, we will use the default value of 15 seconds.
-    pub response_invoice_timeout: u32,
-}
-
-pub struct PaymentInfo {
-    state: PaymentState,
-    invoice: Option<Bolt12Invoice>,
-}
-
-#[derive(Clone)]
-pub struct PayOfferParams {
-    pub offer: Offer,
-    pub amount: Option<u64>,
-    pub payer_note: Option<String>,
-    pub network: Network,
-    pub client: Client,
-    /// The destination the offer creator provided, which we will use to send the invoice request.
-    pub destination: Destination,
-    /// The path we will send back to the offer creator, so it knows where to send back the
-    /// invoice.
-    pub reply_path: Option<BlindedMessagePath>,
-    /// The amount of time in seconds that we will wait for the offer creator to respond with
-    /// an invoice. If not provided, we will use the default value of 15 seconds.
-    pub response_invoice_timeout: Option<u32>,
-}
-
-impl OfferHandler {
-    pub fn new(response_invoice_timeout: Option<u32>, seed: Option<[u8; 32]>) -> Self {
-        let messenger_utils = MessengerUtilities::default();
-        let random_bytes = match seed {
-            Some(seed) => seed,
-            None => messenger_utils.get_secure_random_bytes(),
-        };
-        let expanded_key = ExpandedKey::new(random_bytes);
-        let response_invoice_timeout =
-            response_invoice_timeout.unwrap_or(DEFAULT_RESPONSE_INVOICE_TIMEOUT);
-
-        OfferHandler {
-            active_payments: Mutex::new(HashMap::new()),
-            pending_messages: Mutex::new(Vec::new()),
-            messenger_utils,
-            expanded_key,
-            response_invoice_timeout,
-        }
-    }
-
-    /// Adds an offer to be paid with the amount specified. May only be called once for a single
-    /// offer.
-    pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
-        let client_clone = cfg.client.clone();
-        let (invoice, validated_amount, payment_id) = self.get_invoice(cfg).await?;
-
-        self.pay_invoice(client_clone, validated_amount, &invoice, payment_id)
-            .await
-    }
-
-    /// Sends an invoice request and waits for an invoice to be sent back to us.
-    /// Reminder that if this method returns an error after create_invoice_request is called, we
-    /// *must* remove the payment_id from self.active_payments.
-    pub(crate) async fn get_invoice(
-        &self,
-        cfg: PayOfferParams,
-    ) -> Result<(Bolt12Invoice, u64, PaymentId), OfferError> {
-        let (invoice_request, payment_id, validated_amount, offer_context) = self
-            .create_invoice_request(cfg.offer.clone(), cfg.network, cfg.amount, cfg.payer_note)
-            .await?;
-
-        self.send_invoice_request(
-            cfg.destination.clone(),
-            cfg.client.clone(),
-            invoice_request,
-            offer_context,
-        )
-        .await
-        .inspect_err(|_| {
-            let mut active_payments = self.active_payments.lock().unwrap();
-            active_payments.remove(&payment_id);
-        })?;
-
-        let cfg_timeout = cfg
-            .response_invoice_timeout
-            .unwrap_or(self.response_invoice_timeout);
-
-        let invoice = match timeout(
-            Duration::from_secs(cfg_timeout as u64),
-            self.wait_for_invoice(payment_id),
-        )
-        .await
-        {
-            Ok(invoice) => invoice,
-            Err(_) => {
-                error!("Did not receive invoice in {cfg_timeout} seconds.");
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-                return Err(OfferError::InvoiceTimeout(cfg_timeout));
-            }
-        };
-        {
-            let mut active_payments = self.active_payments.lock().unwrap();
-            active_payments
-                .entry(payment_id)
-                .and_modify(|entry| entry.state = PaymentState::InvoiceReceived);
-        }
-
-        Ok((invoice, validated_amount, payment_id))
-    }
-
-    /// Sends an invoice request and waits for an invoice to be sent back to us.
-    /// Reminder that if this method returns an error after create_invoice_request is called, we
-    /// *must* remove the payment_id from self.active_payments.
-    pub(crate) async fn pay_invoice(
-        &self,
-        client: Client,
-        amount: u64,
-        invoice: &Bolt12Invoice,
-        payment_id: PaymentId,
-    ) -> Result<Payment, OfferError> {
-        let payment_hash = invoice.payment_hash();
-        let payment_path = &invoice.payment_paths()[0];
-
-        let params = SendPaymentParams {
-            path: payment_path.clone(),
-            cltv_expiry_delta: payment_path.payinfo.cltv_expiry_delta,
-            fee_base_msat: payment_path.payinfo.fee_base_msat,
-            fee_ppm: payment_path.payinfo.fee_proportional_millionths,
-            payment_hash: payment_hash.0,
-            msats: amount,
-            payment_id,
-        };
-
-        let intro_node_id = match params.path.introduction_node() {
-            IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
-            IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                let get_chan_info_request = ChanInfoRequest {
-                    chan_id: *scid,
-                    chan_point: "".to_string(),
-                };
-                let chan_info = client
-                    .clone()
-                    .lightning_read_only()
-                    .get_chan_info(get_chan_info_request)
-                    .await
-                    .map_err(OfferError::GetChannelInfo)?
-                    .into_inner();
-                match direction {
-                    Direction::NodeOne => Some(chan_info.node1_pub),
-                    Direction::NodeTwo => Some(chan_info.node2_pub),
-                }
-            }
-        };
-        debug!(
-            "Attempting to pay invoice with introduction node {:?}",
-            intro_node_id
-        );
-
-        self.send_payment(client, params)
-            .await
-            .inspect(|_| {
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-            })
-            .inspect_err(|_| {
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-            })
-    }
-
-    /// wait_for_invoice waits for the offer creator to respond with an invoice.
-    async fn wait_for_invoice(&self, payment_id: PaymentId) -> Bolt12Invoice {
-        loop {
-            {
-                let active_payments = self.active_payments.lock().unwrap();
-                if let Some(pay_info) = active_payments.get(&payment_id) {
-                    if let Some(invoice) = pay_info.invoice.clone() {
-                        return invoice;
-                    }
-                };
-            }
-            sleep(Duration::from_secs(2)).await;
-        }
-    }
-}
-
-impl Default for OfferHandler {
-    fn default() -> Self {
-        Self::new(None, None)
-    }
-}
-
-impl OffersMessageHandler for OfferHandler {
-    fn handle_message(
-        &self,
-        message: OffersMessage,
-        context: Option<OffersContext>,
-        responder: Option<Responder>,
-    ) -> Option<(OffersMessage, ResponseInstruction)> {
-        match message {
-            OffersMessage::InvoiceRequest(_) => None,
-            OffersMessage::Invoice(invoice) => {
-                let secp_ctx = &Secp256k1::new();
-                let offer_context = context?;
-                let (payment_id, nonce) = match offer_context {
-                    OffersContext::OutboundPayment {
-                        nonce, payment_id, ..
-                    } => (payment_id, nonce),
-                    _ => {
-                        return None;
-                    }
-                };
-                match invoice.verify_using_payer_data(
-                    payment_id,
-                    nonce,
-                    &self.expanded_key,
-                    secp_ctx,
-                ) {
-                    Ok(payment_id) => {
-                        info!("Successfully verified invoice for payment_id {payment_id}");
-                        let mut active_payments = self.active_payments.lock().unwrap();
-                        let Some(pay_info) = active_payments.get_mut(&payment_id) else {
-                            warn!("We received an invoice for a payment that does not exist: {payment_id:?}. Invoice is ignored.");
-                            return None;
-                        };
-                        if pay_info.invoice.is_some() {
-                            warn!("We already received an invoice with this payment id. Invoice is ignored.");
-                            return None;
-                        }
-                        pay_info.state = PaymentState::InvoiceReceived;
-                        pay_info.invoice = Some(invoice.clone());
-
-                        None
-                    }
-                    Err(()) => responder.map(|r| {
-                        (
-                            OffersMessage::InvoiceError(InvoiceError::from_string(String::from(
-                                "invoice verification failure",
-                            ))),
-                            r.respond(),
-                        )
-                    }),
-                }
-            }
-            OffersMessage::InvoiceError(error) => {
-                trace!("Received an invoice error: {error}.");
-                if let Some(OffersContext::OutboundPayment {
-                    payment_id,
-                    nonce,
-                    hmac: Some(hmac),
-                }) = context
-                {
-                    self.handle_invoice_error(payment_id, nonce, hmac)
-                }
-                None
-            }
-        }
-    }
-
-    fn release_pending_messages(&self) -> Vec<(OffersMessage, MessageSendInstructions)> {
-        core::mem::take(&mut self.pending_messages.lock().unwrap())
     }
 }
 
