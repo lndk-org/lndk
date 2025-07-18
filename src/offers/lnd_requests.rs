@@ -211,32 +211,27 @@ pub async fn send_invoice_request(
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     let message_context = MessageContext::Offers(offer_context);
     let reply_path =
-        Some(create_reply_path(client.clone(), pubkey, message_context, messenger_utils).await?);
+        create_reply_path(client.clone(), pubkey, message_context, messenger_utils).await?;
 
-    if let Some(ref reply_path) = reply_path {
-        let reply_path_intro_node_id = match reply_path.introduction_node() {
-            IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
-            IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                get_node_id(client.clone(), *scid, *direction)
-                    .await?
-                    .to_string()
-            }
-        };
-        debug!(
-            "In invoice request, we chose {} as the introduction node of the reply path",
-            reply_path_intro_node_id
-        );
+    let reply_path_intro_node_id = match reply_path.introduction_node() {
+        IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
+        IntroductionNode::DirectedShortChannelId(direction, scid) => {
+            get_node_id(client.clone(), *scid, *direction)
+                .await?
+                .to_string()
+        }
     };
+    debug!(
+        "In invoice request, we chose {} as the introduction node of the reply path",
+        reply_path_intro_node_id
+    );
 
     let contents = OffersMessage::InvoiceRequest(invoice_request);
-    let send_instructions = if let Some(reply_path_inner) = reply_path {
-        trace!("Sending invoice request with reply path");
-        MessageSendInstructions::WithSpecifiedReplyPath {
-            destination,
-            reply_path: reply_path_inner,
-        }
-    } else {
-        MessageSendInstructions::WithoutReplyPath { destination }
+    trace!("Sending invoice request with reply path");
+
+    let send_instructions = MessageSendInstructions::WithSpecifiedReplyPath {
+        destination,
+        reply_path,
     };
 
     Ok((contents, send_instructions))
