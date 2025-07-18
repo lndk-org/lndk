@@ -420,10 +420,7 @@ mod tests {
                 ..Default::default()
             };
 
-            Ok(ListPeersResponse {
-                peers: vec![peer],
-                ..Default::default()
-            })
+            Ok(ListPeersResponse { peers: vec![peer] })
         });
 
         connector_mock.expect_get_node_info().returning(|_, _| {
@@ -706,10 +703,10 @@ mod tests {
                 features: BlindedHopFeatures::empty(),
                 next_blinding_override: None,
             },
-            node_id: node_id,
+            node_id,
             htlc_maximum_msat: 1_000_000_000_000,
         }];
-        let payment_path = BlindedPaymentPath::new(
+        BlindedPaymentPath::new(
             &intermediate_nodes,
             node_id,
             payee_tlvs,
@@ -718,8 +715,7 @@ mod tests {
             &entropy_source,
             &secp_ctx,
         )
-        .unwrap();
-        payment_path
+        .unwrap()
     }
 
     #[tokio::test]
@@ -756,7 +752,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };
@@ -779,7 +775,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };
@@ -812,7 +808,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };
