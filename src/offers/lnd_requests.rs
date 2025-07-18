@@ -281,6 +281,18 @@ pub(crate) async fn get_node_id(
     scid: u64,
     direction: Direction,
 ) -> Result<PublicKey, OfferError> {
+    let pubkey = get_node_id_from_scid(client, scid, direction).await?;
+    PublicKey::from_slice(pubkey.as_bytes()).map_err(|e| {
+        error!("Could not parse pubkey. {e}");
+        OfferError::IntroductionNodeNotFound
+    })
+}
+
+pub(super) async fn get_node_id_from_scid(
+    client: Client,
+    scid: u64,
+    direction: Direction,
+) -> Result<String, OfferError> {
     let get_info_request = ChanInfoRequest {
         chan_id: scid,
         chan_point: "".to_string(),
@@ -291,14 +303,10 @@ pub(crate) async fn get_node_id(
         .await
         .map_err(OfferError::GetChannelInfo)?
         .into_inner();
-    let pubkey = match direction {
-        Direction::NodeOne => channel_info.node1_pub,
-        Direction::NodeTwo => channel_info.node2_pub,
-    };
-    PublicKey::from_slice(pubkey.as_bytes()).map_err(|e| {
-        error!("Could not parse pubkey. {e}");
-        OfferError::IntroductionNodeNotFound
-    })
+    match direction {
+        Direction::NodeOne => Ok(channel_info.node1_pub),
+        Direction::NodeTwo => Ok(channel_info.node2_pub),
+    }
 }
 
 #[cfg(test)]
