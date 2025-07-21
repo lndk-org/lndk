@@ -211,32 +211,27 @@ pub async fn send_invoice_request(
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     let message_context = MessageContext::Offers(offer_context);
     let reply_path =
-        Some(create_reply_path(client.clone(), pubkey, message_context, messenger_utils).await?);
+        create_reply_path(client.clone(), pubkey, message_context, messenger_utils).await?;
 
-    if let Some(ref reply_path) = reply_path {
-        let reply_path_intro_node_id = match reply_path.introduction_node() {
-            IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
-            IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                get_node_id(client.clone(), *scid, *direction)
-                    .await?
-                    .to_string()
-            }
-        };
-        debug!(
-            "In invoice request, we chose {} as the introduction node of the reply path",
-            reply_path_intro_node_id
-        );
+    let reply_path_intro_node_id = match reply_path.introduction_node() {
+        IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
+        IntroductionNode::DirectedShortChannelId(direction, scid) => {
+            get_node_id(client.clone(), *scid, *direction)
+                .await?
+                .to_string()
+        }
     };
+    debug!(
+        "In invoice request, we chose {} as the introduction node of the reply path",
+        reply_path_intro_node_id
+    );
 
     let contents = OffersMessage::InvoiceRequest(invoice_request);
-    let send_instructions = if let Some(reply_path_inner) = reply_path {
-        trace!("Sending invoice request with reply path");
-        MessageSendInstructions::WithSpecifiedReplyPath {
-            destination,
-            reply_path: reply_path_inner,
-        }
-    } else {
-        MessageSendInstructions::WithoutReplyPath { destination }
+    trace!("Sending invoice request with reply path");
+
+    let send_instructions = MessageSendInstructions::WithSpecifiedReplyPath {
+        destination,
+        reply_path,
     };
 
     Ok((contents, send_instructions))
@@ -286,6 +281,18 @@ pub(crate) async fn get_node_id(
     scid: u64,
     direction: Direction,
 ) -> Result<PublicKey, OfferError> {
+    let pubkey = get_node_id_from_scid(client, scid, direction).await?;
+    PublicKey::from_slice(pubkey.as_bytes()).map_err(|e| {
+        error!("Could not parse pubkey. {e}");
+        OfferError::IntroductionNodeNotFound
+    })
+}
+
+pub(super) async fn get_node_id_from_scid(
+    client: Client,
+    scid: u64,
+    direction: Direction,
+) -> Result<String, OfferError> {
     let get_info_request = ChanInfoRequest {
         chan_id: scid,
         chan_point: "".to_string(),
@@ -296,14 +303,10 @@ pub(crate) async fn get_node_id(
         .await
         .map_err(OfferError::GetChannelInfo)?
         .into_inner();
-    let pubkey = match direction {
-        Direction::NodeOne => channel_info.node1_pub,
-        Direction::NodeTwo => channel_info.node2_pub,
-    };
-    PublicKey::from_slice(pubkey.as_bytes()).map_err(|e| {
-        error!("Could not parse pubkey. {e}");
-        OfferError::IntroductionNodeNotFound
-    })
+    match direction {
+        Direction::NodeOne => Ok(channel_info.node1_pub),
+        Direction::NodeTwo => Ok(channel_info.node2_pub),
+    }
 }
 
 #[cfg(test)]
@@ -425,10 +428,7 @@ mod tests {
                 ..Default::default()
             };
 
-            Ok(ListPeersResponse {
-                peers: vec![peer],
-                ..Default::default()
-            })
+            Ok(ListPeersResponse { peers: vec![peer] })
         });
 
         connector_mock.expect_get_node_info().returning(|_, _| {
@@ -711,10 +711,10 @@ mod tests {
                 features: BlindedHopFeatures::empty(),
                 next_blinding_override: None,
             },
-            node_id: node_id,
+            node_id,
             htlc_maximum_msat: 1_000_000_000_000,
         }];
-        let payment_path = BlindedPaymentPath::new(
+        BlindedPaymentPath::new(
             &intermediate_nodes,
             node_id,
             payee_tlvs,
@@ -723,8 +723,7 @@ mod tests {
             &entropy_source,
             &secp_ctx,
         )
-        .unwrap();
-        payment_path
+        .unwrap()
     }
 
     #[tokio::test]
@@ -761,7 +760,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };
@@ -784,7 +783,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };
@@ -817,7 +816,7 @@ mod tests {
             cltv_expiry_delta: 200,
             fee_base_msat: 1,
             fee_ppm: 0,
-            payment_hash: payment_hash,
+            payment_hash,
             msats: 2000,
             payment_id,
         };

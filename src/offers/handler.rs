@@ -3,7 +3,7 @@ use bitcoin::key::Secp256k1;
 use bitcoin::Network;
 use lightning::blinded_path::message::{BlindedMessagePath, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
-use lightning::blinded_path::{Direction, IntroductionNode};
+use lightning::blinded_path::IntroductionNode;
 use lightning::ln::channelmanager::{PaymentId, Verification};
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::offers::invoice::Bolt12Invoice;
@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
-use tonic_lnd::lnrpc::{ChanInfoRequest, Payment};
+use tonic_lnd::lnrpc::Payment;
 use tonic_lnd::Client;
 
-use super::lnd_requests::{create_invoice_request, send_invoice_request};
+use super::lnd_requests::{create_invoice_request, get_node_id_from_scid, send_invoice_request};
 use super::OfferError;
 use crate::offers::lnd_requests::{send_payment, track_payment};
 use crate::onion_messenger::MessengerUtilities;
@@ -215,21 +215,8 @@ impl OfferHandler {
         let intro_node_id = match params.path.introduction_node() {
             IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                let get_chan_info_request = ChanInfoRequest {
-                    chan_id: *scid,
-                    chan_point: "".to_string(),
-                };
-                let chan_info = client
-                    .clone()
-                    .lightning_read_only()
-                    .get_chan_info(get_chan_info_request)
-                    .await
-                    .map_err(OfferError::GetChannelInfo)?
-                    .into_inner();
-                match direction {
-                    Direction::NodeOne => Some(chan_info.node1_pub),
-                    Direction::NodeTwo => Some(chan_info.node2_pub),
-                }
+                let node_id_pub = get_node_id_from_scid(client.clone(), *scid, *direction).await?;
+                Some(node_id_pub)
             }
         };
         debug!(
