@@ -1,4 +1,5 @@
 use crate::clock::TokioClock;
+use crate::grpc::Retryable;
 use crate::lnd::{features_support_onion_messages, PeerConnector, ONION_MESSAGES_OPTIONAL};
 use crate::offers::connect_to_peer;
 use crate::rate_limit::{RateLimiter, RateLimiterCfg, TokenLimiter};
@@ -32,10 +33,13 @@ use std::fmt;
 use std::io::Cursor;
 use std::marker::Copy;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Notify;
 use tokio::time::{sleep, timeout, Duration, Interval};
 use tokio::{select, time};
-use tonic_lnd::lnrpc::ChanInfoRequest;
+use tonic_lnd::lnrpc::{ChanInfoRequest, ListPeersRequest, ListPeersResponse};
+use tonic_lnd::tonic::Response;
 use tonic_lnd::Client;
 use tonic_lnd::{
     lnrpc::peer_event::EventType::PeerOffline, lnrpc::peer_event::EventType::PeerOnline,
@@ -95,7 +99,7 @@ impl NodeIdLookUp for LndkNodeIdLookUp {
 }
 
 /// MessengerUtilities is a utility struct used to provide Logger and EntropySource trait
-/// implementations for LDK’s OnionMessenger.
+/// implementations for LDK's OnionMessenger.
 pub struct MessengerUtilities {
     entropy_source: RandomBytes,
 }
@@ -174,7 +178,6 @@ impl LndkOnionMessenger {
         CMH: Deref,
     >(
         &self,
-        current_peers: HashMap<PublicKey, bool>,
         ln_client: &mut tonic_lnd::LightningClient,
         onion_messenger: OnionMessenger<ES, NS, L, NL, MR, OMH, APH, DRH, CMH>,
         network: Network,
@@ -192,6 +195,11 @@ impl LndkOnionMessenger {
         DRH::Target: DNSResolverMessageHandler,
         CMH::Target: CustomOnionMessageHandler + Sized,
     {
+        // On startup, we want to get a list of our currently online peers to notify the onion
+        // messenger that they are connected. This sets up our "start state" for the
+        // messenger correctly.
+        let current_peers = get_current_peers(&mut ln_client.clone()).await?;
+
         // Setup channels that we'll use to communicate onion messenger events. We buffer our
         // channels by the number of peers (+1 because we require a non-zero buffer) that
         // the node currently has so that we can send all of our startup online events in
@@ -210,17 +218,47 @@ impl LndkOnionMessenger {
 
         let mut set = tokio::task::JoinSet::new();
 
+        // Setup channels that we'll use to communicate whenever a restart event happens.
+        // Whenever a new event is consumed we will get current peers and message peers
+        // where reconnected.
+        let reconnected_notification = Arc::new(Notify::new());
+        let (reconnection_shutdown, reconnection_listener) =
+            (signals.shutdown.clone(), signals.listener.clone());
+        let reconnection_notification_receiver = reconnected_notification.clone();
+        let mut reconnection_client = Retryable::new(ln_client.clone());
+        let reconnection_sender = sender.clone();
+        set.spawn(async move {
+            match receive_reconnection_event(
+                &mut reconnection_client,
+                reconnection_notification_receiver,
+                reconnection_sender,
+                reconnection_listener,
+            )
+            .await
+            {
+                Ok(_) => debug!("Reconnection listener completed"),
+                Err(e) => {
+                    error!("Notify peer connected: {e}");
+                    reconnection_shutdown.trigger();
+                }
+            }
+        });
+
         // Subscribe to peer events from LND first thing so that we don't miss any online/offline
         // events while we are starting up. The onion messenger can handle superfluous
         // online/offline reports, so it's okay if this ends up creating some duplicate
         // events. The event subscription from LND blocks until it gets its first event (which
         // could take very long), so we get the subscription itself inside of our producer thread.
-        let mut peers_client = ln_client.clone();
+        let mut peers_client = Retryable::new(ln_client.clone());
         let peers_sender = sender.clone();
         let (peers_shutdown, peers_listener) = (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
             let peer_subscription = match peers_client
-                .subscribe_peer_events(tonic_lnd::lnrpc::PeerEventSubscription {})
+                .with_infinite_retries(
+                    LightningClient::subscribe_peer_events,
+                    tonic_lnd::lnrpc::PeerEventSubscription {},
+                    Some(reconnected_notification),
+                )
                 .await
             {
                 Ok(response) => {
@@ -236,7 +274,7 @@ impl LndkOnionMessenger {
 
             let peer_stream = PeerStream {
                 peer_subscription,
-                client: peers_client,
+                client: peers_client.into_inner(),
             };
 
             match produce_peer_events(peer_stream, peers_sender, peers_listener).await {
@@ -249,13 +287,17 @@ impl LndkOnionMessenger {
         });
 
         // Subscribe to custom messaging events from LND so that we can receive incoming messages.
-        let mut messages_client = ln_client.clone();
+        let mut messages_client = Retryable::new(ln_client.clone());
         let in_msg_sender = sender.clone();
         let (messages_shutdown, messages_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
             let message_subscription = match messages_client
-                .subscribe_custom_messages(tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {})
+                .with_infinite_retries(
+                    LightningClient::subscribe_custom_messages,
+                    tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {},
+                    None,
+                )
                 .await
             {
                 Ok(response) => {
@@ -314,7 +356,7 @@ impl LndkOnionMessenger {
             TokioClock::new(),
         );
         let mut message_sender = CustomMessenger {
-            client: ln_client.clone(),
+            client: Retryable::new(ln_client.clone()),
         };
         let event_handler = LndkEventHandler {
             lnd_client: ln_client.clone(),
@@ -354,6 +396,34 @@ impl LndkOnionMessenger {
 
         Ok(())
     }
+}
+
+async fn get_current_peers(
+    client: &mut tonic_lnd::LightningClient,
+) -> Result<HashMap<PublicKey, bool>, ()> {
+    debug!("Getting current peers");
+    let current_peers = client
+        .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
+            latest_error: false,
+        })
+        .await
+        .map_err(|e| {
+            error!("Could not lookup current peers: {e}");
+        })?;
+    let peer_support = build_peer_support_from_response(current_peers);
+    Ok(peer_support)
+}
+
+fn build_peer_support_from_response(
+    current_peers: Response<ListPeersResponse>,
+) -> HashMap<PublicKey, bool> {
+    let mut peer_support = HashMap::new();
+    for peer in current_peers.into_inner().peers {
+        let pubkey = PublicKey::from_str(&peer.pub_key).expect("Public Key not valid");
+        let onion_support = features_support_onion_messages(&peer.features);
+        peer_support.insert(pubkey, onion_support);
+    }
+    peer_support
 }
 
 /// lookup_onion_support performs a best-effort lookup in the node's list of current peers to
@@ -476,12 +546,67 @@ impl PeerEventProducer for PeerStream {
     async fn receive(&mut self) -> Result<PeerEvent, Status> {
         match self.peer_subscription.message().await? {
             Some(peer_event) => Ok(peer_event),
-            None => Err(Status::unknown("no event provided")),
+            _none => Err(Status::unknown("no event provided")),
         }
     }
 
     async fn onion_support(&mut self, pubkey: &PublicKey) -> bool {
         lookup_onion_support(pubkey, &mut self.client).await
+    }
+}
+
+#[async_trait]
+trait ReconnectionClient: Send + Sync {
+    async fn list_peers_with_retries(
+        &mut self,
+        request: ListPeersRequest,
+    ) -> Result<Response<ListPeersResponse>, Status>;
+}
+
+#[async_trait]
+impl ReconnectionClient for Retryable<LightningClient> {
+    async fn list_peers_with_retries(
+        &mut self,
+        request: ListPeersRequest,
+    ) -> Result<Response<ListPeersResponse>, Status> {
+        self.with_infinite_retries(LightningClient::list_peers, request, None)
+            .await
+    }
+}
+
+async fn receive_reconnection_event(
+    client: &mut impl ReconnectionClient,
+    reconnection_listener: Arc<Notify>,
+    sender: Sender<MessengerEvents>,
+    shutdown_listener: Listener,
+) -> Result<(), Box<dyn Error>> {
+    loop {
+        select! {
+            biased;
+            _ = shutdown_listener.clone() => {
+                info!("Received shutdown signal, exiting reconnection listener.");
+                return Ok(())
+            }
+
+            _ = reconnection_listener.notified() => {
+                info!("Received reconnection event.");
+                let request = tonic_lnd::lnrpc::ListPeersRequest {
+                    latest_error: false
+                };
+
+                let list_peer_response = client.list_peers_with_retries(request).await?;
+                debug!("Successfully fetched peers from reconnection to LND.");
+                let current_peers = build_peer_support_from_response(list_peer_response);
+                for (peer, onion_support) in current_peers.clone() {
+                    sender
+                    .send(MessengerEvents::PeerConnected(peer, onion_support))
+                    .await?;
+                }
+                debug!("Reconnection listener completed.");
+
+            }
+
+        }
     }
 }
 
@@ -782,7 +907,7 @@ trait SendCustomMessage {
 }
 
 struct CustomMessenger {
-    client: LightningClient,
+    client: Retryable<LightningClient>,
 }
 
 #[async_trait]
@@ -791,7 +916,11 @@ impl SendCustomMessage for CustomMessenger {
         &mut self,
         request: SendCustomMessageRequest,
     ) -> Result<SendCustomMessageResponse, Status> {
-        match self.client.send_custom_message(request).await {
+        match self
+            .client
+            .with_max_attempts(LightningClient::send_custom_message, request, Some(3))
+            .await
+        {
             Ok(resp) => Ok(resp.into_inner()),
             Err(status) => Err(status),
         }
@@ -1002,6 +1131,105 @@ mod tests {
             fn peers(&self) -> Vec<PublicKey>;
             fn query_peer(&mut self, peer_key: PublicKey) -> bool;
         }
+    }
+    mock! {
+        ReconnectionClient {}
+
+        #[async_trait]
+        impl ReconnectionClient for ReconnectionClient {
+            async fn list_peers_with_retries(
+                &mut self,
+                request: ListPeersRequest,
+            ) -> Result<Response<ListPeersResponse>, Status>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_receive_reconection_event() {
+        let (sender, mut receiver) = channel(4);
+        let (_shutdown, listener) = triggered::trigger();
+        let reconnect_notification = Arc::new(Notify::new());
+
+        let mut mock_client = MockReconnectionClient::new();
+
+        let pubkey1 = pubkey(1);
+        let pubkey2 = pubkey(2);
+        let mock_peers = vec![
+            tonic_lnd::lnrpc::Peer {
+                pub_key: pubkey1.to_string(),
+                features: HashMap::new(),
+                ..Default::default()
+            },
+            tonic_lnd::lnrpc::Peer {
+                pub_key: pubkey2.to_string(),
+                features: {
+                    let mut features = HashMap::new();
+                    features.insert(
+                        ONION_MESSAGES_OPTIONAL,
+                        tonic_lnd::lnrpc::Feature::default(),
+                    );
+                    features
+                },
+                ..Default::default()
+            },
+        ];
+
+        mock_client
+            .expect_list_peers_with_retries()
+            .times(1)
+            .returning(move |_| {
+                Ok(Response::new(ListPeersResponse {
+                    peers: mock_peers.clone(),
+                }))
+            });
+
+        let notify_clone = reconnect_notification.clone();
+
+        let task = tokio::spawn(async move {
+            receive_reconnection_event(
+                &mut mock_client,
+                reconnect_notification.clone(),
+                sender,
+                listener,
+            )
+            .await
+            .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        notify_clone.notify_one();
+        let timeout_duration = Duration::from_millis(100);
+        let mut received_events = Vec::new();
+        for _ in 0..2 {
+            match tokio::time::timeout(timeout_duration, receiver.recv()).await {
+                Ok(Some(event)) => {
+                    received_events.push(event);
+                }
+                Ok(None) => panic!("Channel closed unexpectedly"),
+                Err(_) => panic!("Timed out waiting for events"),
+            }
+        }
+
+        assert_eq!(received_events.len(), 2);
+        let has_peer1_event = received_events.iter().any(|e| {
+            if let MessengerEvents::PeerConnected(pk, onion_support) = e {
+                *pk == pubkey1 && !*onion_support
+            } else {
+                false
+            }
+        });
+        let has_peer2_event = received_events.iter().any(|e| {
+            if let MessengerEvents::PeerConnected(pk, onion_support) = e {
+                *pk == pubkey2 && *onion_support
+            } else {
+                false
+            }
+        });
+
+        assert!(has_peer1_event, "Missing PeerConnected event for peer1");
+        assert!(has_peer2_event, "Missing PeerConnected event for peer2");
+
+        task.abort();
     }
 
     #[tokio::test]
