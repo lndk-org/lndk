@@ -242,6 +242,68 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf, PathBuf) {
     (ldk_data_dir, lnd_data_dir, lndk_data_dir)
 }
 
+pub fn get_lnd_args(
+    lnd_dir_tmp: &TempDir,
+    bitcoind_connect_params: &ConnectParams,
+    lnd_data_dir: &PathBuf,
+    port: u16,
+    lnd_port: u16,
+    zmq_block_port: u16,
+    zmq_tx_port: u16,
+) -> (Vec<String>, File, File) {
+    let lnd_dir = lnd_dir_tmp.path();
+    let connect_params = bitcoind_connect_params.get_cookie_values().unwrap();
+    let log_dir_path_buf = lnd_data_dir.join(format!("lnd-logs"));
+    let log_dir = log_dir_path_buf.as_path();
+    let data_dir = lnd_dir.join("data").to_str().unwrap().to_string();
+    let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
+    let key_path = lnd_dir.to_str().unwrap().to_string() + "/tls.key";
+
+    let port = port;
+    let rpc_addr = format!("localhost:{}", port);
+    let lnd_port = lnd_port;
+    let lnd_addr = format!("localhost:{}", lnd_port);
+    let cookie_values = connect_params.unwrap();
+    let args = [
+        format!("--listen={}", lnd_addr),
+        format!("--rpclisten={}", rpc_addr),
+        format!("--norest"),
+        // With this flag, we don't have to unlock the wallet on startup.
+        format!("--noseedbackup"),
+        format!("--bitcoin.active"),
+        format!("--bitcoin.node=bitcoind"),
+        format!("--bitcoin.regtest"),
+        format!("--datadir={}", data_dir),
+        format!("--tlscertpath={}", cert_path.clone()),
+        format!("--tlskeypath={}", key_path),
+        format!("--logdir={}", log_dir.display()),
+        format!("--debuglevel=info,PEER=debug"),
+        format!("--bitcoind.rpcuser={}", cookie_values.user),
+        format!("--bitcoind.rpcpass={}", cookie_values.password),
+        format!(
+            "--bitcoind.zmqpubrawblock=tcp://127.0.0.1:{}",
+            zmq_block_port
+        ),
+        format!("--bitcoind.zmqpubrawtx=tcp://127.0.0.1:{}", zmq_tx_port),
+        format!(
+            "--bitcoind.rpchost={:?}",
+            bitcoind_connect_params.rpc_socket
+        ),
+        format!("--protocol.custom-message=513"),
+        format!("--protocol.custom-nodeann=39"),
+        format!("--protocol.custom-init=39"),
+    ];
+
+    let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
+    let stderr_log_path = lnd_data_dir.join("lnd-itest-stderr.log");
+    let stdout_file =
+        File::create(&stdout_log_path).expect("Failed to create stdout log file for lnd-itest");
+    let stderr_file =
+        File::create(&stderr_log_path).expect("Failed to create stderr log file for lnd-itest");
+
+    (args.to_vec(), stdout_file, stderr_file)
+}
+
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
 pub struct BitcoindNode {
     pub node: Node,
@@ -292,6 +354,12 @@ pub struct LndNode {
     pub macaroon_path: String,
     _handle: Child,
     pub client: Option<Client>,
+    _bitcoind_connect_params: ConnectParams,
+    _zmq_block_port: u16,
+    _zmq_tx_port: u16,
+    _port: u16,
+    _lnd_port: u16,
+    _lnd_data_dir: PathBuf,
 }
 
 impl LndNode {
@@ -316,56 +384,22 @@ impl LndNode {
             .unwrap()
             .to_string();
 
-        let connect_params = bitcoind_connect_params.get_cookie_values().unwrap();
-        let log_dir_path_buf = lnd_data_dir.join(format!("lnd-logs"));
-        let log_dir = log_dir_path_buf.as_path();
-        let data_dir = lnd_dir.join("data").to_str().unwrap().to_string();
-        let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
-        let key_path = lnd_dir.to_str().unwrap().to_string() + "/tls.key";
-
         // Have node run on a randomly assigned grpc port. That way, if we run more than one lnd
         // node, they won't clash.
         let port = corepc_node::get_available_port().unwrap();
-        let rpc_addr = format!("localhost:{}", port);
         let lnd_port = corepc_node::get_available_port().unwrap();
-        let lnd_addr = format!("localhost:{}", lnd_port);
-        let cookie_values = connect_params.unwrap();
-        let args = [
-            format!("--listen={}", lnd_addr),
-            format!("--rpclisten={}", rpc_addr),
-            format!("--norest"),
-            // With this flag, we don't have to unlock the wallet on startup.
-            format!("--noseedbackup"),
-            format!("--bitcoin.active"),
-            format!("--bitcoin.node=bitcoind"),
-            format!("--bitcoin.regtest"),
-            format!("--datadir={}", data_dir),
-            format!("--tlscertpath={}", cert_path),
-            format!("--tlskeypath={}", key_path),
-            format!("--logdir={}", log_dir.display()),
-            format!("--debuglevel=info,PEER=debug"),
-            format!("--bitcoind.rpcuser={}", cookie_values.user),
-            format!("--bitcoind.rpcpass={}", cookie_values.password),
-            format!(
-                "--bitcoind.zmqpubrawblock=tcp://127.0.0.1:{}",
-                zmq_block_port
-            ),
-            format!("--bitcoind.zmqpubrawtx=tcp://127.0.0.1:{}", zmq_tx_port),
-            format!(
-                "--bitcoind.rpchost={:?}",
-                bitcoind_connect_params.rpc_socket
-            ),
-            format!("--protocol.custom-message=513"),
-            format!("--protocol.custom-nodeann=39"),
-            format!("--protocol.custom-init=39"),
-        ];
+        let rpc_addr = format!("localhost:{}", port);
+        let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
 
-        let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
-        let stderr_log_path = lnd_data_dir.join("lnd-itest-stderr.log");
-        let stdout_file =
-            File::create(&stdout_log_path).expect("Failed to create stdout log file for lnd-itest");
-        let stderr_file =
-            File::create(&stderr_log_path).expect("Failed to create stderr log file for lnd-itest");
+        let (args, stdout_file, stderr_file) = get_lnd_args(
+            &lnd_dir_binding,
+            &bitcoind_connect_params,
+            &lnd_data_dir,
+            port,
+            lnd_port,
+            zmq_block_port,
+            zmq_tx_port,
+        );
 
         // TODO: For Windows we might need to add ".exe" at the end.
         let cmd = Command::new("./lnd-itest")
@@ -375,14 +409,21 @@ impl LndNode {
             .spawn()
             .expect("Failed to execute lnd command");
 
-        LndNode {
+        let node = LndNode {
             address: format!("https://{}", rpc_addr),
             _lnd_dir_tmp: lnd_dir_binding,
             cert_path: cert_path,
             macaroon_path: macaroon_path,
             _handle: cmd,
             client: None,
-        }
+            _bitcoind_connect_params: bitcoind_connect_params,
+            _zmq_block_port: zmq_block_port,
+            _zmq_tx_port: zmq_tx_port,
+            _port: port,
+            _lnd_port: lnd_port,
+            _lnd_data_dir: lnd_data_dir,
+        };
+        node
     }
 
     // Setup the client we need to interact with the LND node.
@@ -566,5 +607,31 @@ impl LndNode {
         };
 
         resp
+    }
+
+    pub async fn kill_lnd(&mut self) {
+        self._handle.kill().unwrap();
+    }
+
+    pub async fn restart_lnd(&mut self) {
+        let (args, stdout_file, stderr_file) = get_lnd_args(
+            &self._lnd_dir_tmp,
+            &self._bitcoind_connect_params,
+            &self._lnd_data_dir,
+            self._port,
+            self._lnd_port,
+            self._zmq_block_port,
+            self._zmq_tx_port,
+        );
+
+        // TODO: For Windows we might need to add ".exe" at the end.
+        let cmd = Command::new("./lnd-itest")
+            .args(args)
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
+            .spawn()
+            .expect("Failed to execute lnd command");
+
+        self._handle = cmd;
     }
 }
