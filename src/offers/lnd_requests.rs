@@ -191,12 +191,14 @@ pub async fn send_invoice_request(
     // any intermediate nodes here. In the future we'll query for a full path to the
     // introduction node for better sender privacy.
     match destination {
-        Destination::Node(pubkey) => connect_to_peer(client.clone(), pubkey).await?,
+        Destination::Node(pubkey) => connect_to_peer(client.lightning().clone(), pubkey).await?,
         Destination::BlindedPath(ref path) => match path.introduction_node() {
-            IntroductionNode::NodeId(pubkey) => connect_to_peer(client.clone(), *pubkey).await?,
+            IntroductionNode::NodeId(pubkey) => {
+                connect_to_peer(client.lightning().clone(), *pubkey).await?
+            }
             IntroductionNode::DirectedShortChannelId(direction, scid) => {
                 let pubkey = get_node_id(client.clone(), *scid, *direction).await?;
-                connect_to_peer(client.clone(), pubkey).await?
+                connect_to_peer(client.lightning().clone(), pubkey).await?
             }
         },
     };
@@ -210,8 +212,13 @@ pub async fn send_invoice_request(
 
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     let message_context = MessageContext::Offers(offer_context);
-    let reply_path =
-        create_reply_path(client.clone(), pubkey, message_context, messenger_utils).await?;
+    let reply_path = create_reply_path(
+        client.lightning().clone(),
+        pubkey,
+        message_context,
+        messenger_utils,
+    )
+    .await?;
 
     let reply_path_intro_node_id = match reply_path.introduction_node() {
         IntroductionNode::NodeId(pubkey) => pubkey.to_string(),
@@ -237,7 +244,7 @@ pub async fn send_invoice_request(
     Ok((contents, send_instructions))
 }
 
-async fn connect_to_peer(
+pub(crate) async fn connect_to_peer(
     mut connector: impl PeerConnector,
     node_id: PublicKey,
 ) -> Result<(), OfferError> {

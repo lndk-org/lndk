@@ -484,13 +484,12 @@ async fn test_reply_path_unannounced_peers() {
     };
     let offer_context = MessageContext::Offers(offer_context);
     let messenger_utils = MessengerUtilities::new([42; 32]);
-
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
     // itself.
     let reply_path = create_reply_path(
-        lnd.client.clone().unwrap(),
+        lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
         &messenger_utils,
@@ -533,7 +532,7 @@ async fn test_reply_path_announced_peers() {
     // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
     // expected.
     let reply_path = create_reply_path(
-        lnd.client.clone().unwrap(),
+        lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
         &messenger_utils,

@@ -11,6 +11,7 @@ pub mod handler;
 mod lnd_requests;
 mod parse;
 
+pub(crate) use lnd_requests::connect_to_peer;
 pub use lnd_requests::create_reply_path;
 pub use parse::{decode, get_destination, validate_amount};
 

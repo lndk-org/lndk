@@ -5,6 +5,7 @@ use tonic::async_trait;
 use tonic_lnd::lnrpc::{HtlcAttempt, Payment, QueryRoutesResponse, Route};
 use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::tonic::Status;
+use tonic_lnd::LightningClient;
 use tonic_lnd::{
     lnrpc::{ListPeersRequest, ListPeersResponse, NodeInfo},
     signrpc::{KeyLocator, SignMessageReq},
@@ -17,11 +18,10 @@ use super::lnd_requests::get_node_id;
 use super::OfferError;
 
 #[async_trait]
-impl PeerConnector for Client {
+impl PeerConnector for LightningClient {
     async fn list_peers(&mut self) -> Result<ListPeersResponse, Status> {
         let list_req = ListPeersRequest::default();
-        self.lightning()
-            .list_peers(list_req)
+        self.list_peers(list_req)
             .await
             .map(|resp| resp.into_inner())
     }
@@ -38,10 +38,7 @@ impl PeerConnector for Client {
             ..Default::default()
         };
 
-        self.lightning()
-            .connect_peer(connect_req.clone())
-            .await
-            .map(|_| ())
+        self.connect_peer(connect_req.clone()).await.map(|_| ())
     }
 
     async fn get_node_info(
@@ -54,10 +51,7 @@ impl PeerConnector for Client {
             include_channels,
         };
 
-        self.lightning()
-            .get_node_info(req)
-            .await
-            .map(|resp| resp.into_inner())
+        self.get_node_info(req).await.map(|resp| resp.into_inner())
     }
 }
 
