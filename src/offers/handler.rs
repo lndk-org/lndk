@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
-use tonic_lnd::lnrpc::Payment;
+use tonic_lnd::lnrpc::{FeeLimit, Payment};
 use tonic_lnd::Client;
 
 use super::lnd_requests::{create_invoice_request, get_node_id_from_scid, send_invoice_request};
@@ -68,8 +68,10 @@ pub struct PayOfferParams {
     /// The amount of time in seconds that we will wait for the offer creator to respond with
     /// an invoice. If not provided, we will use the default value of 15 seconds.
     pub response_invoice_timeout: Option<u32>,
+    pub fee_limit: Option<FeeLimit>,
 }
 
+#[derive(Clone)]
 pub struct SendPaymentParams {
     pub path: BlindedPaymentPath,
     pub cltv_expiry_delta: u16,
@@ -78,6 +80,7 @@ pub struct SendPaymentParams {
     pub payment_hash: [u8; 32],
     pub msats: u64,
     pub payment_id: PaymentId,
+    pub fee_limit: Option<FeeLimit>,
 }
 
 impl OfferHandler {
@@ -104,10 +107,17 @@ impl OfferHandler {
     /// offer.
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
+        let fee_limit = cfg.fee_limit.clone();
         let (invoice, validated_amount, payment_id) = self.get_invoice(cfg).await?;
 
-        self.pay_invoice(client_clone, validated_amount, &invoice, payment_id)
-            .await
+        self.pay_invoice(
+            client_clone,
+            validated_amount,
+            &invoice,
+            payment_id,
+            fee_limit,
+        )
+        .await
     }
 
     /// Sends an invoice request and waits for an invoice to be sent back to us.
@@ -197,6 +207,7 @@ impl OfferHandler {
         amount: u64,
         invoice: &Bolt12Invoice,
         payment_id: PaymentId,
+        fee_limit: Option<FeeLimit>,
     ) -> Result<Payment, OfferError> {
         let payment_hash = invoice.payment_hash();
         let payment_path = &invoice.payment_paths()[0];
@@ -210,6 +221,7 @@ impl OfferHandler {
             payment_hash,
             msats: amount,
             payment_id,
+            fee_limit,
         };
 
         let intro_node_id = match params.path.introduction_node() {

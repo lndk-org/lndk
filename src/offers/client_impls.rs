@@ -2,7 +2,7 @@ use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
 use log::error;
 use tonic::async_trait;
-use tonic_lnd::lnrpc::{HtlcAttempt, Payment, QueryRoutesResponse, Route};
+use tonic_lnd::lnrpc::{FeeLimit, HtlcAttempt, Payment, QueryRoutesResponse, Route};
 use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::LightningClient;
@@ -91,6 +91,7 @@ impl InvoicePayer for Client {
         fee_base_msat: u32,
         fee_ppm: u32,
         msats: u64,
+        fee_limit: Option<FeeLimit>,
     ) -> Result<QueryRoutesResponse, Status> {
         let mut blinded_hops = vec![];
         for hop in path.blinded_hops().iter() {
@@ -135,6 +136,7 @@ impl InvoicePayer for Client {
         let query_req = tonic_lnd::lnrpc::QueryRoutesRequest {
             amt_msat: msats as i64,
             blinded_payment_paths: vec![blinded_payment_paths],
+            fee_limit,
             ..Default::default()
         };
 
@@ -211,7 +213,7 @@ pub(super) mod tests {
 
         #[async_trait]
         impl InvoicePayer for TestInvoicePayer{
-            async fn query_routes(&mut self, path: BlindedPaymentPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64) -> Result<QueryRoutesResponse, Status>;
+            async fn query_routes(&mut self, path: BlindedPaymentPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64, fee_limit: Option<FeeLimit>) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
             async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
         }

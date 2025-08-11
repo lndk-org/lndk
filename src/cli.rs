@@ -99,6 +99,15 @@ enum Commands {
         /// arrive. If this isn't set, we'll use the default value.
         #[arg(long, global = false, required = false, default_value = DEFAULT_RESPONSE_INVOICE_TIMEOUT.to_string())]
         response_invoice_timeout: Option<u32>,
+
+        /// A fixed fee limit in millisatoshis.
+        /// Mutually exclusive with fee_limit_percent - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit_percent")]
+        fee_limit: Option<u32>,
+        /// A percentage-based fee limit of the payment amount.
+        /// Mutually exclusive with fee_limit - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit")]
+        fee_limit_percent: Option<u32>,
     },
     /// GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It
     /// fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
@@ -128,6 +137,14 @@ enum Commands {
         /// whatever the invoice amount is set to.
         #[arg(required = false)]
         amount: Option<u64>,
+        /// A fixed fee limit in millisatoshis.
+        /// Mutually exclusive with fee_limit_percent - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit_percent")]
+        fee_limit: Option<u32>,
+        /// A percentage-based fee limit of the payment amount.
+        /// Mutually exclusive with fee_limit - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit")]
+        fee_limit_percent: Option<u32>,
     },
 }
 
@@ -174,6 +191,8 @@ async fn main() {
             amount,
             payer_note,
             response_invoice_timeout,
+            fee_limit,
+            fee_limit_percent,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host;
@@ -216,6 +235,8 @@ async fn main() {
                 amount,
                 payer_note,
                 response_invoice_timeout,
+                fee_limit,
+                fee_limit_percent,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
 
@@ -288,6 +309,8 @@ async fn main() {
         Commands::PayInvoice {
             ref invoice_string,
             amount,
+            fee_limit,
+            fee_limit_percent,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
             let grpc_host = args.grpc_host.clone();
@@ -315,6 +338,8 @@ async fn main() {
             let mut request = Request::new(PayInvoiceRequest {
                 invoice: invoice_string.to_owned(),
                 amount,
+                fee_limit,
+                fee_limit_percent,
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.pay_invoice(request).await {
