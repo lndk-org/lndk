@@ -549,4 +549,42 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_fee_args_conflict_validation() {
+        let result = Cli::try_parse_from([
+            "lndk-cli",
+            "pay-offer",
+            "lno1qcp4256ypq",
+            "--fee-limit",
+            "1000",
+            "--fee-limit-percent",
+            "1",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fee_args_single_validation() {
+        let result = Cli::try_parse_from([
+            "lndk-cli",
+            "pay-offer",
+            "lno1qcp4256ypq",
+            "--fee-limit",
+            "1000",
+        ]);
+
+        assert!(result.is_ok());
+
+        let result = Cli::try_parse_from([
+            "lndk-cli",
+            "pay-offer",
+            "lno1qcp4256ypq",
+            "--fee-limit-percent",
+            "1.0",
+        ]);
+
+        assert!(result.is_err());
+    }
 }
