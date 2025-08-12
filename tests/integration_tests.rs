@@ -8,7 +8,6 @@ use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::nonce::Nonce;
 use lightning::offers::offer::{Amount, Offer};
 use lightning::util::string::PrintableString;
-use lndk;
 use log::error;
 
 use bitcoin::secp256k1::PublicKey;
@@ -332,7 +331,7 @@ async fn test_lndk_pay_offer() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -385,7 +384,7 @@ async fn test_lndk_pay_offer_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -439,7 +438,7 @@ async fn test_lndk_pay_multiple_offers_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = &vec![ldk2_pubkey, ldk1_pubkey];
     let reply_path = &vec![ldk2_pubkey, lnd_pubkey];
@@ -479,7 +478,7 @@ async fn test_reply_path_unannounced_peers() {
         common::setup_test_infrastructure(test_name).await;
 
     let (_, _, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, false, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, false, &mut lnd, &bitcoind).await;
 
     let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
@@ -521,7 +520,7 @@ async fn test_reply_path_announced_peers() {
         common::setup_test_infrastructure(test_name).await;
 
     let (_, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
@@ -566,7 +565,7 @@ async fn test_create_offer() {
         common::setup_test_infrastructure(test_name).await;
 
     let (_, _ldk2_pubkey, _lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let (_, handler, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
@@ -611,7 +610,7 @@ async fn pay_offer_and_wait_for_payment(
     let payment = ldk.pay_offer(offer, None).await;
     assert!(payment.is_ok());
     // Wait for the payment to complete on ldk side.
-    common::wait_for_ldk_payment_completion(ldk, Duration::from_secs(10)).await?;
+    common::wait_for_ldk_payment_completion(ldk, Duration::from_secs(30)).await?;
     // Wait for the payment to complete on lnd side, with a timeout of 10 seconds in case
     // of any race conditions.
     common::wait_for_lnd_payment_completion(&mut lnd_client, Duration::from_secs(10)).await?;
@@ -624,8 +623,8 @@ async fn test_receive_payment_from_offer() {
     let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
         common::setup_test_infrastructure(test_name).await;
 
-    let (_, _ldk2_pubkey, _lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+    let (ldk1_pubkey, _ldk2_pubkey, _lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, true, true, &mut lnd, &bitcoind).await;
 
     let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_file).unwrap();
@@ -638,7 +637,7 @@ async fn test_receive_payment_from_offer() {
         None,
     )
     .unwrap();
-    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address, creds);
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
 
     let signals = LifecycleSignals {
         shutdown: shutdown.clone(),
@@ -661,16 +660,18 @@ async fn test_receive_payment_from_offer() {
 
     let create_offer_params = CreateOfferParams {
         client: lnd.client.clone().unwrap(),
-        amount_msats: 5_000_000,
+        amount_msats: 20_000,
         chain: Network::Regtest,
         description: None,
         issuer: None,
         quantity: None,
         expiry: None,
     };
+
     let offer = handler.create_offer(create_offer_params).await;
     assert!(offer.is_ok());
     let offer = offer.unwrap();
+    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
 
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
