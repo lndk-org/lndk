@@ -97,6 +97,8 @@ impl Offers for LNDKServer {
             .await
             .map_err(|e| Status::internal(format!("{e:?}")))?;
 
+        let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
+
         let cfg = PayOfferParams {
             offer,
             amount: inner_request.amount,
@@ -106,6 +108,7 @@ impl Offers for LNDKServer {
             destination,
             reply_path,
             response_invoice_timeout: inner_request.response_invoice_timeout,
+            fee_limit,
         };
 
         let payment = match self.offer_handler.pay_offer(cfg).await {
@@ -193,6 +196,7 @@ impl Offers for LNDKServer {
             destination,
             reply_path,
             response_invoice_timeout: inner_request.response_invoice_timeout,
+            fee_limit: None,
         };
 
         let (invoice, _, payment_id) = match self.offer_handler.get_invoice(cfg).await {
@@ -256,9 +260,12 @@ impl Offers for LNDKServer {
             Err(e) => return Err(Status::invalid_argument(e.to_string())),
         };
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
+
+        let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
+
         let invoice = match self
             .offer_handler
-            .pay_invoice(client, amount, &invoice, payment_id)
+            .pay_invoice(client, amount, &invoice, payment_id, fee_limit)
             .await
         {
             Ok(invoice) => {
@@ -277,7 +284,7 @@ impl Offers for LNDKServer {
 }
 
 // We need to check that the client passes in a tls cert pem string, hexadecimal macaroon,
-// and address, so they can connect to LND.
+// and address, so they can connect to LNDK's gRPC server.
 fn check_auth_metadata(metadata: &MetadataMap) -> Result<String, Status> {
     let macaroon = match metadata.get("macaroon") {
         Some(macaroon_hex) => macaroon_hex
@@ -369,6 +376,21 @@ pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
 // string into a Vec.
 fn collect_tls_ips(tls_ips_str: Option<String>) -> Option<Vec<String>> {
     tls_ips_str.map(|tls_ips_str| tls_ips_str.split(',').map(|str| str.to_owned()).collect())
+}
+
+fn create_fee_limit(
+    fee_limit: Option<u32>,
+    fee_limit_percent: Option<u32>,
+) -> Option<tonic_lnd::lnrpc::FeeLimit> {
+    match (fee_limit, fee_limit_percent) {
+        (Some(fixed), None) => Some(tonic_lnd::lnrpc::FeeLimit {
+            limit: Some(tonic_lnd::lnrpc::fee_limit::Limit::FixedMsat(fixed as i64)),
+        }),
+        (None, Some(percent)) => Some(tonic_lnd::lnrpc::FeeLimit {
+            limit: Some(tonic_lnd::lnrpc::fee_limit::Limit::Percent(percent as i64)),
+        }),
+        _ => None,
+    }
 }
 
 fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12InvoiceContents {

@@ -13,6 +13,8 @@ message PayOfferRequest {
    optional uint64 amount = 2;
    optional string payer_note = 3;
    optional uint32 response_invoice_timeout = 4;
+   optional uint32 fee_limit = 5;
+   optional uint32 fee_limit_percent = 6;
 }
 
 message PayOfferResponse {
@@ -38,6 +40,8 @@ message GetInvoiceResponse {
 message PayInvoiceRequest {
     string invoice = 1;
     optional uint64 amount = 2;
+    optional uint32 fee_limit = 3;
+    optional uint32 fee_limit_percent = 4;
 }
 
 message PayInvoiceResponse {

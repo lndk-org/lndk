@@ -94,6 +94,7 @@ pub(crate) async fn send_payment(
             params.fee_base_msat,
             params.fee_ppm,
             params.msats,
+            params.fee_limit,
         )
         .await
         .map_err(OfferError::RouteFailure)?;
@@ -737,15 +738,17 @@ mod tests {
     async fn test_send_payment() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
-        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
-            let route = Route {
-                ..Default::default()
-            };
-            Ok(QueryRoutesResponse {
-                routes: vec![route],
-                ..Default::default()
-            })
-        });
+        payer_mock
+            .expect_query_routes()
+            .returning(|_, _, _, _, _, _| {
+                let route = Route {
+                    ..Default::default()
+                };
+                Ok(QueryRoutesResponse {
+                    routes: vec![route],
+                    ..Default::default()
+                })
+            });
 
         payer_mock.expect_send_to_route().returning(|_, _| {
             Ok(HtlcAttempt {
@@ -770,6 +773,7 @@ mod tests {
             payment_hash,
             msats: 2000,
             payment_id,
+            fee_limit: None,
         };
         assert!(send_payment(payer_mock, params).await.is_ok());
     }
@@ -780,7 +784,7 @@ mod tests {
 
         payer_mock
             .expect_query_routes()
-            .returning(|_, _, _, _, _| Err(Status::unknown("unknown error")));
+            .returning(|_, _, _, _, _, _| Err(Status::unknown("unknown error")));
 
         let blinded_path = get_blinded_payment_path();
         let payment_hash = MessengerUtilities::default().get_secure_random_bytes();
@@ -793,6 +797,7 @@ mod tests {
             payment_hash,
             msats: 2000,
             payment_id,
+            fee_limit: None,
         };
         assert!(send_payment(payer_mock, params).await.is_err());
     }
@@ -801,15 +806,17 @@ mod tests {
     async fn test_send_payment_send_error() {
         let mut payer_mock = MockTestInvoicePayer::new();
 
-        payer_mock.expect_query_routes().returning(|_, _, _, _, _| {
-            let route = Route {
-                ..Default::default()
-            };
-            Ok(QueryRoutesResponse {
-                routes: vec![route],
-                ..Default::default()
-            })
-        });
+        payer_mock
+            .expect_query_routes()
+            .returning(|_, _, _, _, _, _| {
+                let route = Route {
+                    ..Default::default()
+                };
+                Ok(QueryRoutesResponse {
+                    routes: vec![route],
+                    ..Default::default()
+                })
+            });
 
         payer_mock
             .expect_send_to_route()
@@ -826,6 +833,7 @@ mod tests {
             payment_hash,
             msats: 2000,
             payment_id,
+            fee_limit: None,
         };
         assert!(send_payment(payer_mock, params).await.is_err());
     }

@@ -21,7 +21,8 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::{fmt, fs};
 use tonic_lnd::lnrpc::{
-    GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment, QueryRoutesResponse, Route,
+    FeeLimit, GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment,
+    QueryRoutesResponse, Route,
 };
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
@@ -448,6 +449,7 @@ pub trait InvoicePayer {
         fee_base_msat: u32,
         fee_ppm: u32,
         msats: u64,
+        fee_limit: Option<FeeLimit>,
     ) -> Result<QueryRoutesResponse, Status>;
     async fn send_to_route(
         &mut self,
