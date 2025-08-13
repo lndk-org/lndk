@@ -6,6 +6,7 @@ service Offers {
     rpc GetInvoice (GetInvoiceRequest) returns (GetInvoiceResponse);
     rpc DecodeInvoice (DecodeInvoiceRequest) returns (Bolt12InvoiceContents);
     rpc PayInvoice (PayInvoiceRequest) returns (PayInvoiceResponse);
+    rpc CreateOffer (CreateOfferRequest) returns (CreateOfferResponse);
 }
 
 message PayOfferRequest {
@@ -139,4 +140,17 @@ enum FeatureBit {
     ROUTE_BLINDING_OPTIONAL = 25;
     AMP_REQ = 30;
     AMP_OPT = 31;
+}
+
+message CreateOfferRequest {
+    optional uint64 amount = 1;
+    optional string description = 2;
+    optional string issuer = 3;
+    optional uint64 quantity = 4;
+    optional uint64 expiry = 5;
+}
+
+
+message CreateOfferResponse {
+    string offer = 1;
 }

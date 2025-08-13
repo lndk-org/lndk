@@ -8,6 +8,7 @@ use chrono::Utc;
 use corepc_node::{get_available_port, Conf, ConnectParams, Node};
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
+use ldk_sample::HTLCStatus;
 use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::OfferHandler;
@@ -22,7 +23,7 @@ use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::{AddressType, GetInfoRequest};
+use tonic_lnd::lnrpc::{AddressType, GetInfoRequest, InvoiceHtlcState, ListInvoiceRequest};
 use tonic_lnd::Client;
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
@@ -87,7 +88,8 @@ pub async fn setup_test_infrastructure(
 pub async fn connect_network(
     ldk1: &LdkNode,
     ldk2: &LdkNode,
-    announce_channel: bool,
+    announce_channel_ldk: bool,
+    announce_channel_lnd: bool,
     lnd: &mut LndNode,
     bitcoind: &BitcoindNode,
 ) -> (PublicKey, PublicKey, PublicKey) {
@@ -131,18 +133,24 @@ pub async fn connect_network(
 
     lnd.wait_for_chain_sync().await;
 
-    ldk2.open_channel(ldk1_pubkey, addr, 200000, 0, false)
-        .await
-        .unwrap();
+    ldk2.open_channel(
+        ldk1_pubkey,
+        addr,
+        300_000,
+        100_000_000,
+        announce_channel_ldk,
+    )
+    .await
+    .unwrap();
 
     lnd.wait_for_graph_sync().await;
 
     ldk2.open_channel(
         lnd_pubkey,
         SocketAddr::from_str(&lnd_network_addr).unwrap(),
-        200000,
-        10000000,
-        announce_channel,
+        300_000,
+        100_000_000,
+        announce_channel_lnd,
     )
     .await
     .unwrap();
@@ -240,6 +248,76 @@ fn setup_test_dirs(test_name: &str) -> (PathBuf, PathBuf, PathBuf) {
     fs::create_dir_all(lndk_data_dir.clone()).unwrap();
 
     (ldk_data_dir, lnd_data_dir, lndk_data_dir)
+}
+
+pub async fn wait_for_ldk_payment_completion(
+    ldk_node: &LdkNode,
+    timeout_duration: Duration,
+) -> Result<(), ()> {
+    log::info!("Waiting for payment to complete...");
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout_duration {
+            return Err(());
+        }
+
+        let payments = ldk_node.list_payments().await;
+
+        if let Some(latest_payment) = payments.last() {
+            log::debug!("Checking payment status: {:?}", latest_payment.status);
+            match latest_payment.status {
+                HTLCStatus::Pending => {
+                    log::debug!("Payment still pending, waiting 1 second...");
+                    sleep(Duration::from_secs(1)).await;
+                }
+                HTLCStatus::Succeeded => {
+                    log::info!("Payment succeeded");
+                    return Ok(());
+                }
+                HTLCStatus::Failed => {
+                    log::error!("Payment failed");
+                    return Err(());
+                }
+            }
+        } else {
+            log::debug!("No payments found yet, waiting 1 second...");
+            sleep(Duration::from_secs(1)).await;
+        }
+    }
+}
+
+pub async fn wait_for_lnd_payment_completion(
+    lnd_client: &mut Client,
+    timeout_duration: Duration,
+) -> Result<(), ()> {
+    log::info!("Waiting for payment to appear in lnd...");
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout_duration {
+            return Err(());
+        }
+
+        let invoices = lnd_client
+            .lightning()
+            .list_invoices(ListInvoiceRequest {
+                ..Default::default()
+            })
+            .await;
+        assert!(invoices.is_ok());
+        let invoices = invoices.unwrap().into_inner();
+        if !invoices.invoices.is_empty() {
+            let invoice = invoices.invoices[0].clone();
+            log::debug!("Invoice status: {:?}", invoice.state);
+            if invoice.state == InvoiceHtlcState::Settled as i32 {
+                log::info!("Payment succeeded");
+                return Ok(());
+            }
+        }
+        log::debug!("No payments found yet, waiting 1 second...");
+        sleep(Duration::from_secs(1)).await;
+    }
 }
 
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
@@ -343,7 +421,7 @@ impl LndNode {
             format!("--tlscertpath={}", cert_path),
             format!("--tlskeypath={}", key_path),
             format!("--logdir={}", log_dir.display()),
-            format!("--debuglevel=info,PEER=debug"),
+            format!("--debuglevel=info,PEER=debug,INVC=debug,HSWC=trace,BLPT=trace"),
             format!("--bitcoind.rpcuser={}", cookie_values.user),
             format!("--bitcoind.rpcpass={}", cookie_values.password),
             format!(
@@ -358,6 +436,8 @@ impl LndNode {
             format!("--protocol.custom-message=513"),
             format!("--protocol.custom-nodeann=39"),
             format!("--protocol.custom-init=39"),
+            format!("--routing.blinding.num-hops=1"),
+            format!("--routing.blinding.min-num-real-hops=0"),
         ];
 
         let stdout_log_path = lnd_data_dir.join("lnd-itest-stdout.log");
@@ -538,6 +618,56 @@ impl LndNode {
             let resp = self.get_info().await;
             if resp.synced_to_graph {
                 return;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    // wait_for_addresses_to_sync waits until the given node has addresses in the graph.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_addresses_to_sync(&mut self, node_id: PublicKey) {
+        match timeout(Duration::from_secs(100), self.check_addresses_sync(node_id)).await {
+            Err(_) => panic!("timeout before node {} addresses synced", node_id),
+            _ => {}
+        };
+    }
+
+    pub async fn check_addresses_sync(&mut self, node_id: PublicKey) {
+        loop {
+            let node_info_req = tonic_lnd::lnrpc::NodeInfoRequest {
+                pub_key: node_id.to_string(),
+                include_channels: false,
+            };
+
+            let resp = if let Some(client) = self.client.clone() {
+                let make_request = || async {
+                    client
+                        .clone()
+                        .lightning()
+                        .get_node_info(node_info_req.clone())
+                        .await
+                };
+                let resp = test_utils::retry_async(make_request, String::from("get_node_info"));
+                resp.await
+            } else {
+                panic!("No client")
+            };
+
+            match resp {
+                Ok(node_info) => {
+                    if let Some(node) = node_info.node {
+                        if !node.addresses.is_empty() {
+                            return;
+                        } else {
+                            log::trace!("Node {} found but has no addresses yet", node_id);
+                        }
+                    } else {
+                        log::trace!("Node {} found in response but node field is None", node_id);
+                    }
+                }
+                Err(_) => {
+                    log::trace!("Node info not found yet for {}", node_id);
+                }
             }
             sleep(Duration::from_secs(2)).await;
         }
