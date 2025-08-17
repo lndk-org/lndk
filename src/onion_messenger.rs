@@ -320,7 +320,6 @@ impl LndkOnionMessenger {
             {
                 Ok(_) => debug!("Message events producer exited."),
                 Err(e) => {
-                    messages_shutdown.trigger();
                     error!("Message events producer exited: {e}.");
                 }
             }
@@ -373,7 +372,6 @@ impl LndkOnionMessenger {
         match consume_result {
             Ok(_) => info!("Consume messenger events exited."),
             Err(e) => {
-                signals.shutdown.trigger();
                 error!("Consume messenger events exited: {e}.");
             }
         }
@@ -889,7 +887,11 @@ async fn consume_messenger_events(
                 }
             }
             MessengerEvents::ProducerExit(e) => {
-                return Err(e);
+                // Only logging about the ProducerExit event. 
+                // Keep the loop still running so that when the reconnection process is done
+                // it will be possible to keep processing messenger events.
+                error!("ProducerExit {e}");
+                continue;
             }
         }
     }
