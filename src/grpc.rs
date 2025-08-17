@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time};
 use tonic_lnd::tonic::{Code, Status};
 /// Delay between retry attempts in seconds
-const RETRY_DELAY: Duration = Duration::from_secs(5);
+const RETRY_DELAY: Duration = Duration::from_millis(100);
 /// Maximum number of retry attempts for operations
 const MAX_RETRY_ATTEMPTS: u8 = 5;
 
