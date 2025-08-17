@@ -12,6 +12,7 @@ use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::OfferHandler;
 use lndk::{setup_logger, LifecycleSignals, LndkOnionMessenger};
+use std::error::Error;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -21,6 +22,8 @@ use std::sync::Arc;
 use std::thread;
 use std::{env, fs};
 use tempfile::{tempdir, Builder, TempDir};
+use tokio::select;
+use tokio::time::Interval;
 use tokio::time::{sleep, timeout, Duration};
 use tonic_lnd::lnrpc::{AddressType, GetInfoRequest};
 use tonic_lnd::Client;
@@ -482,6 +485,37 @@ impl LndNode {
         };
 
         resp
+    }
+
+    pub async fn check_lnd_running(
+        &mut self,
+        mut interval: Interval,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(client) = self.client.clone() {
+            let get_info_req = GetInfoRequest {};
+            loop {
+                select!(
+                    _ = interval.tick() => {
+                        match client
+                            .clone()
+                            .lightning()
+                            .get_info(get_info_req.clone())
+                            .await {
+                                Ok(res) => {
+                                    println!("LND already running {:?}", res);
+                                    return Ok(())
+                                },
+                                Err(err) => {
+                                    println!("LND is not ready {:?}", err);
+                                    continue
+                                }
+                            }
+                    }
+                )
+            }
+        } else {
+            panic!("No client")
+        };
     }
 
     // connect_to_peer connects to the specified peer.

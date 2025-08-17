@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::time;
 use tokio::time::Duration;
 use tokio::{select, try_join};
 use tonic_lnd::Client;
@@ -619,31 +620,30 @@ async fn check_pay_offer_with_reconnection(
     let lnd_arc = Arc::new(tokio::sync::Mutex::new(lnd));
     let lnd_clone = Arc::clone(&lnd_arc);
 
-    //setup a task to kill LND after the pay_offer has already started.
+    // Setup a task to kill LND after the pay_offer has already started.
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        tokio::time::sleep(Duration::from_millis(210)).await;
         let mut lnd = lnd_clone.lock().await;
         lnd.kill_lnd().await;
     });
 
-    // start a pay_offer process.
+    // Start a pay_offer process.
     let res1 = handler.pay_offer(pay_cfg.clone()).await;
     let mut lnd = lnd_arc.lock().await;
 
-    //restart LND node with the same previous arguments.
+    // Restart LND node with the same previous arguments.
     lnd.restart_lnd().await;
 
-    //wait until LND node is ready to serve again.
-    tokio::time::sleep(Duration::from_millis(5000)).await;
+    let interval = time::interval(Duration::from_millis(500));
+
+    // Wait until LND is available again
+    lnd.check_lnd_running(interval).await.unwrap();
 
     // Send another pay_offer process using the same handler.
     // Because of the reconnections, the handler has to be able to connect
     // again to the restart LND node, fetched the peers, and be able to handle
     // a second pay_offer
     let res2 = handler.pay_offer(pay_cfg.clone()).await;
-
-    // Waint until the second pay_offer has started.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // We check that the first pay_offer fails because the LND has been kill.
     assert!(res1.is_err());
