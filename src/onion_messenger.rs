@@ -222,6 +222,7 @@ impl LndkOnionMessenger {
         // Whenever a new event is consumed we will get current peers and message peers
         // where reconnected.
         let reconnected_notification = Arc::new(Notify::new());
+        let reconnected_notification_custom_messages = reconnected_notification.clone();
         let (reconnection_shutdown, reconnection_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         let reconnection_notification_receiver = reconnected_notification.clone();
@@ -286,6 +287,31 @@ impl LndkOnionMessenger {
             };
         });
 
+        // Setup channels that we'll use to communicate whenever a restart event happens.
+        // Whenever a new event is consumed we will try to subscribe again to custom messages
+        let mut messages_client = Retryable::new(ln_client.clone());
+        let in_msg_sender = sender.clone();
+        let (reconnection_shutdown, messages_listener) =
+            (signals.shutdown.clone(), signals.listener.clone());
+        let reconnected_notification_clone_receiver =
+            reconnected_notification_custom_messages.clone();
+        set.spawn(async move {
+            match receive_reconnection_subscription_event(
+                &mut messages_client,
+                messages_listener,
+                reconnected_notification_clone_receiver,
+                in_msg_sender,
+            )
+            .await
+            {
+                Ok(_) => debug!("Reconnection listener completed"),
+                Err(e) => {
+                    error!("Notify peer connected: {e}");
+                    reconnection_shutdown.trigger();
+                }
+            }
+        });
+
         // Subscribe to custom messaging events from LND so that we can receive incoming messages.
         let mut messages_client = Retryable::new(ln_client.clone());
         let in_msg_sender = sender.clone();
@@ -315,11 +341,16 @@ impl LndkOnionMessenger {
                 message_subscription,
             };
 
-            match produce_incoming_message_events(message_stream, in_msg_sender, messages_listener)
-                .await
+            match produce_incoming_message_events(
+                message_stream,
+                in_msg_sender.clone(),
+                messages_listener.clone(),
+            )
+            .await
             {
                 Ok(_) => debug!("Message events producer exited."),
                 Err(e) => {
+                    reconnected_notification_custom_messages.notify_waiters();
                     error!("Message events producer exited: {e}.");
                 }
             }
@@ -608,6 +639,53 @@ async fn receive_reconnection_event(
     }
 }
 
+async fn receive_reconnection_subscription_event(
+    messages_client: &mut Retryable<LightningClient>,
+    shutdown_listener: Listener,
+    reconnection_listener: Arc<Notify>,
+    in_msg_sender: Sender<MessengerEvents>,
+) -> Result<(), Box<dyn Error>> {
+    loop {
+        select! {
+            biased;
+            _ = shutdown_listener.clone() => {
+                info!("Received shutdown signal, exiting reconnection subscription listener.");
+                return Ok(())
+            }
+            _ = reconnection_listener.notified() => {
+                    let message_subscription = match messages_client
+                        .with_infinite_retries(
+                            LightningClient::subscribe_custom_messages,
+                            tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {},
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(response) => {
+                            info!("Connected to message subscription.");
+                            response.into_inner()
+                        }
+                        Err(e) => {
+                            error!("Error subscribing to message events: {e}.");
+                            return Ok(())
+                        }
+                    };
+
+                    let message_stream = MessageStream {
+                        message_subscription,
+                    };
+                    match produce_incoming_message_events(message_stream, in_msg_sender.clone(), shutdown_listener.clone())
+                        .await {
+                            Ok(_) => debug!("Message events producer exited."),
+                            Err(e) => {
+                                error!("Message events producer exited: {e}.");
+                            }
+                        }
+            }
+        }
+    }
+}
+
 /// Consumes a stream of peer online/offline events from the PeerEventProducer until the stream
 /// exits (by sending an error) or the producer receives the signal to exit (via close of the exit
 /// channel).
@@ -887,7 +965,7 @@ async fn consume_messenger_events(
                 }
             }
             MessengerEvents::ProducerExit(e) => {
-                // Only logging about the ProducerExit event. 
+                // Only logging about the ProducerExit event.
                 // Keep the loop still running so that when the reconnection process is done
                 // it will be possible to keep processing messenger events.
                 error!("ProducerExit {e}");
@@ -1331,7 +1409,9 @@ mod tests {
             .await
             .unwrap();
 
-        let consume_err = consume_messenger_events(
+        drop(sender);
+
+        let consume_resp = consume_messenger_events(
             mock,
             receiver,
             &mut sender_mock,
@@ -1341,9 +1421,9 @@ mod tests {
             },
             Network::Regtest,
         )
-        .await
-        .expect_err("consume should error");
-        matches!(consume_err, ConsumerError::PeerProducerExit);
+        .await;
+
+        assert!(consume_resp.is_ok(), "the result should have been Ok()")
     }
 
     #[tokio::test]
