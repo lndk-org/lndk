@@ -599,6 +599,7 @@ async fn test_check_lndk_pay_offer_with_reconnection() {
         destination: Destination::BlindedPath(blinded_path.clone()),
         reply_path: None,
         response_invoice_timeout: None,
+        fee_limit: None,
     };
     select! {
         val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
@@ -638,6 +639,10 @@ async fn check_pay_offer_with_reconnection(
 
     // Wait until LND is available again
     lnd.check_lnd_running(interval).await.unwrap();
+
+    // Even though LND is up and running, the GRPC service may not. Therefore,
+    // an additional time is added to wait for the GRPC service.
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Send another pay_offer process using the same handler.
     // Because of the reconnections, the handler has to be able to connect

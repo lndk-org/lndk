@@ -352,17 +352,17 @@ pub async fn setup_bitcoind() -> BitcoindNode {
 // LndNode holds the tools we need to interact with a Lightning node.
 pub struct LndNode {
     pub address: String,
-    _lnd_dir_tmp: TempDir,
+    lnd_dir_tmp: TempDir,
     pub cert_path: String,
     pub macaroon_path: String,
-    _handle: Child,
+    handle: Child,
     pub client: Option<Client>,
-    _bitcoind_connect_params: ConnectParams,
-    _zmq_block_port: u16,
-    _zmq_tx_port: u16,
-    _port: u16,
-    _lnd_port: u16,
-    _lnd_data_dir: PathBuf,
+    bitcoind_connect_params: ConnectParams,
+    zmq_block_port: u16,
+    zmq_tx_port: u16,
+    port: u16,
+    lnd_port: u16,
+    lnd_data_dir: PathBuf,
 }
 
 impl LndNode {
@@ -414,17 +414,17 @@ impl LndNode {
 
         let node = LndNode {
             address: format!("https://{}", rpc_addr),
-            _lnd_dir_tmp: lnd_dir_binding,
-            cert_path: cert_path,
-            macaroon_path: macaroon_path,
-            _handle: cmd,
+            lnd_dir_tmp: lnd_dir_binding,
+            cert_path,
+            macaroon_path,
+            handle: cmd,
             client: None,
-            _bitcoind_connect_params: bitcoind_connect_params,
-            _zmq_block_port: zmq_block_port,
-            _zmq_tx_port: zmq_tx_port,
-            _port: port,
-            _lnd_port: lnd_port,
-            _lnd_data_dir: lnd_data_dir,
+            bitcoind_connect_params,
+            zmq_block_port,
+            zmq_tx_port,
+            port,
+            lnd_port,
+            lnd_data_dir,
         };
         node
     }
@@ -501,12 +501,10 @@ impl LndNode {
                             .lightning()
                             .get_info(get_info_req.clone())
                             .await {
-                                Ok(res) => {
-                                    println!("LND already running {:?}", res);
+                                Ok(_) => {
                                     return Ok(())
                                 },
-                                Err(err) => {
-                                    println!("LND is not ready {:?}", err);
+                                Err(_) => {
                                     continue
                                 }
                             }
@@ -644,18 +642,18 @@ impl LndNode {
     }
 
     pub async fn kill_lnd(&mut self) {
-        self._handle.kill().unwrap();
+        self.handle.kill().unwrap();
     }
 
     pub async fn restart_lnd(&mut self) {
         let (args, stdout_file, stderr_file) = get_lnd_args(
-            &self._lnd_dir_tmp,
-            &self._bitcoind_connect_params,
-            &self._lnd_data_dir,
-            self._port,
-            self._lnd_port,
-            self._zmq_block_port,
-            self._zmq_tx_port,
+            &self.lnd_dir_tmp,
+            &self.bitcoind_connect_params,
+            &self.lnd_data_dir,
+            self.port,
+            self.lnd_port,
+            self.zmq_block_port,
+            self.zmq_tx_port,
         );
 
         // TODO: For Windows we might need to add ".exe" at the end.
@@ -666,6 +664,6 @@ impl LndNode {
             .spawn()
             .expect("Failed to execute lnd command");
 
-        self._handle = cmd;
+        self.handle = cmd;
     }
 }
