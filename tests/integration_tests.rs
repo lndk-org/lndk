@@ -623,7 +623,7 @@ async fn check_pay_offer_with_reconnection(
 
     // Setup a task to kill LND after the pay_offer has already started.
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(210)).await;
+        tokio::time::sleep(Duration::from_millis(270)).await;
         let mut lnd = lnd_clone.lock().await;
         lnd.kill_lnd().await;
     });
@@ -642,7 +642,9 @@ async fn check_pay_offer_with_reconnection(
 
     // Even though LND is up and running, the GRPC service may not. Therefore,
     // an additional time is added to wait for the GRPC service.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Running the test in the CI, this time has to be even bigger because of the
+    // CI machine resources.
+    tokio::time::sleep(Duration::from_millis(5000)).await;
 
     // Send another pay_offer process using the same handler.
     // Because of the reconnections, the handler has to be able to connect
