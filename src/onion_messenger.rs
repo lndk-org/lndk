@@ -222,7 +222,6 @@ impl LndkOnionMessenger {
         // Whenever a new event is consumed we will get current peers and message peers
         // where reconnected.
         let reconnected_notification = Arc::new(Notify::new());
-        let reconnected_notification_custom_messages = reconnected_notification.clone();
         let (reconnection_shutdown, reconnection_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         let reconnection_notification_receiver = reconnected_notification.clone();
@@ -287,70 +286,24 @@ impl LndkOnionMessenger {
             };
         });
 
-        // Setup channels that we'll use to communicate whenever a restart event happens.
-        // Whenever a new event is consumed we will try to subscribe again to custom messages
-        let mut messages_client = Retryable::new(ln_client.clone());
-        let in_msg_sender = sender.clone();
-        let (reconnection_shutdown, messages_listener) =
-            (signals.shutdown.clone(), signals.listener.clone());
-        let reconnected_notification_clone_receiver =
-            reconnected_notification_custom_messages.clone();
-        set.spawn(async move {
-            match receive_reconnection_subscription_event(
-                &mut messages_client,
-                messages_listener,
-                reconnected_notification_clone_receiver,
-                in_msg_sender,
-            )
-            .await
-            {
-                Ok(_) => debug!("Reconnection listener completed"),
-                Err(e) => {
-                    error!("Notify peer connected: {e}");
-                    reconnection_shutdown.trigger();
-                }
-            }
-        });
-
         // Subscribe to custom messaging events from LND so that we can receive incoming messages.
         let mut messages_client = Retryable::new(ln_client.clone());
         let in_msg_sender = sender.clone();
         let (messages_shutdown, messages_listener) =
             (signals.shutdown.clone(), signals.listener.clone());
         set.spawn(async move {
-            let message_subscription = match messages_client
-                .with_infinite_retries(
-                    LightningClient::subscribe_custom_messages,
-                    tonic_lnd::lnrpc::SubscribeCustomMessagesRequest {},
-                    None,
-                )
-                .await
-            {
-                Ok(response) => {
-                    info!("Connected to message subscription.");
-                    response.into_inner()
-                }
-                Err(e) => {
-                    messages_shutdown.trigger();
-                    error!("Error subscribing to message events: {e}.");
-                    return;
-                }
-            };
-
-            let message_stream = MessageStream {
-                message_subscription,
-            };
-
-            match produce_incoming_message_events(
-                message_stream,
-                in_msg_sender.clone(),
-                messages_listener.clone(),
+            match subscribe_custom_messages_with_retry(
+                &mut messages_client,
+                messages_listener,
+                in_msg_sender,
             )
             .await
             {
-                Ok(_) => debug!("Message events producer exited."),
+                Ok(_) => {
+                    debug!("Message events producer exited.")
+                }
                 Err(e) => {
-                    reconnected_notification_custom_messages.notify_waiters();
+                    messages_shutdown.trigger();
                     error!("Message events producer exited: {e}.");
                 }
             }
@@ -639,20 +592,19 @@ async fn receive_reconnection_event(
     }
 }
 
-async fn receive_reconnection_subscription_event(
+async fn subscribe_custom_messages_with_retry(
     messages_client: &mut Retryable<LightningClient>,
     shutdown_listener: Listener,
-    reconnection_listener: Arc<Notify>,
     in_msg_sender: Sender<MessengerEvents>,
 ) -> Result<(), Box<dyn Error>> {
     loop {
         select! {
             biased;
             _ = shutdown_listener.clone() => {
-                info!("Received shutdown signal, exiting reconnection subscription listener.");
+                info!("Received shutdown signal, exiting subscribe to custom messages loop.");
                 return Ok(())
             }
-            _ = reconnection_listener.notified() => {
+            _ = async {} => {
                     let message_subscription = match messages_client
                         .with_infinite_retries(
                             LightningClient::subscribe_custom_messages,
@@ -676,9 +628,13 @@ async fn receive_reconnection_subscription_event(
                     };
                     match produce_incoming_message_events(message_stream, in_msg_sender.clone(), shutdown_listener.clone())
                         .await {
-                            Ok(_) => debug!("Message events producer exited."),
+                            Ok(_) => {
+                                debug!("Message events producer exited.");
+                                return Ok(())
+                            },
                             Err(e) => {
-                                error!("Message events producer exited: {e}.");
+                                error!("Message events producer exited: {e}. Going to retry again");
+                                continue
                             }
                         }
             }
