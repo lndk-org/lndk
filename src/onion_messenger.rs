@@ -605,6 +605,9 @@ async fn subscribe_custom_messages_with_retry(
                 return Ok(())
             }
             _ = async {} => {
+                    // It is not necessary to send a notification again about missing
+                    // peer connection because the thread of peer_subscription is already
+                    // in charge of this process.
                     let message_subscription = match messages_client
                         .with_infinite_retries(
                             LightningClient::subscribe_custom_messages,
