@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::time;
 use tokio::time::Duration;
 use tokio::{select, try_join};
 use tonic_lnd::Client;
@@ -553,4 +554,106 @@ async fn test_reply_path_announced_peers() {
     shutdown.trigger();
     ldk1.stop().await;
     ldk2.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Here we test that we're able to fully pay an offer.
+async fn test_check_lndk_pay_offer_with_reconnection() {
+    let test_name = "lndk_pay_offer_with_reconnection";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, ldk2_pubkey, _) =
+        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+
+    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
+    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
+    let offer = ldk1
+        .create_offer(
+            &path_pubkeys,
+            Network::Regtest,
+            20_000,
+            Quantity::One,
+            expiration,
+        )
+        .await
+        .expect("should create offer");
+
+    let (lndk_cfg, handler, messenger, shutdown) = common::setup_lndk(
+        &lnd.cert_path,
+        &lnd.macaroon_path,
+        lnd.address.clone(),
+        lndk_dir,
+    )
+    .await;
+
+    let client = lnd.client.clone().unwrap();
+    let blinded_path = offer.paths()[0].clone();
+
+    let pay_cfg = PayOfferParams {
+        offer: offer.clone(),
+        amount: Some(20_000),
+        payer_note: Some("".to_string()),
+        network: Network::Regtest,
+        client: client.clone(),
+        destination: Destination::BlindedPath(blinded_path.clone()),
+        reply_path: None,
+        response_invoice_timeout: None,
+        fee_limit: None,
+    };
+    select! {
+        val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
+            panic!("lndk should not have completed first {:?}", val);
+        },
+        _ = check_pay_offer_with_reconnection(handler, pay_cfg.clone(), lnd, ldk2_pubkey) => {
+            shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    };
+}
+
+async fn check_pay_offer_with_reconnection(
+    handler: Arc<OfferHandler>,
+    pay_cfg: PayOfferParams,
+    lnd: common::LndNode,
+    node_id: PublicKey,
+) {
+    let lnd_arc = Arc::new(tokio::sync::Mutex::new(lnd));
+    let lnd_clone = Arc::clone(&lnd_arc);
+
+    // Setup a task to kill LND after the pay_offer has already started.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(270)).await;
+        let mut lnd = lnd_clone.lock().await;
+        lnd.kill_lnd().await;
+    });
+
+    // Start a pay_offer process.
+    let res1 = handler.pay_offer(pay_cfg.clone()).await;
+    let mut lnd = lnd_arc.lock().await;
+
+    // Restart LND node with the same previous arguments.
+    lnd.restart_lnd().await;
+
+    let interval = time::interval(Duration::from_millis(500));
+
+    // Wait until LND is available again
+    lnd.check_lnd_running(interval).await.unwrap();
+
+    // Wait until lnd graph some addresses for node_id.
+    lnd.wait_for_addresses_to_sync(node_id).await;
+
+    // Send another pay_offer process using the same handler.
+    // Because of the reconnections, the handler has to be able to connect
+    // again to the restart LND node, fetched the peers, and be able to handle
+    // a second pay_offer
+    let res2 = handler.pay_offer(pay_cfg.clone()).await;
+
+    // We check that the first pay_offer fails because the LND has been kill.
+    assert!(res1.is_err());
+
+    // We check that the second pay_offer success using the same handler
+    // because the LND node has been restarted.
+    assert!(res2.is_ok());
 }

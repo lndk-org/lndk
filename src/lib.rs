@@ -1,4 +1,5 @@
 mod clock;
+mod grpc;
 #[allow(dead_code)]
 pub mod lnd;
 pub mod offers;
@@ -32,7 +33,6 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use offers::handler::OfferHandler;
 use rate_limit::RateLimiterCfg;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Once};
@@ -185,26 +185,6 @@ impl LndkOnionMessenger {
             return Err(());
         }
 
-        // On startup, we want to get a list of our currently online peers to notify the onion
-        // messenger that they are connected. This sets up our "start state" for the
-        // messenger correctly.
-        let current_peers = client
-            .lightning()
-            .list_peers(tonic_lnd::lnrpc::ListPeersRequest {
-                latest_error: false,
-            })
-            .await
-            .map_err(|e| {
-                error!("Could not lookup current peers: {e}.");
-            })?;
-
-        let mut peer_support = HashMap::new();
-        for peer in current_peers.into_inner().peers {
-            let pubkey = PublicKey::from_str(&peer.pub_key).unwrap();
-            let onion_support = features_support_onion_messages(&peer.features);
-            peer_support.insert(pubkey, onion_support);
-        }
-
         // Create an onion messenger that depends on LND's signer client and consume related events.
         let mut node_client = client.signer().clone();
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
@@ -226,7 +206,6 @@ impl LndkOnionMessenger {
 
         let mut peers_client = client.lightning().clone();
         self.run_onion_messenger(
-            peer_support,
             &mut peers_client,
             onion_messenger,
             network,
