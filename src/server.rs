@@ -2,7 +2,7 @@ use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
-use crate::offers::{get_destination, OfferError};
+use crate::offers::{create_lndk_status, get_destination};
 use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
@@ -119,15 +119,7 @@ impl Offers for LNDKServer {
                 log::info!("Payment succeeded.");
                 payment
             }
-            Err(e) => match e {
-                OfferError::InvalidAmount(e) => {
-                    return Err(Status::invalid_argument(e.to_string()))
-                }
-                OfferError::InvalidCurrency => {
-                    return Err(Status::invalid_argument(format!("{e}")))
-                }
-                _ => return Err(Status::internal(format!("Internal error: {e}"))),
-            },
+            Err(e) => return Err(create_lndk_status(e)),
         };
 
         let reply = PayOfferResponse {
@@ -207,15 +199,7 @@ impl Offers for LNDKServer {
                 log::info!("Invoice request succeeded.");
                 invoice
             }
-            Err(e) => match e {
-                OfferError::InvalidAmount(e) => {
-                    return Err(Status::invalid_argument(e.to_string()))
-                }
-                OfferError::InvalidCurrency => {
-                    return Err(Status::invalid_argument(format!("{e}")))
-                }
-                _ => return Err(Status::internal(format!("Internal error: {e}"))),
-            },
+            Err(e) => return Err(create_lndk_status(e)),
         };
 
         // We need to remove the payment from our tracking map now.
@@ -260,7 +244,7 @@ impl Offers for LNDKServer {
 
         let amount = match validate_amount(invoice.amount().as_ref(), inner_request.amount).await {
             Ok(amount) => amount,
-            Err(e) => return Err(Status::invalid_argument(e.to_string())),
+            Err(e) => return Err(create_lndk_status(e)),
         };
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
 
@@ -275,7 +259,7 @@ impl Offers for LNDKServer {
                 log::info!("Invoice paid.");
                 invoice
             }
-            Err(e) => return Err(Status::internal(format!("Error paying invoice: {e}"))),
+            Err(e) => return Err(create_lndk_status(e)),
         };
 
         let reply = PayInvoiceResponse {
@@ -324,7 +308,7 @@ impl Offers for LNDKServer {
         };
         let offer = match self.offer_handler.create_offer(request).await {
             Ok(offer) => offer,
-            Err(e) => return Err(Status::internal(format!("Error creating offer: {e}"))),
+            Err(e) => return Err(e.to_status()),
         };
 
         let reply = CreateOfferResponse {

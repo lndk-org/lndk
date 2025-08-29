@@ -4,7 +4,8 @@ use lightning::{
     ln::channelmanager::PaymentId,
     offers::{merkle::SignError, parse::Bolt12SemanticError},
 };
-use tonic_lnd::tonic::Status;
+use tonic::{Code, Status};
+use tonic_lnd::tonic::Status as TonicStatus;
 
 mod client_impls;
 pub mod handler;
@@ -25,23 +26,23 @@ pub enum OfferError {
     /// SignError indicates a failure to sign the invoice request.
     SignError(SignError),
     /// DeriveKeyFailure indicates a failure to derive key for signing the invoice request.
-    DeriveKeyFailure(Status),
+    DeriveKeyFailure(TonicStatus),
     /// User provided an invalid amount.
     InvalidAmount(String),
     /// Invalid currency contained in the offer.
     InvalidCurrency,
     /// Unable to connect to peer.
-    PeerConnectError(Status),
+    PeerConnectError(TonicStatus),
     /// No node address.
     NodeAddressNotFound,
     /// Cannot list peers.
-    ListPeersFailure(Status),
+    ListPeersFailure(TonicStatus),
     /// Failure to build a reply path.
     BuildBlindedPathFailure,
     /// Unable to find or send to payment route.
-    RouteFailure(Status),
+    RouteFailure(TonicStatus),
     /// Failed to track payment.
-    TrackFailure(Status),
+    TrackFailure(TonicStatus),
     /// Failed to send payment.
     PaymentFailure,
     /// Failed to receive an invoice back from offer creator before the timeout.
@@ -49,15 +50,15 @@ pub enum OfferError {
     /// Failed to find introduction node for blinded path.
     IntroductionNodeNotFound,
     /// Cannot fetch channel info.
-    GetChannelInfo(Status),
+    GetChannelInfo(TonicStatus),
     /// Failed to create offer.
     CreateOfferFailure(Bolt12SemanticError),
     /// Failed to create offer with expiry time given system clock.
     CreateOfferTimeFailure,
     /// Failed to add invoice.
-    AddInvoiceFailure(Status),
+    AddInvoiceFailure(TonicStatus),
     /// Failed to decode payment request.
-    DecodePaymentRequestFailure(Status),
+    DecodePaymentRequestFailure(TonicStatus),
     /// Failed to parse payment hash.
     ParsePaymentHashFailure(String),
 }
@@ -108,3 +109,46 @@ impl Display for OfferError {
 }
 
 impl Error for OfferError {}
+
+pub fn map_offer_error_to_code(error: &OfferError) -> &'static str {
+    match error {
+        OfferError::CreateOfferFailure(_) => "CREATE_OFFER_FAILURE",
+        OfferError::CreateOfferTimeFailure => "CREATE_OFFER_TIME_FAILURE",
+        OfferError::AddInvoiceFailure(_) => "ADD_INVOICE_FAILURE",
+        OfferError::DecodePaymentRequestFailure(_) => "DECODE_PAYMENT_REQUEST_FAILURE",
+        OfferError::ParsePaymentHashFailure(_) => "PARSE_PAYMENT_HASH_FAILURE",
+        OfferError::InvalidAmount(_) => "INVALID_AMOUNT",
+        OfferError::InvalidCurrency => "INVALID_CURRENCY",
+        OfferError::AlreadyProcessing(_) => "ALREADY_PROCESSING",
+        OfferError::BuildUIRFailure(_) => "BUILD_UIR_FAILURE",
+        OfferError::SignError(_) => "SIGN_ERROR",
+        OfferError::DeriveKeyFailure(_) => "DERIVE_KEY_FAILURE",
+        OfferError::PeerConnectError(_) => "PEER_CONNECT_ERROR",
+        OfferError::NodeAddressNotFound => "NODE_ADDRESS_NOT_FOUND",
+        OfferError::ListPeersFailure(_) => "LIST_PEERS_FAILURE",
+        OfferError::BuildBlindedPathFailure => "BUILD_BLINDED_PATH_FAILURE",
+        OfferError::RouteFailure(_) => "ROUTE_FAILURE",
+        OfferError::TrackFailure(_) => "TRACK_FAILURE",
+        OfferError::PaymentFailure => "PAYMENT_FAILURE",
+        OfferError::InvoiceTimeout(_) => "INVOICE_TIMEOUT",
+        OfferError::IntroductionNodeNotFound => "INTRODUCTION_NODE_NOT_FOUND",
+        OfferError::GetChannelInfo(_) => "GET_CHANNEL_INFO",
+    }
+}
+
+pub fn map_offer_error_to_grpc_code(error: &OfferError) -> Code {
+    match error {
+        OfferError::InvalidAmount(_) | OfferError::InvalidCurrency => Code::InvalidArgument,
+        _ => Code::Internal,
+    }
+}
+
+pub fn create_lndk_status(error: OfferError) -> Status {
+    let error_code = map_offer_error_to_code(&error);
+    let grpc_code = map_offer_error_to_grpc_code(&error);
+    let human_message = error.to_string();
+
+    let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+
+    Status::with_details(grpc_code, human_message, error_info.into())
+}
