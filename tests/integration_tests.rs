@@ -605,7 +605,7 @@ async fn test_check_lndk_pay_offer_with_reconnection() {
         val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
-        _ = check_pay_offer_with_reconnection(handler, pay_cfg.clone(), lnd) => {
+        _ = check_pay_offer_with_reconnection(handler, pay_cfg.clone(), lnd, ldk2_pubkey) => {
             shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
@@ -617,6 +617,7 @@ async fn check_pay_offer_with_reconnection(
     handler: Arc<OfferHandler>,
     pay_cfg: PayOfferParams,
     lnd: common::LndNode,
+    node_id: PublicKey,
 ) {
     let lnd_arc = Arc::new(tokio::sync::Mutex::new(lnd));
     let lnd_clone = Arc::clone(&lnd_arc);
@@ -640,11 +641,8 @@ async fn check_pay_offer_with_reconnection(
     // Wait until LND is available again
     lnd.check_lnd_running(interval).await.unwrap();
 
-    // Even though LND is up and running, the GRPC service may not. Therefore,
-    // an additional time is added to wait for the GRPC service.
-    // Running the test in the CI, this time has to be even bigger because of the
-    // CI machine resources.
-    tokio::time::sleep(Duration::from_millis(5000)).await;
+    // Wait until lnd graph some addresses for node_id.
+    lnd.wait_for_addresses_to_sync(node_id).await;
 
     // Send another pay_offer process using the same handler.
     // Because of the reconnections, the handler has to be able to connect

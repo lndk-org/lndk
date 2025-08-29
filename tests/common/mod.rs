@@ -616,6 +616,56 @@ impl LndNode {
         }
     }
 
+    // wait_for_addresses_to_sync waits until the given node has addresses in the graph.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_addresses_to_sync(&mut self, node_id: PublicKey) {
+        match timeout(Duration::from_secs(100), self.check_addresses_sync(node_id)).await {
+            Err(_) => panic!("timeout before node {} addresses synced", node_id),
+            _ => {}
+        };
+    }
+
+    pub async fn check_addresses_sync(&mut self, node_id: PublicKey) {
+        loop {
+            let node_info_req = tonic_lnd::lnrpc::NodeInfoRequest {
+                pub_key: node_id.to_string(),
+                include_channels: false,
+            };
+
+            let resp = if let Some(client) = self.client.clone() {
+                let make_request = || async {
+                    client
+                        .clone()
+                        .lightning()
+                        .get_node_info(node_info_req.clone())
+                        .await
+                };
+                let resp = test_utils::retry_async(make_request, String::from("get_node_info"));
+                resp.await
+            } else {
+                panic!("No client")
+            };
+
+            match resp {
+                Ok(node_info) => {
+                    if let Some(node) = node_info.node {
+                        if !node.addresses.is_empty() {
+                            return;
+                        } else {
+                            log::trace!("Node {} found but has no addresses yet", node_id);
+                        }
+                    } else {
+                        log::trace!("Node {} found in response but node field is None", node_id);
+                    }
+                }
+                Err(_) => {
+                    log::trace!("Node info not found yet for {}", node_id);
+                }
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    }
+
     // Create an on-chain bitcoin address to fund our LND node.
     #[allow(dead_code)]
     pub async fn new_address(&mut self) -> tonic_lnd::lnrpc::NewAddressResponse {
