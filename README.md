@@ -112,7 +112,7 @@ Or in a more concrete example:
   - `macaroon_path="<MACAROONPATH>"`
 - Run `cargo run --bin=lndk -- --conf lndk.conf`
 
-* Use any of the commands with the --help option for more information about each argument.
+- Use any of the commands with the --help option for more information about each argument.
 
 #### Custom macaroon
 
@@ -133,18 +133,16 @@ Then you have few options to run or develop LNDK:
 `nix develop` will open a shell with all the dependencies needed to run LNDK and itests.
 `nix flake check` will run all the checks defined in the flake. Also runs cargo audit and formatting checks.
 
-
 #### Running Integration Tests
 
 Integration tests require building an LND binary. You can use Nix to provide a complete environment with all dependencies needed for the tests:
 
 ```
 nix develop
-make itest
+just itest
 ```
 
 The integration tests must be run from within the Git repository. The script will handle building LND from source and running the tests with the correct environment variables.
-
 
 ## Security
 

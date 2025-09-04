@@ -45,12 +45,19 @@ jobs:
         uses: lightningnetwork/lnd/.github/actions/setup-go@v0-16-4-branch
         with:
           go-version: "${{ env.GO_VERSION }}"
+      - name: Install just
+        run: |
+          if ! command -v just &> /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin
+          else
+            echo "just is already installed: $(just --version)"
+          fi
       - name: run unit tests
-        run: cargo test --bin lndk
+        run: just lib-test
       - name: run cli unit tests
-        run: cargo test --bin lndk-cli
+        run: just cli-test
       - name: run integration tests
-        run: make itest
+        run: just itest
 
   coverage:
     name: LNDK Code Coverage
