@@ -28,6 +28,7 @@
             rust-bin.stable.${rustChannel}.default
             go
             git
+            just
           ];
 
           shellHook = ''
