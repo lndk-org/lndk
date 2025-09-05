@@ -1,8 +1,8 @@
 use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
+use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
-use crate::offers::{create_lndk_status, get_destination};
 use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
@@ -119,7 +119,7 @@ impl Offers for LNDKServer {
                 log::info!("Payment succeeded.");
                 payment
             }
-            Err(e) => return Err(create_lndk_status(e)),
+            Err(e) => return Err(e.to_status()),
         };
 
         let reply = PayOfferResponse {
@@ -199,7 +199,7 @@ impl Offers for LNDKServer {
                 log::info!("Invoice request succeeded.");
                 invoice
             }
-            Err(e) => return Err(create_lndk_status(e)),
+            Err(e) => return Err(e.to_status()),
         };
 
         // We need to remove the payment from our tracking map now.
@@ -244,7 +244,7 @@ impl Offers for LNDKServer {
 
         let amount = match validate_amount(invoice.amount().as_ref(), inner_request.amount).await {
             Ok(amount) => amount,
-            Err(e) => return Err(create_lndk_status(e)),
+            Err(e) => return Err(e.to_status()),
         };
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
 
@@ -259,7 +259,7 @@ impl Offers for LNDKServer {
                 log::info!("Invoice paid.");
                 invoice
             }
-            Err(e) => return Err(create_lndk_status(e)),
+            Err(e) => return Err(e.to_status()),
         };
 
         let reply = PayInvoiceResponse {
