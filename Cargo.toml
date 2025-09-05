@@ -44,7 +44,7 @@ async_fn_traits = "0.1.1"
 
 # Integration test dependencies, only enabled with itest feature
 bitcoincore-rpc = { version = "0.19.0", optional = true }
-corepc-node = { version = "0.7.0", features = [ "28_0", "download"], optional = true }
+corepc-node = { version = "0.8.0", features = [ "28_0", "download"], optional = true }
 chrono = { version = "0.4.26", optional = true }
 ldk-sample = { git = "https://github.com/a-mpch/ldk-sample", branch = "2025-06-use-forked-ldk", optional = true }
 
