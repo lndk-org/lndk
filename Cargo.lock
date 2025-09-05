@@ -1178,7 +1178,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "ldk-sample"
 version = "0.1.0"
-source = "git+https://github.com/a-mpch/ldk-sample?branch=2025-06-use-forked-ldk#706d9e32a1b2e5d18b8e22cfce8ab1775a5cf50a"
+source = "git+https://github.com/a-mpch/ldk-sample?branch=2025-06-use-forked-ldk#57e3aa3d0cd677cd4fe83998952a8a6f782113f8"
 dependencies = [
  "base64 0.13.1",
  "bech32 0.8.1",
