@@ -136,6 +136,7 @@ async fn main() -> Result<(), ()> {
     let handler = Arc::new(OfferHandler::new(
         config.response_invoice_timeout,
         Some(seed),
+        Some(client.clone()),
     ));
     let messenger = LndkOnionMessenger::new();
 

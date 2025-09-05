@@ -8,6 +8,7 @@ use chrono::Utc;
 use corepc_node::{get_available_port, Conf, ConnectParams, Node};
 use ldk_sample::config::LdkUserInfo;
 use ldk_sample::node_api::Node as LdkNode;
+use ldk_sample::HTLCStatus;
 use lightning::util::logger::Level;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::OfferHandler;
@@ -25,7 +26,7 @@ use tempfile::{tempdir, Builder, TempDir};
 use tokio::select;
 use tokio::time::Interval;
 use tokio::time::{sleep, timeout, Duration};
-use tonic_lnd::lnrpc::{AddressType, GetInfoRequest};
+use tonic_lnd::lnrpc::{AddressType, GetInfoRequest, InvoiceHtlcState, ListInvoiceRequest};
 use tonic_lnd::Client;
 
 const LNDK_TESTS_FOLDER: &str = "lndk-tests";
@@ -90,7 +91,8 @@ pub async fn setup_test_infrastructure(
 pub async fn connect_network(
     ldk1: &LdkNode,
     ldk2: &LdkNode,
-    announce_channel: bool,
+    announce_channel_ldk: bool,
+    announce_channel_lnd: bool,
     lnd: &mut LndNode,
     bitcoind: &BitcoindNode,
 ) -> (PublicKey, PublicKey, PublicKey) {
@@ -134,18 +136,24 @@ pub async fn connect_network(
 
     lnd.wait_for_chain_sync().await;
 
-    ldk2.open_channel(ldk1_pubkey, addr, 200000, 0, false)
-        .await
-        .unwrap();
+    ldk2.open_channel(
+        ldk1_pubkey,
+        addr,
+        300_000,
+        100_000_000,
+        announce_channel_ldk,
+    )
+    .await
+    .unwrap();
 
     lnd.wait_for_graph_sync().await;
 
     ldk2.open_channel(
         lnd_pubkey,
         SocketAddr::from_str(&lnd_network_addr).unwrap(),
-        200000,
-        10000000,
-        announce_channel,
+        300_000,
+        100_000_000,
+        announce_channel_lnd,
     )
     .await
     .unwrap();
@@ -307,6 +315,76 @@ pub fn get_lnd_args(
     (args.to_vec(), stdout_file, stderr_file)
 }
 
+pub async fn wait_for_ldk_payment_completion(
+    ldk_node: &LdkNode,
+    timeout_duration: Duration,
+) -> Result<(), ()> {
+    log::info!("Waiting for payment to complete...");
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout_duration {
+            return Err(());
+        }
+
+        let payments = ldk_node.list_payments().await;
+
+        if let Some(latest_payment) = payments.last() {
+            log::debug!("Checking payment status: {:?}", latest_payment.status);
+            match latest_payment.status {
+                HTLCStatus::Pending => {
+                    log::debug!("Payment still pending, waiting 1 second...");
+                    sleep(Duration::from_secs(1)).await;
+                }
+                HTLCStatus::Succeeded => {
+                    log::info!("Payment succeeded");
+                    return Ok(());
+                }
+                HTLCStatus::Failed => {
+                    log::error!("Payment failed");
+                    return Err(());
+                }
+            }
+        } else {
+            log::debug!("No payments found yet, waiting 1 second...");
+            sleep(Duration::from_secs(1)).await;
+        }
+    }
+}
+
+pub async fn wait_for_lnd_payment_completion(
+    lnd_client: &mut Client,
+    timeout_duration: Duration,
+) -> Result<(), ()> {
+    log::info!("Waiting for payment to appear in lnd...");
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout_duration {
+            return Err(());
+        }
+
+        let invoices = lnd_client
+            .lightning()
+            .list_invoices(ListInvoiceRequest {
+                ..Default::default()
+            })
+            .await;
+        assert!(invoices.is_ok());
+        let invoices = invoices.unwrap().into_inner();
+        if !invoices.invoices.is_empty() {
+            let invoice = invoices.invoices[0].clone();
+            log::debug!("Invoice status: {:?}", invoice.state);
+            if invoice.state == InvoiceHtlcState::Settled as i32 {
+                log::info!("Payment succeeded");
+                return Ok(());
+            }
+        }
+        log::debug!("No payments found yet, waiting 1 second...");
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
 // BitcoindNode holds the tools we need to interact with a Bitcoind node.
 pub struct BitcoindNode {
     pub node: Node,
@@ -393,7 +471,6 @@ impl LndNode {
         let lnd_port = corepc_node::get_available_port().unwrap();
         let rpc_addr = format!("localhost:{}", port);
         let cert_path = lnd_dir.to_str().unwrap().to_string() + "/tls.cert";
-
         let (args, stdout_file, stderr_file) = get_lnd_args(
             &lnd_dir_binding,
             &bitcoind_connect_params,

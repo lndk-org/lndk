@@ -2,10 +2,12 @@
 
 mod common;
 use futures::future::try_join_all;
+use lightning::bitcoin::constants::ChainHash;
 use lightning::blinded_path::message::{MessageContext, OffersContext};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::nonce::Nonce;
-use lndk;
+use lightning::offers::offer::{Amount, Offer};
+use lightning::util::string::PrintableString;
 use log::error;
 
 use bitcoin::secp256k1::PublicKey;
@@ -16,7 +18,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::create_reply_path;
-use lndk::offers::handler::{OfferHandler, PayOfferParams};
+use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
 use std::path::PathBuf;
@@ -330,7 +332,7 @@ async fn test_lndk_pay_offer() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -383,7 +385,7 @@ async fn test_lndk_pay_offer_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -437,7 +439,7 @@ async fn test_lndk_pay_multiple_offers_concurrently() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = &vec![ldk2_pubkey, ldk1_pubkey];
     let reply_path = &vec![ldk2_pubkey, lnd_pubkey];
@@ -477,7 +479,7 @@ async fn test_reply_path_unannounced_peers() {
         common::setup_test_infrastructure(test_name).await;
 
     let (_, _, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, false, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, false, &mut lnd, &bitcoind).await;
 
     let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
@@ -519,7 +521,7 @@ async fn test_reply_path_announced_peers() {
         common::setup_test_infrastructure(test_name).await;
 
     let (_, ldk2_pubkey, lnd_pubkey) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let (_, _, _, shutdown) =
         common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
@@ -564,7 +566,7 @@ async fn test_check_lndk_pay_offer_with_reconnection() {
         common::setup_test_infrastructure(test_name).await;
 
     let (ldk1_pubkey, ldk2_pubkey, _) =
-        common::connect_network(&ldk1, &ldk2, true, &mut lnd, &bitcoind).await;
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
 
     let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
     let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
@@ -656,4 +658,131 @@ async fn check_pay_offer_with_reconnection(
     // We check that the second pay_offer success using the same handler
     // because the LND node has been restarted.
     assert!(res2.is_ok());
+}
+#[tokio::test(flavor = "multi_thread")]
+// Test that we can create an offer and that the offer is valid.
+async fn test_create_offer() {
+    let test_name = "lndk_create_offer";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (_, _ldk2_pubkey, _lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
+
+    let (_, handler, _, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
+
+    let create_offer_params = CreateOfferParams {
+        client: lnd.client.clone().unwrap(),
+        amount_msats: 20_000,
+        chain: Network::Regtest,
+        description: None,
+        issuer: None,
+        quantity: None,
+        expiry: None,
+    };
+    let offer = handler.create_offer(create_offer_params).await;
+    assert!(offer.is_ok());
+    let offer = offer.unwrap();
+    assert_eq!(
+        offer.amount().unwrap(),
+        Amount::Bitcoin {
+            amount_msats: 20_000
+        }
+    );
+    assert_eq!(offer.chains(), vec![ChainHash::REGTEST]);
+    assert_eq!(offer.description(), Some(PrintableString("")));
+    assert_eq!(offer.issuer(), None);
+    assert_eq!(offer.supported_quantity(), Quantity::One);
+    assert_eq!(offer.absolute_expiry(), None);
+    log::info!("Sending InvoiceRequest ldk2 --> lnd");
+    let payment = ldk2.pay_offer(offer, None).await;
+    log::info!("Payment sent: {:?}", payment);
+    assert!(payment.is_ok());
+    shutdown.trigger();
+    ldk1.stop().await;
+    ldk2.stop().await;
+}
+
+async fn pay_offer_and_wait_for_payment(
+    ldk: &LdkNode,
+    offer: Offer,
+    mut lnd_client: Client,
+) -> Result<(), ()> {
+    let payment = ldk.pay_offer(offer, None).await;
+    assert!(payment.is_ok());
+    // Wait for the payment to complete on ldk side.
+    common::wait_for_ldk_payment_completion(ldk, Duration::from_secs(30)).await?;
+    // Wait for the payment to complete on lnd side.
+    common::wait_for_lnd_payment_completion(&mut lnd_client, Duration::from_secs(10)).await?;
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread")]
+// Test that we can receive a payment from an offer.
+async fn test_receive_payment_from_offer() {
+    let test_name = "lndk_receive_payment_from_offer";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, _ldk2_pubkey, _lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, true, true, &mut lnd, &bitcoind).await;
+
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
+
+    let (shutdown, listener) = triggered::trigger();
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
+
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+    };
+
+    let lndk_cfg = lndk::Cfg {
+        lnd: lnd_cfg,
+        signals,
+        skip_version_check: false,
+        rate_limit_count: 10,
+        rate_limit_period_secs: 1,
+    };
+    let handler = Arc::new(OfferHandler::new(
+        None,
+        None,
+        Some(lnd.client.clone().unwrap()),
+    ));
+    let messenger = lndk::LndkOnionMessenger::new();
+
+    let create_offer_params = CreateOfferParams {
+        client: lnd.client.clone().unwrap(),
+        amount_msats: 20_000,
+        chain: Network::Regtest,
+        description: None,
+        issuer: None,
+        quantity: None,
+        expiry: None,
+    };
+
+    let offer = handler.create_offer(create_offer_params).await;
+    assert!(offer.is_ok());
+    let offer = offer.unwrap();
+    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
+
+    select! {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
+            panic!("lndk should not have completed first {:?}", val);
+        },
+        res = pay_offer_and_wait_for_payment(&ldk1, offer, lnd.client.clone().unwrap()) => {
+            assert!(res.is_ok());
+            shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    }
 }

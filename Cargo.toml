@@ -21,7 +21,12 @@ bitcoin = { version = "0.32.6", features = ["rand"] }
 clap = { version = "4.4.6", features = ["derive", "string"] }
 futures = "0.3.26"
 home = "0.5.5"
-lightning = { version = "0.1.3", features = ["_test_utils"] }
+# lightning = { version = "0.1.3", features = ["_test_utils"] }
+# Branch port commit https://github.com/lightningdevkit/rust-lightning/commit/928429833507eb98b1f9a3793da4fe4527e11435
+# from main branch on top of version 0.1.3.
+# TODO: Use main crate when version 0.2.X is deployed.
+lightning = { git = "https://github.com/a-mpch/rust-lightning", branch = "2025-06-cherry-pick-exposed", features = ["dnssec"] }
+
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 log = "0.4.17"
@@ -41,7 +46,7 @@ async_fn_traits = "0.1.1"
 bitcoincore-rpc = { version = "0.19.0", optional = true }
 corepc-node = { version = "0.7.0", features = [ "28_0", "download"], optional = true }
 chrono = { version = "0.4.26", optional = true }
-ldk-sample = { git = "https://github.com/lndk-org/ldk-sample", rev = "07a3841bf3b6251cbcc57d8f13ea6083ac74b6dc", optional = true }
+ldk-sample = { git = "https://github.com/a-mpch/ldk-sample", branch = "2025-06-use-forked-ldk", optional = true }
 
 [dev-dependencies]
 mockall = "0.11.3"

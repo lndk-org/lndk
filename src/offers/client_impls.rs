@@ -1,8 +1,13 @@
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
+use lightning::offers::invoice_request::InvoiceRequest;
+use lightning::offers::offer::Amount;
 use log::error;
 use tonic::async_trait;
-use tonic_lnd::lnrpc::{FeeLimit, HtlcAttempt, Payment, QueryRoutesResponse, Route};
+use tonic_lnd::lnrpc::{
+    AddInvoiceResponse, FeeLimit, GetInfoRequest, GetInfoResponse, HtlcAttempt, Invoice, PayReq,
+    PayReqString, Payment, QueryRoutesResponse, Route,
+};
 use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::LightningClient;
@@ -12,7 +17,7 @@ use tonic_lnd::{
     Client,
 };
 
-use crate::lnd::{InvoicePayer, MessageSigner, PeerConnector};
+use crate::lnd::{Bolt12InvoiceCreator, InvoicePayer, MessageSigner, OfferCreator, PeerConnector};
 
 use super::lnd_requests::get_node_id;
 use super::OfferError;
@@ -187,13 +192,59 @@ impl InvoicePayer for Client {
     }
 }
 
+#[async_trait]
+impl OfferCreator for LightningClient {
+    async fn get_info(&mut self) -> Result<GetInfoResponse, Status> {
+        let req = GetInfoRequest::default();
+        self.get_info(req).await.map(|resp| resp.into_inner())
+    }
+}
+
+#[async_trait]
+impl Bolt12InvoiceCreator for Client {
+    async fn add_invoice(
+        &mut self,
+        invoice_request: InvoiceRequest,
+    ) -> Result<AddInvoiceResponse, Status> {
+        let amount = match invoice_request.amount() {
+            Some(Amount::Bitcoin { amount_msats }) => amount_msats as i64,
+            _ => 0,
+        };
+        let description = match invoice_request.description() {
+            Some(description) => description.to_string(),
+            None => "".to_string(),
+        };
+        let req = Invoice {
+            memo: description,
+            value_msat: amount,
+            // We use a 24 hour expiry for invoices so blinded path restrictions have a higher CLTV
+            // expiry. This is a workaround for LDK default nodes that add a cltv offet
+            // for privacy reasons.
+            expiry: 60 * 60 * 24,
+            is_blinded: true,
+            ..Default::default()
+        };
+        let resp = self.lightning().add_invoice(req).await?;
+        Ok(resp.into_inner())
+    }
+
+    async fn decode_payment_request(&mut self, payment_request: String) -> Result<PayReq, Status> {
+        let req = PayReqString {
+            pay_req: payment_request,
+        };
+        let resp = self.lightning().decode_pay_req(req).await?;
+        Ok(resp.into_inner())
+    }
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::lnd::{InvoicePayer, PeerConnector};
-
+    use crate::lnd::{Bolt12InvoiceCreator, InvoicePayer, PeerConnector};
+    use lightning::offers::invoice_request::InvoiceRequest;
     use mockall::mock;
     use tonic::async_trait;
+    use tonic_lnd::lnrpc::{AddInvoiceResponse, PayReq};
     use tonic_lnd::lnrpc::{HtlcAttempt, NodeInfo, Route};
     use tonic_lnd::tonic::Status;
 
@@ -216,6 +267,32 @@ pub(super) mod tests {
             async fn query_routes(&mut self, path: BlindedPaymentPath, cltv_expiry_delta: u16, fee_base_msat: u32, fee_ppm: u32, msats: u64, fee_limit: Option<FeeLimit>) -> Result<QueryRoutesResponse, Status>;
             async fn send_to_route(&mut self, payment_hash: [u8; 32], route: Route) -> Result<HtlcAttempt, Status>;
             async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
+        }
+    }
+
+    mock! {
+        pub TestOfferCreator{}
+
+        #[async_trait]
+        impl OfferCreator for TestOfferCreator {
+            async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
+        }
+
+        #[async_trait]
+        impl PeerConnector for TestOfferCreator {
+            async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
+            async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<NodeInfo, Status>;
+            async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+        }
+    }
+
+    mock! {
+        pub TestBolt12InvoiceCreator{}
+
+        #[async_trait]
+        impl Bolt12InvoiceCreator for TestBolt12InvoiceCreator {
+            async fn add_invoice(&mut self, invoice_request: InvoiceRequest) -> Result<AddInvoiceResponse, Status>;
+            async fn decode_payment_request(&mut self, payment_request: String) -> Result<PayReq, Status>;
         }
     }
 }

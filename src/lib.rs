@@ -2,6 +2,7 @@ mod clock;
 mod grpc;
 #[allow(dead_code)]
 pub mod lnd;
+mod message_router;
 pub mod offers;
 pub mod onion_messenger;
 mod rate_limit;
@@ -31,6 +32,7 @@ use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use message_router::MessageRouter;
 use offers::handler::OfferHandler;
 use rate_limit::RateLimiterCfg;
 use std::path::PathBuf;
@@ -190,7 +192,9 @@ impl LndkOnionMessenger {
         let node_signer = LndNodeSigner::new(pubkey, &mut node_client);
         let messenger_utils = MessengerUtilities::default();
         let network_graph = &NetworkGraph::new(network, &messenger_utils);
-        let message_router = &DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let default_message_router = DefaultMessageRouter::new(network_graph, &messenger_utils);
+        let message_router =
+            &MessageRouter::new(default_message_router, client.clone().lightning_read_only());
         let node_id_lookup = LndkNodeIdLookUp::new(client.clone(), pubkey);
         let onion_messenger = OnionMessenger::new(
             &messenger_utils,
