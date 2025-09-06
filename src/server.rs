@@ -84,11 +84,7 @@ impl Offers for LNDKServer {
             ))
         })?;
 
-        let destination = get_destination(&offer).await.map_err(|e| {
-            Status::internal(format!(
-                "Internal error: Couldn't get destination from offer: {e:?}"
-            ))
-        })?;
+        let destination = get_destination(&offer).await?;
         let reply_path = None;
         let info = client
             .lightning()
@@ -114,13 +110,8 @@ impl Offers for LNDKServer {
             fee_limit,
         };
 
-        let payment = match self.offer_handler.pay_offer(cfg).await {
-            Ok(payment) => {
-                log::info!("Payment succeeded.");
-                payment
-            }
-            Err(e) => return Err(e.to_status()),
-        };
+        let payment = self.offer_handler.pay_offer(cfg).await?;
+        log::info!("Payment succeeded.");
 
         let reply = PayOfferResponse {
             payment_preimage: payment.payment_preimage,
@@ -167,9 +158,7 @@ impl Offers for LNDKServer {
             ))
         })?;
 
-        let destination = get_destination(&offer)
-            .await
-            .map_err(|e| Status::unavailable(format!("Couldn't find destination: {e}")))?;
+        let destination = get_destination(&offer).await?;
         let reply_path = None;
 
         let info = client
@@ -194,13 +183,8 @@ impl Offers for LNDKServer {
             fee_limit: None,
         };
 
-        let (invoice, _, payment_id) = match self.offer_handler.get_invoice(cfg).await {
-            Ok(invoice) => {
-                log::info!("Invoice request succeeded.");
-                invoice
-            }
-            Err(e) => return Err(e.to_status()),
-        };
+        let (invoice, _, payment_id) = self.offer_handler.get_invoice(cfg).await?;
+        log::info!("Invoice request succeeded.");
 
         // We need to remove the payment from our tracking map now.
         // TODO: This is a hack to remove the payment from the tracking map. We should do it when
@@ -242,25 +226,16 @@ impl Offers for LNDKServer {
             ))
         })?;
 
-        let amount = match validate_amount(invoice.amount().as_ref(), inner_request.amount).await {
-            Ok(amount) => amount,
-            Err(e) => return Err(e.to_status()),
-        };
+        let amount = validate_amount(invoice.amount().as_ref(), inner_request.amount).await?;
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
 
         let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
 
-        let invoice = match self
+        let invoice = self
             .offer_handler
             .pay_invoice(client, amount, &invoice, payment_id, fee_limit)
-            .await
-        {
-            Ok(invoice) => {
-                log::info!("Invoice paid.");
-                invoice
-            }
-            Err(e) => return Err(e.to_status()),
-        };
+            .await?;
+        log::info!("Invoice paid.");
 
         let reply = PayInvoiceResponse {
             payment_preimage: invoice.payment_preimage,
@@ -306,10 +281,7 @@ impl Offers for LNDKServer {
             quantity,
             expiry: inner_request.expiry.map(Duration::from_secs),
         };
-        let offer = match self.offer_handler.create_offer(request).await {
-            Ok(offer) => offer,
-            Err(e) => return Err(e.to_status()),
-        };
+        let offer = self.offer_handler.create_offer(request).await?;
 
         let reply = CreateOfferResponse {
             offer: offer.to_string(),
@@ -343,18 +315,58 @@ fn check_auth_metadata(metadata: &MetadataMap) -> Result<String, Status> {
     let macaroon = match metadata.get("macaroon") {
         Some(macaroon_hex) => macaroon_hex
             .to_str()
-            .map_err(|e| {
-                Status::invalid_argument(format!("Invalid macaroon string provided: {e}"))
-            })?
+            .map_err(|e| AuthError::InvalidMacaroon(e.to_string()).to_status())?
             .to_string(),
-        _ => {
-            return Err(Status::unauthenticated(
-                "No LND macaroon provided: Make sure to provide macaroon in request metadata",
-            ))
-        }
+        _ => return Err(AuthError::MissingMacaroon.to_status()),
     };
 
     Ok(macaroon)
+}
+
+#[derive(Debug)]
+pub enum AuthError {
+    InvalidMacaroon(String),
+    MissingMacaroon,
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthError::InvalidMacaroon(e) => write!(f, "Invalid macaroon string provided: {e}"),
+            AuthError::MissingMacaroon => write!(
+                f,
+                "No LND macaroon provided: Make sure to provide macaroon in request metadata"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+impl AuthError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            AuthError::InvalidMacaroon(_) => "INVALID_MACAROON",
+            AuthError::MissingMacaroon => "MISSING_MACAROON",
+        }
+    }
+
+    pub fn grpc_code(&self) -> tonic::Code {
+        match self {
+            AuthError::InvalidMacaroon(_) => tonic::Code::InvalidArgument,
+            AuthError::MissingMacaroon => tonic::Code::Unauthenticated,
+        }
+    }
+
+    pub fn to_status(self) -> Status {
+        let error_code = self.code();
+        let grpc_code = self.grpc_code();
+        let human_message = self.to_string();
+
+        let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+
+        Status::with_details(grpc_code, human_message, error_info.into())
+    }
 }
 
 /// An error that occurs when generating TLS credentials.

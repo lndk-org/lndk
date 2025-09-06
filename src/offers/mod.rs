@@ -154,3 +154,9 @@ impl Display for OfferError {
 }
 
 impl Error for OfferError {}
+
+impl From<OfferError> for Status {
+    fn from(error: OfferError) -> Self {
+        error.to_status()
+    }
+}
