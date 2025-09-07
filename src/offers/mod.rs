@@ -1,8 +1,9 @@
 use std::{error::Error, fmt::Display};
 
+use bitcoin::io::Error as BitcoinIoError;
 use lightning::{
-    ln::channelmanager::PaymentId,
-    offers::{merkle::SignError, parse::Bolt12SemanticError},
+    ln::{channelmanager::PaymentId, msgs::DecodeError},
+    offers::{merkle::SignError, parse::Bolt12ParseError, parse::Bolt12SemanticError},
 };
 use tonic::{Code, Status};
 use tonic_lnd::tonic::Status as TonicStatus;
@@ -61,6 +62,12 @@ pub enum OfferError {
     DecodePaymentRequestFailure(TonicStatus),
     /// Failed to parse payment hash.
     ParsePaymentHashFailure(String),
+    /// Failed to parse offer.
+    ParseOfferFailure(Bolt12ParseError),
+    /// Failed to parse invoice.
+    ParseInvoiceFailure(DecodeError),
+    /// Failed to encode invoice.
+    EncodeInvoiceFailure(BitcoinIoError),
 }
 
 impl OfferError {
@@ -71,6 +78,9 @@ impl OfferError {
             OfferError::AddInvoiceFailure(_) => "ADD_INVOICE_FAILURE",
             OfferError::DecodePaymentRequestFailure(_) => "DECODE_PAYMENT_REQUEST_FAILURE",
             OfferError::ParsePaymentHashFailure(_) => "PARSE_PAYMENT_HASH_FAILURE",
+            OfferError::ParseOfferFailure(_) => "PARSE_OFFER_FAILURE",
+            OfferError::ParseInvoiceFailure(_) => "PARSE_INVOICE_FAILURE",
+            OfferError::EncodeInvoiceFailure(_) => "ENCODE_INVOICE_FAILURE",
             OfferError::InvalidAmount(_) => "INVALID_AMOUNT",
             OfferError::InvalidCurrency => "INVALID_CURRENCY",
             OfferError::AlreadyProcessing(_) => "ALREADY_PROCESSING",
@@ -92,7 +102,11 @@ impl OfferError {
 
     pub fn grpc_code(&self) -> Code {
         match self {
-            OfferError::InvalidAmount(_) | OfferError::InvalidCurrency => Code::InvalidArgument,
+            OfferError::InvalidAmount(_)
+            | OfferError::InvalidCurrency
+            | OfferError::ParseOfferFailure(_)
+            | OfferError::ParseInvoiceFailure(_)
+            | OfferError::EncodeInvoiceFailure(_) => Code::InvalidArgument,
             _ => Code::Internal,
         }
     }
@@ -148,6 +162,15 @@ impl Display for OfferError {
             }
             OfferError::ParsePaymentHashFailure(e) => {
                 write!(f, "Could not parse payment hash: {e:?}")
+            }
+            OfferError::ParseOfferFailure(e) => {
+                write!(f, "The provided offer was invalid. Please provide a valid offer in bech32 format, i.e. starting with 'lno'. Error: {e:?}")
+            }
+            OfferError::ParseInvoiceFailure(e) => {
+                write!(f, "The provided invoice was invalid. Please provide a valid invoice in hex format. Error: {e:?}")
+            }
+            OfferError::EncodeInvoiceFailure(e) => {
+                write!(f, "Failed to encode invoice to hex format. Error: {e:?}")
             }
         }
     }

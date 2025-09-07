@@ -3,6 +3,7 @@ use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
 use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
+use crate::offers::OfferError;
 use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
@@ -10,6 +11,7 @@ use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::offer::{Offer, Quantity};
+use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
@@ -33,6 +35,7 @@ use tonic::metadata::MetadataMap;
 use tonic::transport::Identity;
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
+
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
     #[allow(dead_code)]
@@ -77,12 +80,7 @@ impl Offers for LNDKServer {
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided offer was invalid. Please provide a valid offer in bech32 format,
-                i.e. starting with 'lno'. Error: {e:?}"
-            ))
-        })?;
+        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
 
         let destination = get_destination(&offer).await?;
         let reply_path = None;
@@ -127,8 +125,8 @@ impl Offers for LNDKServer {
         log::info!("Received a request: {:?}", request.get_ref());
 
         let invoice_string: Bolt12InvoiceString = request.get_ref().invoice.clone().into();
-        let invoice = Bolt12Invoice::try_from(invoice_string)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let invoice =
+            Bolt12Invoice::try_from(invoice_string).map_err(OfferError::ParseInvoiceFailure)?;
 
         let reply: Bolt12InvoiceContents = generate_bolt12_invoice_contents(&invoice);
         Ok(Response::new(reply))
@@ -151,12 +149,7 @@ impl Offers for LNDKServer {
             .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided offer was invalid. Please provide a valid offer in bech32 format,
-                i.e. starting with 'lno'. Error: {e:?}"
-            ))
-        })?;
+        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
 
         let destination = get_destination(&offer).await?;
         let reply_path = None;
@@ -219,12 +212,8 @@ impl Offers for LNDKServer {
 
         let inner_request = request.get_ref();
         let invoice_string: Bolt12InvoiceString = inner_request.invoice.clone().into();
-        let invoice = Bolt12Invoice::try_from(invoice_string).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided invoice was invalid. Please provide a valid invoice in hex format.
-                Error: {e:?}"
-            ))
-        })?;
+        let invoice =
+            Bolt12Invoice::try_from(invoice_string).map_err(OfferError::ParseInvoiceFailure)?;
 
         let amount = validate_amount(invoice.amount().as_ref(), inner_request.amount).await?;
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
@@ -269,8 +258,7 @@ impl Offers for LNDKServer {
         let network = get_network(info)
             .await
             .map_err(|e| Status::internal(format!("{e:?}")))?;
-        let quantity = parse_quantity(inner_request.quantity)
-            .map_err(|_| Status::invalid_argument("Invalid quantity provided"))?;
+        let quantity = parse_quantity(inner_request.quantity)?;
 
         let request = CreateOfferParams {
             client,
@@ -290,7 +278,7 @@ impl Offers for LNDKServer {
     }
 }
 
-fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, ()> {
+fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, OfferError> {
     let quantity = match rpc_quantity {
         Some(quantity) => quantity,
         None => return Ok(None),
@@ -304,7 +292,9 @@ fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, ()> {
     }
     let amount = NonZeroU64::new(quantity);
     if amount.is_none() {
-        return Err(());
+        return Err(OfferError::ParseOfferFailure(
+            Bolt12ParseError::InvalidSemantics(Bolt12SemanticError::InvalidQuantity),
+        ));
     }
     Ok(Some(Quantity::Bounded(amount.unwrap())))
 }
@@ -482,11 +472,11 @@ fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12I
     }
 }
 
-fn encode_invoice_as_hex(invoice: &Bolt12Invoice) -> Result<String, Status> {
+fn encode_invoice_as_hex(invoice: &Bolt12Invoice) -> Result<String, OfferError> {
     let mut buffer = Vec::new();
     invoice
         .write(&mut buffer)
-        .map_err(|e| Status::internal(format!("Error serializing invoice: {e}")))?;
+        .map_err(OfferError::EncodeInvoiceFailure)?;
     Ok(hex::encode(buffer))
 }
 
