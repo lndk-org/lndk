@@ -4,7 +4,7 @@ use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
 use crate::offers::OfferError;
-use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
+use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
@@ -20,19 +20,11 @@ use lndkrpc::{
     PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash,
     PaymentPaths,
 };
-use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
-use std::error::Error;
-use std::fmt::Display;
-use std::fs::{metadata, set_permissions, File};
-use std::io::Write;
 use std::num::NonZeroU64;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::metadata::MetadataMap;
-use tonic::transport::Identity;
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
 
@@ -362,84 +354,6 @@ impl AuthError {
     }
 }
 
-/// An error that occurs when generating TLS credentials.
-#[derive(Debug)]
-pub enum CertificateGenFailure {
-    RcgenError(RcgenError),
-    IoError(std::io::Error),
-}
-
-impl Display for CertificateGenFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CertificateGenFailure::RcgenError(e) => {
-                write!(f, "Error generating TLS certificate: {e:?}")
-            }
-            CertificateGenFailure::IoError(e) => write!(f, "IO error: {e:?}"),
-        }
-    }
-}
-
-impl Error for CertificateGenFailure {}
-
-// If a tls cert/key pair doesn't already exist, generate_tls_creds creates the tls cert/key pair
-// required to secure connections to LNDK's gRPC server. By default they are stored in ~/.lndk.
-pub fn generate_tls_creds(
-    data_dir: PathBuf,
-    tls_ips_string: Option<String>,
-) -> Result<(), CertificateGenFailure> {
-    let cert_path = data_dir.join(TLS_CERT_FILENAME);
-    let key_path = data_dir.join(TLS_KEY_FILENAME);
-    let tls_ips = collect_tls_ips(tls_ips_string);
-
-    // Did we have to generate a new key? In that case we also need to regenerate the certificate.
-    if !key_path.exists() || !cert_path.exists() {
-        log::debug!("Generating fresh TLS credentials in {data_dir:?}");
-        let mut subject_alt_names = vec!["localhost".to_string()];
-        if let Some(ips) = tls_ips {
-            for ip in ips {
-                subject_alt_names.push(ip);
-            }
-        };
-
-        let CertifiedKey {
-            cert,
-            signing_key: key_pair,
-        } = generate_simple_self_signed(subject_alt_names)
-            .map_err(CertificateGenFailure::RcgenError)?;
-
-        // Create the tls files. Make sure the key is user-readable only:
-        let mut file = File::create(&key_path).map_err(CertificateGenFailure::IoError)?;
-        let mut perms = metadata(&key_path)
-            .map_err(CertificateGenFailure::IoError)?
-            .permissions();
-        perms.set_mode(0o600);
-        set_permissions(&key_path, perms).map_err(CertificateGenFailure::IoError)?;
-
-        file.write_all(key_pair.serialize_pem().as_bytes())
-            .map_err(CertificateGenFailure::IoError)?;
-        drop(file);
-
-        std::fs::write(&cert_path, cert.pem()).map_err(CertificateGenFailure::IoError)?;
-    };
-
-    Ok(())
-}
-
-// Read the existing tls credentials from disk.
-pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
-    let cert = std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))?;
-    let key = std::fs::read_to_string(data_dir.join(TLS_KEY_FILENAME))?;
-
-    Ok(Identity::from_pem(cert, key))
-}
-
-// The user first passes in the tls ips as a comma-deliminated string into LNDK. Here we turn that
-// string into a Vec.
-fn collect_tls_ips(tls_ips_str: Option<String>) -> Option<Vec<String>> {
-    tls_ips_str.map(|tls_ips_str| tls_ips_str.split(',').map(|str| str.to_owned()).collect())
-}
-
 fn create_fee_limit(
     fee_limit: Option<u32>,
     fee_limit_percent: Option<u32>,
@@ -552,28 +466,5 @@ fn convert_blinded_path(native_info: &BlindedPaymentPath) -> lndkrpc::BlindedPat
                 encrypted_payload: hop.encrypted_payload.clone(),
             })
             .collect(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_collect_tls_ips() {
-        // Test that it returns a vector of one element if only one ip is provided.
-        let tls_ips_str = Some("192.168.0.1".to_string());
-        let tls_ips = collect_tls_ips(tls_ips_str);
-        assert!(tls_ips.is_some());
-        assert!(tls_ips.as_ref().unwrap().len() == 1);
-
-        // If no ip is provided, collect_tls_ips should return None.
-        assert!(collect_tls_ips(None).is_none());
-
-        // If two ips are provided, a vector of length two should be returned.
-        let tls_ips_str = Some("192.168.0.1,192.168.0.3".to_string());
-        let tls_ips = collect_tls_ips(tls_ips_str);
-        assert!(tls_ips.is_some());
-        assert!(tls_ips.as_ref().unwrap().len() == 2);
     }
 }
