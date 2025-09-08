@@ -6,7 +6,7 @@ use lightning::{
     offers::{merkle::SignError, parse::Bolt12ParseError, parse::Bolt12SemanticError},
 };
 use tonic::{Code, Status};
-use tonic_lnd::tonic::Status as TonicStatus;
+use tonic_lnd::tonic::Status as LndStatus;
 
 mod client_impls;
 pub mod handler;
@@ -27,23 +27,23 @@ pub enum OfferError {
     /// SignError indicates a failure to sign the invoice request.
     SignError(SignError),
     /// DeriveKeyFailure indicates a failure to derive key for signing the invoice request.
-    DeriveKeyFailure(TonicStatus),
+    DeriveKeyFailure(LndStatus),
     /// User provided an invalid amount.
     InvalidAmount(String),
     /// Invalid currency contained in the offer.
     InvalidCurrency,
     /// Unable to connect to peer.
-    PeerConnectError(TonicStatus),
+    PeerConnectError(LndStatus),
     /// No node address.
     NodeAddressNotFound,
     /// Cannot list peers.
-    ListPeersFailure(TonicStatus),
+    ListPeersFailure(LndStatus),
     /// Failure to build a reply path.
     BuildBlindedPathFailure,
     /// Unable to find or send to payment route.
-    RouteFailure(TonicStatus),
+    RouteFailure(LndStatus),
     /// Failed to track payment.
-    TrackFailure(TonicStatus),
+    TrackFailure(LndStatus),
     /// Failed to send payment.
     PaymentFailure,
     /// Failed to receive an invoice back from offer creator before the timeout.
@@ -51,15 +51,15 @@ pub enum OfferError {
     /// Failed to find introduction node for blinded path.
     IntroductionNodeNotFound,
     /// Cannot fetch channel info.
-    GetChannelInfo(TonicStatus),
+    GetChannelInfo(LndStatus),
     /// Failed to create offer.
     CreateOfferFailure(Bolt12SemanticError),
     /// Failed to create offer with expiry time given system clock.
     CreateOfferTimeFailure,
     /// Failed to add invoice.
-    AddInvoiceFailure(TonicStatus),
+    AddInvoiceFailure(LndStatus),
     /// Failed to decode payment request.
-    DecodePaymentRequestFailure(TonicStatus),
+    DecodePaymentRequestFailure(LndStatus),
     /// Failed to parse payment hash.
     ParsePaymentHashFailure(String),
     /// Failed to parse offer.
