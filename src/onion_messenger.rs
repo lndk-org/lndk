@@ -114,7 +114,7 @@ impl MessengerUtilities {
 
 impl Default for MessengerUtilities {
     fn default() -> Self {
-        let mut entropy_source = ChaCha20Rng::from_entropy();
+        let mut entropy_source = ChaCha20Rng::from_os_rng();
         let mut chacha_bytes: [u8; 32] = [0; 32];
         entropy_source.fill_bytes(&mut chacha_bytes);
         Self::new(chacha_bytes)

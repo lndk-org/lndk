@@ -27,8 +27,8 @@ home = "0.5.5"
 # TODO: Use main crate when version 0.2.X is deployed.
 lightning = { git = "https://github.com/a-mpch/rust-lightning", branch = "2025-06-cherry-pick-exposed", features = ["dnssec"] }
 
-rand_chacha = "0.3.1"
-rand_core = "0.6.4"
+rand_chacha = "0.9.0"
+rand_core = { version = "0.9.3", features = ["os_rng"] }
 log = "0.4.17"
 log4rs = { version = "1.2.0", features = ["file_appender"] }
 rcgen = { version = "0.13.1", features = ["pem", "x509-parser"] }
