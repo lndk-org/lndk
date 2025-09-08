@@ -1,4 +1,4 @@
-use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
+use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg, LndError};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
 use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
@@ -68,8 +68,7 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
         let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
@@ -80,11 +79,9 @@ impl Offers for LNDKServer {
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let network = get_network(info).await?;
 
         let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
 
@@ -140,8 +137,7 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
         let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
@@ -153,11 +149,9 @@ impl Offers for LNDKServer {
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let network = get_network(info).await?;
 
         let cfg = PayOfferParams {
             offer,
@@ -202,8 +196,7 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
         let invoice_string: Bolt12InvoiceString = inner_request.invoice.clone().into();
@@ -241,18 +234,15 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
         let inner_request = request.get_ref();
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let network = get_network(info).await?;
         let quantity = parse_quantity(inner_request.quantity)?;
 
         let request = CreateOfferParams {

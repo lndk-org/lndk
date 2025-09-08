@@ -24,6 +24,7 @@ use std::error::Error;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::{fmt, fs};
+use tonic::{Code, Status};
 use tonic_lnd::lnrpc::AddInvoiceResponse;
 use tonic_lnd::lnrpc::PayReq;
 use tonic_lnd::lnrpc::{
@@ -31,7 +32,7 @@ use tonic_lnd::lnrpc::{
     QueryRoutesResponse, Route,
 };
 use tonic_lnd::signrpc::KeyLocator;
-use tonic_lnd::tonic::Status;
+use tonic_lnd::tonic::Status as LndStatus;
 use tonic_lnd::verrpc::Version;
 use tonic_lnd::{Client, Error as ConnectError};
 
@@ -52,11 +53,13 @@ const SEED_KEY_INDEX: i32 = 425;
 
 /// get_lnd_client connects to LND's grpc api using the config provided, blocking until a connection
 /// is established.
-pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, ConnectError> {
+pub fn get_lnd_client(cfg: LndCfg) -> Result<Client, LndError> {
     match cfg.creds {
-        Creds::Path { macaroon, cert } => block_on(tonic_lnd::connect(cfg.address, cert, macaroon)),
+        Creds::Path { macaroon, cert } => block_on(tonic_lnd::connect(cfg.address, cert, macaroon))
+            .map_err(LndError::ConnectError),
         Creds::String { macaroon, cert } => {
             block_on(tonic_lnd::connect_from_memory(cfg.address, cert, macaroon))
+                .map_err(LndError::ConnectError)
         }
     }
 }
@@ -359,8 +362,74 @@ impl fmt::Display for NetworkParseError {
     }
 }
 
+#[derive(Debug)]
+/// LndError represents errors that occur when interacting with LND.
+pub enum LndError {
+    /// Failed to connect to LND node.
+    ConnectError(ConnectError),
+    /// Failed to parse network configuration.
+    NetworkParseError(NetworkParseError),
+    /// LND node is not connected to bitcoin network.
+    NetworkNotConnected,
+    /// LND service is unavailable or not responding.
+    ServiceUnavailable(LndStatus),
+}
+
+impl LndError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            LndError::ConnectError(_) => "CONNECT_ERROR",
+            LndError::NetworkParseError(_) => "NETWORK_PARSE_ERROR",
+            LndError::NetworkNotConnected => "NETWORK_NOT_CONNECTED",
+            LndError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
+        }
+    }
+
+    pub fn grpc_code(&self) -> Code {
+        match self {
+            LndError::NetworkParseError(_) => Code::InvalidArgument,
+            LndError::ConnectError(_)
+            | LndError::NetworkNotConnected
+            | LndError::ServiceUnavailable(_) => Code::Unavailable,
+        }
+    }
+
+    pub fn to_status(self) -> Status {
+        let error_code = self.code();
+        let grpc_code = self.grpc_code();
+        let human_message = self.to_string();
+
+        let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+
+        Status::with_details(grpc_code, human_message, error_info.into())
+    }
+}
+
+impl Display for LndError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LndError::ConnectError(e) => write!(f, "Failed to connect to LND: {e}"),
+            LndError::NetworkParseError(e) => {
+                write!(f, "Failed to parse network configuration: {e}")
+            }
+            LndError::NetworkNotConnected => {
+                write!(f, "LND node is not connected to bitcoin network")
+            }
+            LndError::ServiceUnavailable(e) => write!(f, "LND service is unavailable: {e}"),
+        }
+    }
+}
+
+impl Error for LndError {}
+
+impl From<LndError> for Status {
+    fn from(error: LndError) -> Self {
+        error.to_status()
+    }
+}
+
 // get_network grabs what network lnd is running on from the LND API.
-pub async fn get_network(info: GetInfoResponse) -> Result<Network, ()> {
+pub async fn get_network(info: GetInfoResponse) -> Result<Network, LndError> {
     let mut network_str = None;
     #[allow(deprecated)]
     for chain in info.chains {
@@ -368,11 +437,12 @@ pub async fn get_network(info: GetInfoResponse) -> Result<Network, ()> {
             network_str = Some(chain.network.clone())
         }
     }
-    if network_str.is_none() {
+    let network_str = network_str.ok_or_else(|| {
         error!("lnd node is not connected to bitcoin network as expected");
-        return Err(());
-    }
-    Ok(string_to_network(&network_str.unwrap()).unwrap())
+        LndError::NetworkNotConnected
+    })?;
+
+    string_to_network(&network_str).map_err(LndError::NetworkParseError)
 }
 
 pub fn string_to_network(network_str: &str) -> Result<Network, NetworkParseError> {
@@ -483,13 +553,13 @@ pub trait MessageSigner {
 /// PeerConnector provides a layer of abstraction over the LND API for connecting to a peer.
 #[async_trait]
 pub trait PeerConnector {
-    async fn list_peers(&mut self) -> Result<ListPeersResponse, Status>;
-    async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+    async fn list_peers(&mut self) -> Result<ListPeersResponse, LndStatus>;
+    async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), LndStatus>;
     async fn get_node_info(
         &mut self,
         pub_key: String,
         include_channels: bool,
-    ) -> Result<NodeInfo, Status>;
+    ) -> Result<NodeInfo, LndStatus>;
 }
 
 /// InvoicePayer provides a layer of abstraction over the LND API for paying for a BOLT 12 invoice.
@@ -503,18 +573,18 @@ pub trait InvoicePayer {
         fee_ppm: u32,
         msats: u64,
         fee_limit: Option<FeeLimit>,
-    ) -> Result<QueryRoutesResponse, Status>;
+    ) -> Result<QueryRoutesResponse, LndStatus>;
     async fn send_to_route(
         &mut self,
         payment_hash: [u8; 32],
         route: Route,
-    ) -> Result<HtlcAttempt, Status>;
+    ) -> Result<HtlcAttempt, LndStatus>;
     async fn track_payment(&mut self, payment_hash: [u8; 32]) -> Result<Payment, OfferError>;
 }
 
 #[async_trait]
 pub trait OfferCreator {
-    async fn get_info(&mut self) -> Result<GetInfoResponse, Status>;
+    async fn get_info(&mut self) -> Result<GetInfoResponse, LndStatus>;
 }
 
 #[async_trait]
@@ -522,9 +592,12 @@ pub trait Bolt12InvoiceCreator {
     async fn add_invoice(
         &mut self,
         invoice_request: InvoiceRequest,
-    ) -> Result<AddInvoiceResponse, Status>;
+    ) -> Result<AddInvoiceResponse, LndStatus>;
 
-    async fn decode_payment_request(&mut self, payment_request: String) -> Result<PayReq, Status>;
+    async fn decode_payment_request(
+        &mut self,
+        payment_request: String,
+    ) -> Result<PayReq, LndStatus>;
 }
 
 #[cfg(test)]
