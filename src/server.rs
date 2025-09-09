@@ -413,7 +413,10 @@ pub fn generate_tls_creds(
             }
         };
 
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names)
+        let CertifiedKey {
+            cert,
+            signing_key: key_pair,
+        } = generate_simple_self_signed(subject_alt_names)
             .map_err(CertificateGenFailure::RcgenError)?;
 
         // Create the tls files. Make sure the key is user-readable only:

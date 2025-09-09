@@ -1315,7 +1315,11 @@ mod tests {
         sender_mock
             .expect_send_custom_message()
             .times(2)
-            .returning(|_| Ok(SendCustomMessageResponse {}));
+            .returning(|_| {
+                Ok(SendCustomMessageResponse {
+                    ..Default::default()
+                })
+            });
 
         // Peer connected: onion messaging not supported.
         sender
