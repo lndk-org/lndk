@@ -515,12 +515,12 @@ impl LndNode {
         while retry_num == 0 || retry {
             thread::sleep(Duration::from_secs(3));
 
-            let client_result = tonic_lnd::connect(
-                self.address.clone(),
-                self.cert_path.clone(),
-                self.macaroon_path.clone(),
-            )
-            .await;
+            let client_result = tonic_lnd::ClientBuilder::new()
+                .address(self.address.clone())
+                .cert_path(self.cert_path.clone())
+                .macaroon_path(self.macaroon_path.clone())
+                .build()
+                .await;
 
             match client_result {
                 Ok(client) => {

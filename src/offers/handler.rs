@@ -137,7 +137,7 @@ impl OfferHandler {
     /// offer.
     pub async fn pay_offer(&self, cfg: PayOfferParams) -> Result<Payment, OfferError> {
         let client_clone = cfg.client.clone();
-        let fee_limit = cfg.fee_limit.clone();
+        let fee_limit = cfg.fee_limit;
         let (invoice, validated_amount, payment_id) = self.get_invoice(cfg).await?;
 
         self.pay_invoice(

@@ -33,7 +33,7 @@ use tonic_lnd::lnrpc::{
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::verrpc::Version;
-use tonic_lnd::{Client, ConnectError};
+use tonic_lnd::{Client, Error as ConnectError};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;

@@ -114,7 +114,7 @@ impl MessengerUtilities {
 
 impl Default for MessengerUtilities {
     fn default() -> Self {
-        let mut entropy_source = ChaCha20Rng::from_entropy();
+        let mut entropy_source = ChaCha20Rng::from_os_rng();
         let mut chacha_bytes: [u8; 32] = [0; 32];
         entropy_source.fill_bytes(&mut chacha_bytes);
         Self::new(chacha_bytes)
@@ -1315,7 +1315,11 @@ mod tests {
         sender_mock
             .expect_send_custom_message()
             .times(2)
-            .returning(|_| Ok(SendCustomMessageResponse {}));
+            .returning(|_| {
+                Ok(SendCustomMessageResponse {
+                    ..Default::default()
+                })
+            });
 
         // Peer connected: onion messaging not supported.
         sender
