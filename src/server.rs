@@ -243,7 +243,7 @@ impl Offers for LNDKServer {
             .map_err(LndError::ServiceUnavailable)?
             .into_inner();
         let network = get_network(info).await?;
-        let quantity = parse_quantity(inner_request.quantity)?;
+        let quantity = parse_quantity(inner_request.quantity);
 
         let request = CreateOfferParams {
             client,
@@ -263,25 +263,13 @@ impl Offers for LNDKServer {
     }
 }
 
-fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, OfferError> {
-    let quantity = match rpc_quantity {
-        Some(quantity) => quantity,
-        None => return Ok(None),
-    };
-
-    if quantity == 0 {
-        return Ok(Some(Quantity::Unbounded));
+fn parse_quantity(rpc_quantity: Option<u64>) -> Option<Quantity> {
+    match rpc_quantity {
+        None => None,
+        Some(0) => Some(Quantity::Unbounded),
+        Some(1) => Some(Quantity::One),
+        Some(n) => Some(Quantity::Bounded(NonZeroU64::new(n).unwrap())),
     }
-    if quantity == 1 {
-        return Ok(Some(Quantity::One));
-    }
-    let amount = NonZeroU64::new(quantity);
-    if amount.is_none() {
-        return Err(OfferError::ParseOfferFailure(
-            Bolt12ParseError::InvalidSemantics(Bolt12SemanticError::InvalidQuantity),
-        ));
-    }
-    Ok(Some(Quantity::Bounded(amount.unwrap())))
 }
 
 // We need to check that the client passes in a tls cert pem string, hexadecimal macaroon,
