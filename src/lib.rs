@@ -34,6 +34,7 @@ use log4rs::config::{Appender, Config as LogConfig, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use message_router::MessageRouter;
 use offers::handler::OfferHandler;
+use offers::OfferError;
 use rate_limit::RateLimiterCfg;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -234,11 +235,13 @@ impl Default for LndkOnionMessenger {
 pub struct Bolt12InvoiceString(pub String);
 
 impl TryFrom<Bolt12InvoiceString> for Bolt12Invoice {
-    type Error = DecodeError;
+    type Error = OfferError;
 
     fn try_from(s: Bolt12InvoiceString) -> Result<Self, Self::Error> {
-        let bytes: Vec<u8> = hex::decode(s.0).unwrap();
-        Self::try_from(bytes).map_err(|_| DecodeError::InvalidValue)
+        let bytes: Vec<u8> = hex::decode(s.0)
+            .map_err(|_| OfferError::ParseInvoiceFailure(DecodeError::InvalidValue))?;
+        Self::try_from(bytes)
+            .map_err(|_| OfferError::ParseInvoiceFailure(DecodeError::InvalidValue))
     }
 }
 

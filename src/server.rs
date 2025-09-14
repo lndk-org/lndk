@@ -11,7 +11,6 @@ use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::offer::{Offer, Quantity};
-use lightning::offers::parse::{Bolt12ParseError, Bolt12SemanticError};
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
@@ -117,8 +116,7 @@ impl Offers for LNDKServer {
         log::info!("Received a request: {:?}", request.get_ref());
 
         let invoice_string: Bolt12InvoiceString = request.get_ref().invoice.clone().into();
-        let invoice =
-            Bolt12Invoice::try_from(invoice_string).map_err(OfferError::ParseInvoiceFailure)?;
+        let invoice = Bolt12Invoice::try_from(invoice_string)?;
 
         let reply: Bolt12InvoiceContents = generate_bolt12_invoice_contents(&invoice);
         Ok(Response::new(reply))
@@ -200,8 +198,7 @@ impl Offers for LNDKServer {
 
         let inner_request = request.get_ref();
         let invoice_string: Bolt12InvoiceString = inner_request.invoice.clone().into();
-        let invoice =
-            Bolt12Invoice::try_from(invoice_string).map_err(OfferError::ParseInvoiceFailure)?;
+        let invoice = Bolt12Invoice::try_from(invoice_string)?;
 
         let amount = validate_amount(invoice.amount().as_ref(), inner_request.amount).await?;
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
