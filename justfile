@@ -32,3 +32,9 @@ test-all:
   @just cli-test
   @just itest
 
+fetch-external-protos:  
+  #!/usr/bin/env bash
+  EXTERNAL_DIR="proto/external"  
+  mkdir -p "${EXTERNAL_DIR}/google/rpc"
+  
+  curl -sSfL -o "${EXTERNAL_DIR}/google/rpc/error_details.proto" "https://raw.githubusercontent.com/googleapis/googleapis/master/google/rpc/error_details.proto"

@@ -35,6 +35,7 @@ use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status as LndStatus;
 use tonic_lnd::verrpc::Version;
 use tonic_lnd::{Client, Error as ConnectError};
+use tonic_types::{ErrorDetails, StatusExt};
 
 const ONION_MESSAGES_REQUIRED: u32 = 38;
 pub(crate) const ONION_MESSAGES_OPTIONAL: u32 = 39;
@@ -399,9 +400,10 @@ impl LndError {
         let grpc_code = self.grpc_code();
         let human_message = self.to_string();
 
-        let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+        let details =
+            ErrorDetails::with_error_info(error_code, "lndk", std::collections::HashMap::new());
 
-        Status::with_details(grpc_code, human_message, error_info.into())
+        Status::with_error_details(grpc_code, human_message, details)
     }
 }
 

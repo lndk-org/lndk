@@ -26,6 +26,7 @@ use std::time::Duration;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_types::{ErrorDetails, StatusExt};
 
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
@@ -323,9 +324,10 @@ impl AuthError {
         let grpc_code = self.grpc_code();
         let human_message = self.to_string();
 
-        let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+        let details =
+            ErrorDetails::with_error_info(error_code, "lndk", std::collections::HashMap::new());
 
-        Status::with_details(grpc_code, human_message, error_info.into())
+        Status::with_error_details(grpc_code, human_message, details)
     }
 }
 

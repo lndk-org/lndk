@@ -7,6 +7,7 @@ use lightning::{
 };
 use tonic::{Code, Status};
 use tonic_lnd::tonic::Status as LndStatus;
+use tonic_types::{ErrorDetails, StatusExt};
 
 mod client_impls;
 pub mod handler;
@@ -111,14 +112,14 @@ impl OfferError {
         }
     }
 
-    pub fn to_status(self) -> Status {
-        let error_code = self.code();
+    pub fn to_status(&self) -> Status {
         let grpc_code = self.grpc_code();
         let human_message = self.to_string();
 
-        let error_info = format!(r#"{{"reason": "{}", "domain": "lndk"}}"#, error_code);
+        let details =
+            ErrorDetails::with_error_info(self.code(), "lndk", std::collections::HashMap::new());
 
-        Status::with_details(grpc_code, human_message, error_info.into())
+        Status::with_error_details(grpc_code, human_message, details)
     }
 }
 

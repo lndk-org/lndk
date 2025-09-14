@@ -1,6 +1,8 @@
 syntax = "proto3";
 package lndkrpc;
 
+import "external/google/rpc/error_details.proto";
+
 service Offers {
     rpc PayOffer (PayOfferRequest) returns (PayOfferResponse);
     rpc GetInvoice (GetInvoiceRequest) returns (GetInvoiceResponse);
