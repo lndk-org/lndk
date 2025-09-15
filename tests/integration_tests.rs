@@ -19,8 +19,8 @@ use ldk_sample::node_api::Node as LdkNode;
 use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
-use lndk::offers::create_reply_path;
 use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
+use lndk::offers::{create_reply_path, OfferError};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
 use std::net::SocketAddr;
@@ -611,6 +611,93 @@ async fn test_check_lndk_pay_offer_with_reconnection() {
             panic!("lndk should not have completed first {:?}", val);
         },
         _ = check_pay_offer_with_reconnection(handler, pay_cfg.clone(), lnd, ldk2_pubkey) => {
+            shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    };
+}
+
+async fn test_payment_route_error(
+    handler: &Arc<OfferHandler>,
+    pay_cfg: &PayOfferParams,
+    ldk: &LdkNode,
+    bitcoind: &common::BitcoindNode,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // We first get the invoice and make sure we have 2 paths.
+    let (invoice, amount, payment_id) = handler
+        .get_invoice(pay_cfg.clone())
+        .await
+        .map_err(|e| format!("Failed to get invoice: {:?}", e))?;
+
+    assert!(invoice.payment_paths().len() == 1);
+    isolate_node(&ldk, &bitcoind).await;
+    log::info!("Attempting to pay invoice with all routes down...");
+
+    let payment_result = handler
+        .pay_invoice(pay_cfg.client.clone(), amount, &invoice, payment_id, None)
+        .await;
+
+    match payment_result {
+        Ok(_) => {
+            log::error!("Payment succeeded despite first route being down!");
+            Err("Payment succeeded despite first route being down!".into())
+        }
+        Err(OfferError::PaymentFailure) => {
+            log::info!("Payment successfully failed with payment failure");
+            Ok(())
+        }
+        Err(e) => Err(format!("Payment failed with error: {:?}", e).into()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Here we test that we're able to fully pay an offer.
+async fn test_lndk_pay_offer_error() {
+    let test_name = "lndk_pay_offer_error";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir, _) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, ldk2_pubkey, _) =
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
+
+    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
+    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
+    let offer = ldk1
+        .create_offer(
+            &path_pubkeys,
+            Network::Regtest,
+            20_000,
+            Quantity::One,
+            expiration,
+        )
+        .await
+        .expect("should create offer");
+
+    let (lndk_cfg, handler, messenger, shutdown) =
+        common::setup_lndk(&lnd.cert_path, &lnd.macaroon_path, lnd.address, lndk_dir).await;
+
+    let client = lnd.client.clone().unwrap();
+    let blinded_path = offer.paths()[0].clone();
+
+    let pay_cfg = PayOfferParams {
+        offer: offer.clone(),
+        amount: Some(20_000),
+        payer_note: Some("".to_string()),
+        network: Network::Regtest,
+        client: client.clone(),
+        destination: Destination::BlindedPath(blinded_path.clone()),
+        reply_path: None,
+        response_invoice_timeout: None,
+        fee_limit: None,
+    };
+
+    select! {
+        val = messenger.run(lndk_cfg.clone(), Arc::clone(&handler)) => {
+            panic!("lndk should not have completed first {:?}", val);
+        },
+        res = test_payment_route_error(&handler, &pay_cfg, &ldk1, &bitcoind) => {
+            assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
             ldk2.stop().await;
