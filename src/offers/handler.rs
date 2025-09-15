@@ -231,7 +231,7 @@ impl OfferHandler {
     /// Sends an invoice request and waits for an invoice to be sent back to us.
     /// Reminder that if this method returns an error after create_invoice_request is called, we
     /// *must* remove the payment_id from self.active_payments.
-    pub(crate) async fn pay_invoice(
+    pub async fn pay_invoice(
         &self,
         client: Client,
         amount: u64,
@@ -239,58 +239,76 @@ impl OfferHandler {
         payment_id: PaymentId,
         fee_limit: Option<FeeLimit>,
     ) -> Result<Payment, OfferError> {
-        let payment_hash = invoice.payment_hash();
-        let payment_path = &invoice.payment_paths()[0];
-
-        let payment_hash = payment_hash.0;
-        let params = SendPaymentParams {
-            path: payment_path.clone(),
-            cltv_expiry_delta: payment_path.payinfo.cltv_expiry_delta,
-            fee_base_msat: payment_path.payinfo.fee_base_msat,
-            fee_ppm: payment_path.payinfo.fee_proportional_millionths,
-            payment_hash,
-            msats: amount,
-            payment_id,
-            fee_limit,
-        };
-
-        let intro_node_id = match params.path.introduction_node() {
-            IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
-            IntroductionNode::DirectedShortChannelId(direction, scid) => {
-                let node_id_pub = get_node_id_from_scid(client.clone(), *scid, *direction).await?;
-                Some(node_id_pub)
-            }
-        };
+        let payment_hash = invoice.payment_hash().0;
+        let mut last_error: Option<OfferError> = None;
         debug!(
-            "Attempting to pay invoice with introduction node {:?}",
-            intro_node_id
+            "Payment paths found for invoice with payment_id {payment_id:?}: {:?}",
+            invoice.payment_paths().len()
         );
 
-        send_payment(client.clone(), params)
-            .await
-            .inspect_err(|_| {
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-            })?;
+        // We'll try each path until we find one that works.
+        for payment_path in invoice.payment_paths() {
+            let params = SendPaymentParams {
+                path: payment_path.clone(),
+                cltv_expiry_delta: payment_path.payinfo.cltv_expiry_delta,
+                fee_base_msat: payment_path.payinfo.fee_base_msat,
+                fee_ppm: payment_path.payinfo.fee_proportional_millionths,
+                payment_hash,
+                msats: amount,
+                payment_id,
+                fee_limit,
+            };
 
-        {
+            let intro_node_id = match params.path.introduction_node() {
+                IntroductionNode::NodeId(node_id) => Some(node_id.to_string()),
+                IntroductionNode::DirectedShortChannelId(direction, scid) => {
+                    let node_id_pub =
+                        get_node_id_from_scid(client.clone(), *scid, *direction).await?;
+                    Some(node_id_pub)
+                }
+            };
+            debug!(
+                "Attempting to pay invoice with introduction node {:?}",
+                intro_node_id
+            );
+
+            if let Err(e) = send_payment(client.clone(), params).await {
+                error!(
+                    "Failed to send payment for payment_id {payment_id:?} through path {:?}",
+                    payment_path
+                );
+                last_error = Some(e);
+                continue;
+            }
+
+            {
+                let mut active_payments = self.active_payments.lock().unwrap();
+                active_payments
+                    .entry(payment_id)
+                    .and_modify(|entry| entry.state = PaymentState::PaymentDispatched);
+            }
+
+            // We'll track the payment until it settles.
+            let payment = match track_payment(client.clone(), payment_hash).await {
+                Ok(payment) => payment,
+                Err(e) => {
+                    error!(
+                        "Failed to track payment for payment_id {payment_id:?} through path {:?}",
+                        payment_path
+                    );
+                    last_error = Some(e);
+                    continue;
+                }
+            };
+
             let mut active_payments = self.active_payments.lock().unwrap();
-            active_payments
-                .entry(payment_id)
-                .and_modify(|entry| entry.state = PaymentState::PaymentDispatched);
+            active_payments.remove(&payment_id);
+            return Ok(payment);
         }
 
-        // We'll track the payment until it settles.
-        track_payment(client, payment_hash)
-            .await
-            .inspect(|_| {
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-            })
-            .inspect_err(|_| {
-                let mut active_payments = self.active_payments.lock().unwrap();
-                active_payments.remove(&payment_id);
-            })
+        let mut active_payments = self.active_payments.lock().unwrap();
+        active_payments.remove(&payment_id);
+        Err(last_error.unwrap_or(OfferError::PaymentFailure))
     }
 
     /// wait_for_invoice waits for the offer creator to respond with an invoice.

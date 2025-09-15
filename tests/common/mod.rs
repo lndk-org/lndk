@@ -33,7 +33,7 @@ const LNDK_TESTS_FOLDER: &str = "lndk-tests";
 
 pub async fn setup_test_infrastructure(
     test_name: &str,
-) -> (BitcoindNode, LndNode, LdkNode, LdkNode, PathBuf) {
+) -> (BitcoindNode, LndNode, LdkNode, LdkNode, PathBuf, PathBuf) {
     let bitcoind = setup_bitcoind().await;
     let (ldk_test_dir, lnd_test_dir, lndk_test_dir) = setup_test_dirs(test_name);
     let mut lnd = LndNode::new(
@@ -44,13 +44,24 @@ pub async fn setup_test_infrastructure(
     );
     lnd.setup_client().await;
 
-    let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
+    let ldk1 = setup_ldk_node(&bitcoind, 1, &ldk_test_dir, test_name).await;
+    let ldk2 = setup_ldk_node(&bitcoind, 2, &ldk_test_dir, test_name).await;
 
+    (bitcoind, lnd, ldk1, ldk2, lndk_test_dir, ldk_test_dir)
+}
+
+pub async fn setup_ldk_node(
+    bitcoind: &BitcoindNode,
+    node_num: u8,
+    ldk_test_dir: &PathBuf,
+    test_name: &str,
+) -> LdkNode {
+    let connect_params = bitcoind.node.params.get_cookie_values().unwrap();
     let port = get_available_port().unwrap();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let cookie_values = connect_params.unwrap();
 
-    let ldk1_config = LdkUserInfo {
+    let ldk_config = LdkUserInfo {
         bitcoind_rpc_username: cookie_values.user.clone(),
         bitcoind_rpc_password: cookie_values.password.clone(),
         bitcoind_rpc_host: String::from("localhost"),
@@ -61,29 +72,10 @@ pub async fn setup_test_infrastructure(
         ldk_announced_node_name: [0; 32],
         network: Network::Regtest,
         log_level: Level::Trace,
-        node_num: 1,
+        node_num: node_num,
     };
 
-    let port = get_available_port().unwrap();
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
-    let ldk2_config = LdkUserInfo {
-        bitcoind_rpc_username: cookie_values.user.clone(),
-        bitcoind_rpc_password: cookie_values.password.clone(),
-        bitcoind_rpc_host: String::from("localhost"),
-        bitcoind_rpc_port: bitcoind.node.params.rpc_socket.port(),
-        ldk_data_dir: ldk_test_dir,
-        ldk_announced_listen_addr: vec![addr.into()],
-        ldk_peer_listening_port: port,
-        ldk_announced_node_name: [0; 32],
-        network: Network::Regtest,
-        log_level: Level::Trace,
-        node_num: 2,
-    };
-
-    let ldk1 = ldk_sample::start_ldk(ldk1_config, test_name).await;
-    let ldk2 = ldk_sample::start_ldk(ldk2_config, test_name).await;
-
-    (bitcoind, lnd, ldk1, ldk2, lndk_test_dir)
+    ldk_sample::start_ldk(ldk_config, test_name).await
 }
 
 // connect_network establishes connections/channels between our nodes, and mines enough blocks and
@@ -215,6 +207,40 @@ pub async fn setup_lndk(
     return (lndk_cfg, handler, messenger, shutdown);
 }
 
+pub async fn isolate_node(ldk_node: &LdkNode, bitcoind: &BitcoindNode) {
+    let channels_info = ldk_node.list_channels().await;
+    let address = bitcoind.node.client.new_address().unwrap();
+
+    log::info!("Closing channels...");
+
+    for channel in channels_info {
+        ldk_node.close_channel(channel.0, channel.1).await.unwrap();
+
+        // We need to generate a block so we avoid that transaction output is unspendable.
+        bitcoind
+            .node
+            .client
+            .generate_to_address(1, &address)
+            .unwrap();
+    }
+
+    log::info!("Waiting for list channels to be empty...");
+
+    match timeout(Duration::from_secs(100), async {
+        loop {
+            let channels_info = ldk_node.list_channels().await;
+            if channels_info.len() == 0 {
+                break;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+    })
+    .await
+    {
+        Err(_) => panic!("timeout before channel closed"),
+        _ => {}
+    };
+}
 // Sets up /tmp/lndk-tests folder where we'll store the bins, data directories, and logs needed
 // for our tests.
 //
@@ -792,5 +818,65 @@ impl LndNode {
             .expect("Failed to execute lnd command");
 
         self.handle = cmd;
+    }
+
+    // wait_for_nodes_addresses waits until all LDK nodes have addresses in the LND node's graph.
+    // We'll timeout if it takes too long.
+    pub async fn wait_for_nodes_addresses(&mut self, ldk_nodes: &[&LdkNode]) {
+        match timeout(
+            Duration::from_secs(100),
+            self.check_nodes_addresses(ldk_nodes),
+        )
+        .await
+        {
+            Err(_) => panic!("timeout before all LDK nodes have addresses in graph"),
+            _ => {}
+        };
+    }
+
+    pub async fn check_nodes_addresses(&mut self, ldk_nodes: &[&LdkNode]) {
+        loop {
+            let mut all_have_addresses = true;
+
+            for ldk_node in ldk_nodes {
+                let (pubkey, _) = ldk_node.get_node_info();
+
+                let node_info_req = tonic_lnd::lnrpc::NodeInfoRequest {
+                    pub_key: pubkey.to_string(),
+                    include_channels: false,
+                };
+
+                let client = self.client.clone().unwrap();
+                let resp = client
+                    .clone()
+                    .lightning()
+                    .get_node_info(node_info_req.clone())
+                    .await;
+
+                match resp {
+                    Ok(response) => {
+                        if let Some(node) = response.into_inner().node {
+                            if node.addresses.is_empty() {
+                                all_have_addresses = false;
+                                break;
+                            }
+                        } else {
+                            all_have_addresses = false;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        all_have_addresses = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_have_addresses {
+                return;
+            }
+
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 }
