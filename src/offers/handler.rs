@@ -416,7 +416,7 @@ impl OffersMessageHandler for OfferHandler {
                             return None;
                         }
                     };
-                log::trace!("Invoice created: {:?}", invoice_info);
+                log::trace!("Invoice created successfully created...");
 
                 let invoice_builder = match verfied_invoice.respond_using_derived_keys(
                     invoice_info.payment_paths,

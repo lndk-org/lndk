@@ -117,11 +117,22 @@ pub(crate) async fn send_payment(
         .await
         .map_err(OfferError::RouteFailure)?;
 
-    let _ = payer
+    trace!("Routes found {}...", resp.routes.len());
+    let resp = payer
         .send_to_route(params.payment_hash, resp.routes[0].clone())
         .await
         .map_err(OfferError::RouteFailure)?;
 
+    trace!(
+        "Sent payment using preimage {} using attempt_id {} with status {}. {}",
+        hex::encode(resp.preimage),
+        resp.attempt_id,
+        resp.status,
+        resp.failure.map_or("".to_string(), |f| format!(
+            "failed with reason: {}.",
+            f.code
+        ))
+    );
     Ok(())
 }
 
