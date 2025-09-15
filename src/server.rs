@@ -116,7 +116,10 @@ impl Offers for LNDKServer {
 
         let payment = match self.offer_handler.pay_offer(cfg).await {
             Ok(payment) => {
-                log::info!("Payment succeeded.");
+                log::info!(
+                    "Payment succeeded with preimage {}.",
+                    payment.payment_preimage
+                );
                 payment
             }
             Err(e) => match e {
@@ -204,7 +207,7 @@ impl Offers for LNDKServer {
 
         let (invoice, _, payment_id) = match self.offer_handler.get_invoice(cfg).await {
             Ok(invoice) => {
-                log::info!("Invoice request succeeded.");
+                log::info!("Invoice request succeeded for payment_id {}.", invoice.2);
                 invoice
             }
             Err(e) => match e {

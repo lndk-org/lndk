@@ -2,7 +2,7 @@ use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
 use lightning::offers::invoice_request::InvoiceRequest;
 use lightning::offers::offer::Amount;
-use log::error;
+use log::{error, trace};
 use tonic::async_trait;
 use tonic_lnd::lnrpc::{
     AddInvoiceResponse, FeeLimit, GetInfoRequest, GetInfoResponse, HtlcAttempt, Invoice, PayReq,
@@ -184,6 +184,10 @@ impl InvoicePayer for Client {
             } else if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Failed {
                 return Err(OfferError::PaymentFailure);
             } else {
+                trace!(
+                    "Payment with preimage {} has not settled.",
+                    payment.payment_preimage,
+                );
                 continue;
             }
         }
