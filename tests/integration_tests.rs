@@ -866,6 +866,16 @@ async fn test_lndk_pay_offer_with_retry() {
     .await
     .unwrap();
 
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk3_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
     ldk4.open_channel(
         lnd_pubkey,
         SocketAddr::from_str(&lnd_addr).unwrap(),
