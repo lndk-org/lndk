@@ -1,9 +1,10 @@
-use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg};
+use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg, LndError};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
+use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
 use crate::offers::validate_amount;
-use crate::offers::{get_destination, OfferError};
-use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler, TLS_CERT_FILENAME, TLS_KEY_FILENAME};
+use crate::offers::OfferError;
+use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler};
 use bitcoin::secp256k1::PublicKey;
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
@@ -18,21 +19,15 @@ use lndkrpc::{
     PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash,
     PaymentPaths,
 };
-use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
-use std::error::Error;
-use std::fmt::Display;
-use std::fs::{metadata, set_permissions, File};
-use std::io::Write;
 use std::num::NonZeroU64;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::metadata::MetadataMap;
-use tonic::transport::Identity;
 use tonic::{Request, Response, Status};
 use tonic_lnd::lnrpc::GetInfoRequest;
+use tonic_types::{ErrorDetails, StatusExt};
+
 pub struct LNDKServer {
     offer_handler: Arc<OfferHandler>,
     #[allow(dead_code)]
@@ -73,32 +68,20 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided offer was invalid. Please provide a valid offer in bech32 format,
-                i.e. starting with 'lno'. Error: {e:?}"
-            ))
-        })?;
+        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
 
-        let destination = get_destination(&offer).await.map_err(|e| {
-            Status::internal(format!(
-                "Internal error: Couldn't get destination from offer: {e:?}"
-            ))
-        })?;
+        let destination = get_destination(&offer).await?;
         let reply_path = None;
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let network = get_network(info).await?;
 
         let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
 
@@ -114,24 +97,11 @@ impl Offers for LNDKServer {
             fee_limit,
         };
 
-        let payment = match self.offer_handler.pay_offer(cfg).await {
-            Ok(payment) => {
-                log::info!(
-                    "Payment succeeded with preimage {}.",
-                    payment.payment_preimage
-                );
-                payment
-            }
-            Err(e) => match e {
-                OfferError::InvalidAmount(e) => {
-                    return Err(Status::invalid_argument(e.to_string()))
-                }
-                OfferError::InvalidCurrency => {
-                    return Err(Status::invalid_argument(format!("{e}")))
-                }
-                _ => return Err(Status::internal(format!("Internal error: {e}"))),
-            },
-        };
+        let payment = self.offer_handler.pay_offer(cfg).await?;
+        log::info!(
+            "Payment succeeded with preimage: {}",
+            payment.payment_preimage
+        );
 
         let reply = PayOfferResponse {
             payment_preimage: payment.payment_preimage,
@@ -147,8 +117,7 @@ impl Offers for LNDKServer {
         log::info!("Received a request: {:?}", request.get_ref());
 
         let invoice_string: Bolt12InvoiceString = request.get_ref().invoice.clone().into();
-        let invoice = Bolt12Invoice::try_from(invoice_string)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let invoice = Bolt12Invoice::try_from(invoice_string)?;
 
         let reply: Bolt12InvoiceContents = generate_bolt12_invoice_contents(&invoice);
         Ok(Response::new(reply))
@@ -167,31 +136,21 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided offer was invalid. Please provide a valid offer in bech32 format,
-                i.e. starting with 'lno'. Error: {e:?}"
-            ))
-        })?;
+        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
 
-        let destination = get_destination(&offer)
-            .await
-            .map_err(|e| Status::unavailable(format!("Couldn't find destination: {e}")))?;
+        let destination = get_destination(&offer).await?;
         let reply_path = None;
 
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
+        let network = get_network(info).await?;
 
         let cfg = PayOfferParams {
             offer,
@@ -205,21 +164,8 @@ impl Offers for LNDKServer {
             fee_limit: None,
         };
 
-        let (invoice, _, payment_id) = match self.offer_handler.get_invoice(cfg).await {
-            Ok(invoice) => {
-                log::info!("Invoice request succeeded for payment_id {}.", invoice.2);
-                invoice
-            }
-            Err(e) => match e {
-                OfferError::InvalidAmount(e) => {
-                    return Err(Status::invalid_argument(e.to_string()))
-                }
-                OfferError::InvalidCurrency => {
-                    return Err(Status::invalid_argument(format!("{e}")))
-                }
-                _ => return Err(Status::internal(format!("Internal error: {e}"))),
-            },
-        };
+        let (invoice, _, payment_id) = self.offer_handler.get_invoice(cfg).await?;
+        log::info!("Invoice request succeeded.");
 
         // We need to remove the payment from our tracking map now.
         // TODO: This is a hack to remove the payment from the tracking map. We should do it when
@@ -249,37 +195,22 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
         let invoice_string: Bolt12InvoiceString = inner_request.invoice.clone().into();
-        let invoice = Bolt12Invoice::try_from(invoice_string).map_err(|e| {
-            Status::invalid_argument(format!(
-                "The provided invoice was invalid. Please provide a valid invoice in hex format.
-                Error: {e:?}"
-            ))
-        })?;
+        let invoice = Bolt12Invoice::try_from(invoice_string)?;
 
-        let amount = match validate_amount(invoice.amount().as_ref(), inner_request.amount).await {
-            Ok(amount) => amount,
-            Err(e) => return Err(Status::invalid_argument(e.to_string())),
-        };
+        let amount = validate_amount(invoice.amount().as_ref(), inner_request.amount).await?;
         let payment_id = PaymentId(self.offer_handler.messenger_utils.get_secure_random_bytes());
 
         let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
 
-        let invoice = match self
+        let invoice = self
             .offer_handler
             .pay_invoice(client, amount, &invoice, payment_id, fee_limit)
-            .await
-        {
-            Ok(invoice) => {
-                log::info!("Invoice paid.");
-                invoice
-            }
-            Err(e) => return Err(Status::internal(format!("Error paying invoice: {e}"))),
-        };
+            .await?;
+        log::info!("Invoice paid.");
 
         let reply = PayInvoiceResponse {
             payment_preimage: invoice.payment_preimage,
@@ -301,20 +232,16 @@ impl Offers for LNDKServer {
             macaroon,
         };
         let lnd_cfg = LndCfg::new(self.address.clone(), creds);
-        let mut client = get_lnd_client(lnd_cfg)
-            .map_err(|e| Status::unavailable(format!("Couldn't connect to lnd: {e}")))?;
+        let mut client = get_lnd_client(lnd_cfg)?;
         let inner_request = request.get_ref();
         let info = client
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .expect("failed to get info")
+            .map_err(LndError::ServiceUnavailable)?
             .into_inner();
-        let network = get_network(info)
-            .await
-            .map_err(|e| Status::internal(format!("{e:?}")))?;
-        let quantity = parse_quantity(inner_request.quantity)
-            .map_err(|_| Status::invalid_argument("Invalid quantity provided"))?;
+        let network = get_network(info).await?;
+        let quantity = parse_quantity(inner_request.quantity);
 
         let request = CreateOfferParams {
             client,
@@ -325,10 +252,7 @@ impl Offers for LNDKServer {
             quantity,
             expiry: inner_request.expiry.map(Duration::from_secs),
         };
-        let offer = match self.offer_handler.create_offer(request).await {
-            Ok(offer) => offer,
-            Err(e) => return Err(Status::internal(format!("Error creating offer: {e}"))),
-        };
+        let offer = self.offer_handler.create_offer(request).await?;
 
         let reply = CreateOfferResponse {
             offer: offer.to_string(),
@@ -337,23 +261,13 @@ impl Offers for LNDKServer {
     }
 }
 
-fn parse_quantity(rpc_quantity: Option<u64>) -> Result<Option<Quantity>, ()> {
-    let quantity = match rpc_quantity {
-        Some(quantity) => quantity,
-        None => return Ok(None),
-    };
-
-    if quantity == 0 {
-        return Ok(Some(Quantity::Unbounded));
+fn parse_quantity(rpc_quantity: Option<u64>) -> Option<Quantity> {
+    match rpc_quantity {
+        None => None,
+        Some(0) => Some(Quantity::Unbounded),
+        Some(1) => Some(Quantity::One),
+        Some(n) => Some(Quantity::Bounded(NonZeroU64::new(n).unwrap())),
     }
-    if quantity == 1 {
-        return Ok(Some(Quantity::One));
-    }
-    let amount = NonZeroU64::new(quantity);
-    if amount.is_none() {
-        return Err(());
-    }
-    Ok(Some(Quantity::Bounded(amount.unwrap())))
 }
 
 // We need to check that the client passes in a tls cert pem string, hexadecimal macaroon,
@@ -362,96 +276,59 @@ fn check_auth_metadata(metadata: &MetadataMap) -> Result<String, Status> {
     let macaroon = match metadata.get("macaroon") {
         Some(macaroon_hex) => macaroon_hex
             .to_str()
-            .map_err(|e| {
-                Status::invalid_argument(format!("Invalid macaroon string provided: {e}"))
-            })?
+            .map_err(|e| AuthError::InvalidMacaroon(e.to_string()).to_status())?
             .to_string(),
-        _ => {
-            return Err(Status::unauthenticated(
-                "No LND macaroon provided: Make sure to provide macaroon in request metadata",
-            ))
-        }
+        _ => return Err(AuthError::MissingMacaroon.to_status()),
     };
 
     Ok(macaroon)
 }
 
-/// An error that occurs when generating TLS credentials.
 #[derive(Debug)]
-pub enum CertificateGenFailure {
-    RcgenError(RcgenError),
-    IoError(std::io::Error),
+pub enum AuthError {
+    InvalidMacaroon(String),
+    MissingMacaroon,
 }
 
-impl Display for CertificateGenFailure {
+impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CertificateGenFailure::RcgenError(e) => {
-                write!(f, "Error generating TLS certificate: {e:?}")
-            }
-            CertificateGenFailure::IoError(e) => write!(f, "IO error: {e:?}"),
+            AuthError::InvalidMacaroon(e) => write!(f, "Invalid macaroon string provided: {e}"),
+            AuthError::MissingMacaroon => write!(
+                f,
+                "No LND macaroon provided: Make sure to provide macaroon in request metadata"
+            ),
         }
     }
 }
 
-impl Error for CertificateGenFailure {}
+impl std::error::Error for AuthError {}
 
-// If a tls cert/key pair doesn't already exist, generate_tls_creds creates the tls cert/key pair
-// required to secure connections to LNDK's gRPC server. By default they are stored in ~/.lndk.
-pub fn generate_tls_creds(
-    data_dir: PathBuf,
-    tls_ips_string: Option<String>,
-) -> Result<(), CertificateGenFailure> {
-    let cert_path = data_dir.join(TLS_CERT_FILENAME);
-    let key_path = data_dir.join(TLS_KEY_FILENAME);
-    let tls_ips = collect_tls_ips(tls_ips_string);
+impl AuthError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            AuthError::InvalidMacaroon(_) => "INVALID_MACAROON",
+            AuthError::MissingMacaroon => "MISSING_MACAROON",
+        }
+    }
 
-    // Did we have to generate a new key? In that case we also need to regenerate the certificate.
-    if !key_path.exists() || !cert_path.exists() {
-        log::debug!("Generating fresh TLS credentials in {data_dir:?}");
-        let mut subject_alt_names = vec!["localhost".to_string()];
-        if let Some(ips) = tls_ips {
-            for ip in ips {
-                subject_alt_names.push(ip);
-            }
-        };
+    pub fn grpc_code(&self) -> tonic::Code {
+        match self {
+            AuthError::InvalidMacaroon(_) => tonic::Code::InvalidArgument,
+            AuthError::MissingMacaroon => tonic::Code::Unauthenticated,
+        }
+    }
 
-        let CertifiedKey {
-            cert,
-            signing_key: key_pair,
-        } = generate_simple_self_signed(subject_alt_names)
-            .map_err(CertificateGenFailure::RcgenError)?;
+    pub fn to_status(self) -> Status {
+        let error_code = self.code();
+        let grpc_code = self.grpc_code();
+        let human_message = self.to_string();
 
-        // Create the tls files. Make sure the key is user-readable only:
-        let mut file = File::create(&key_path).map_err(CertificateGenFailure::IoError)?;
-        let mut perms = metadata(&key_path)
-            .map_err(CertificateGenFailure::IoError)?
-            .permissions();
-        perms.set_mode(0o600);
-        set_permissions(&key_path, perms).map_err(CertificateGenFailure::IoError)?;
+        let details =
+            ErrorDetails::with_error_info(error_code, "lndk", std::collections::HashMap::new());
 
-        file.write_all(key_pair.serialize_pem().as_bytes())
-            .map_err(CertificateGenFailure::IoError)?;
-        drop(file);
-
-        std::fs::write(&cert_path, cert.pem()).map_err(CertificateGenFailure::IoError)?;
-    };
-
-    Ok(())
-}
-
-// Read the existing tls credentials from disk.
-pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
-    let cert = std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))?;
-    let key = std::fs::read_to_string(data_dir.join(TLS_KEY_FILENAME))?;
-
-    Ok(Identity::from_pem(cert, key))
-}
-
-// The user first passes in the tls ips as a comma-deliminated string into LNDK. Here we turn that
-// string into a Vec.
-fn collect_tls_ips(tls_ips_str: Option<String>) -> Option<Vec<String>> {
-    tls_ips_str.map(|tls_ips_str| tls_ips_str.split(',').map(|str| str.to_owned()).collect())
+        Status::with_error_details(grpc_code, human_message, details)
+    }
 }
 
 fn create_fee_limit(
@@ -492,11 +369,11 @@ fn generate_bolt12_invoice_contents(invoice: &Bolt12Invoice) -> lndkrpc::Bolt12I
     }
 }
 
-fn encode_invoice_as_hex(invoice: &Bolt12Invoice) -> Result<String, Status> {
+fn encode_invoice_as_hex(invoice: &Bolt12Invoice) -> Result<String, OfferError> {
     let mut buffer = Vec::new();
     invoice
         .write(&mut buffer)
-        .map_err(|e| Status::internal(format!("Error serializing invoice: {e}")))?;
+        .map_err(OfferError::EncodeInvoiceFailure)?;
     Ok(hex::encode(buffer))
 }
 
@@ -566,28 +443,5 @@ fn convert_blinded_path(native_info: &BlindedPaymentPath) -> lndkrpc::BlindedPat
                 encrypted_payload: hop.encrypted_payload.clone(),
             })
             .collect(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_collect_tls_ips() {
-        // Test that it returns a vector of one element if only one ip is provided.
-        let tls_ips_str = Some("192.168.0.1".to_string());
-        let tls_ips = collect_tls_ips(tls_ips_str);
-        assert!(tls_ips.is_some());
-        assert!(tls_ips.as_ref().unwrap().len() == 1);
-
-        // If no ip is provided, collect_tls_ips should return None.
-        assert!(collect_tls_ips(None).is_none());
-
-        // If two ips are provided, a vector of length two should be returned.
-        let tls_ips_str = Some("192.168.0.1,192.168.0.3".to_string());
-        let tls_ips = collect_tls_ips(tls_ips_str);
-        assert!(tls_ips.is_some());
-        assert!(tls_ips.as_ref().unwrap().len() == 2);
     }
 }

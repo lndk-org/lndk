@@ -13,25 +13,109 @@ use home::home_dir;
 use internal::*;
 use lndk::lnd::{build_seed_from_lnd_node, get_lnd_client, validate_lnd_creds, LndCfg};
 use lndk::offers::handler::OfferHandler;
-use lndk::server::{generate_tls_creds, read_tls, LNDKServer};
+use lndk::server::LNDKServer;
 use lndk::{
     lndkrpc, setup_logger, Cfg, LifecycleSignals, LndkOnionMessenger, DEFAULT_CONFIG_FILE_NAME,
     DEFAULT_DATA_DIR, DEFAULT_LNDK_DIR, DEFAULT_LOG_FILE, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    TLS_CERT_FILENAME, TLS_KEY_FILENAME,
 };
 use lndkrpc::offers_server::OffersServer;
 use log::{error, info};
+use rcgen::{generate_simple_self_signed, CertifiedKey, Error as RcgenError};
+use std::error::Error;
 use std::ffi::OsString;
-use std::fs::create_dir_all;
+use std::fmt::Display;
+use std::fs::{create_dir_all, metadata, set_permissions, File};
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
 use tokio::select;
 use tokio::signal::unix::SignalKind;
-use tonic::transport::{Server, ServerTlsConfig};
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic_lnd::lnrpc::GetInfoRequest;
 
 #[macro_use]
 extern crate configure_me;
+
+/// An error that occurs when generating TLS credentials.
+#[derive(Debug)]
+pub enum CertificateGenFailure {
+    RcgenError(RcgenError),
+    IoError(std::io::Error),
+}
+
+impl Display for CertificateGenFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CertificateGenFailure::RcgenError(e) => {
+                write!(f, "Error generating TLS certificate: {e:?}")
+            }
+            CertificateGenFailure::IoError(e) => write!(f, "IO error: {e:?}"),
+        }
+    }
+}
+
+impl Error for CertificateGenFailure {}
+
+// If a tls cert/key pair doesn't already exist, generate_tls_creds creates the tls cert/key pair
+// required to secure connections to LNDK's gRPC server. By default they are stored in ~/.lndk.
+pub fn generate_tls_creds(
+    data_dir: PathBuf,
+    tls_ips_string: Option<String>,
+) -> Result<(), CertificateGenFailure> {
+    let cert_path = data_dir.join(TLS_CERT_FILENAME);
+    let key_path = data_dir.join(TLS_KEY_FILENAME);
+    let tls_ips = collect_tls_ips(tls_ips_string);
+
+    // Did we have to generate a new key? In that case we also need to regenerate the certificate.
+    if !key_path.exists() || !cert_path.exists() {
+        log::debug!("Generating fresh TLS credentials in {data_dir:?}");
+        let mut subject_alt_names = vec!["localhost".to_string()];
+        if let Some(ips) = tls_ips {
+            for ip in ips {
+                subject_alt_names.push(ip);
+            }
+        };
+
+        let CertifiedKey {
+            cert,
+            signing_key: key_pair,
+        } = generate_simple_self_signed(subject_alt_names)
+            .map_err(CertificateGenFailure::RcgenError)?;
+
+        // Create the tls files. Make sure the key is user-readable only:
+        let mut file = File::create(&key_path).map_err(CertificateGenFailure::IoError)?;
+        let mut perms = metadata(&key_path)
+            .map_err(CertificateGenFailure::IoError)?
+            .permissions();
+        perms.set_mode(0o600);
+        set_permissions(&key_path, perms).map_err(CertificateGenFailure::IoError)?;
+
+        file.write_all(key_pair.serialize_pem().as_bytes())
+            .map_err(CertificateGenFailure::IoError)?;
+        drop(file);
+
+        std::fs::write(&cert_path, cert.pem()).map_err(CertificateGenFailure::IoError)?;
+    };
+
+    Ok(())
+}
+
+// Read the existing tls credentials from disk.
+pub fn read_tls(data_dir: PathBuf) -> Result<Identity, std::io::Error> {
+    let cert = std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))?;
+    let key = std::fs::read_to_string(data_dir.join(TLS_KEY_FILENAME))?;
+
+    Ok(Identity::from_pem(cert, key))
+}
+
+// The user first passes in the tls ips as a comma-deliminated string into LNDK. Here we turn that
+// string into a Vec.
+fn collect_tls_ips(tls_ips_str: Option<String>) -> Option<Vec<String>> {
+    tls_ips_str.map(|tls_ips_str| tls_ips_str.split(',').map(|str| str.to_owned()).collect())
+}
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
@@ -198,4 +282,27 @@ fn get_conf_file_paths() -> Vec<OsString> {
 
     let paths = vec![current_dir_conf_file, default_lndk_config_path];
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collect_tls_ips() {
+        // Test that it returns a vector of one element if only one ip is provided.
+        let tls_ips_str = Some("192.168.0.1".to_string());
+        let tls_ips = collect_tls_ips(tls_ips_str);
+        assert!(tls_ips.is_some());
+        assert!(tls_ips.as_ref().unwrap().len() == 1);
+
+        // If no ip is provided, collect_tls_ips should return None.
+        assert!(collect_tls_ips(None).is_none());
+
+        // If two ips are provided, a vector of length two should be returned.
+        let tls_ips_str = Some("192.168.0.1,192.168.0.3".to_string());
+        let tls_ips = collect_tls_ips(tls_ips_str);
+        assert!(tls_ips.is_some());
+        assert!(tls_ips.as_ref().unwrap().len() == 2);
+    }
 }
