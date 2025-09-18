@@ -26,11 +26,13 @@ use lightning::{
     sign::EntropySource,
     types::payment::PaymentHash,
 };
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
+use tokio::{select, time::sleep};
 use tonic_lnd::{
     lnrpc::{ChanInfoRequest, GetInfoRequest, Payment},
     Client,
 };
+use triggered::Listener;
 
 use crate::{
     lnd::{
@@ -42,6 +44,10 @@ use crate::{
 };
 
 use super::{validate_amount, OfferError};
+
+const INITIAL_DELAY_MS: u64 = 500;
+const MAX_DELAY_MS: u64 = 60_000;
+const MAX_ATTEMPTS: u32 = 10;
 
 #[derive(Debug)]
 pub struct LndkBolt12InvoiceInfo {
@@ -373,6 +379,47 @@ pub async fn send_invoice_request(
     };
 
     Ok((contents, send_instructions))
+}
+
+pub(crate) async fn connect_to_peer_with_retry(
+    connector: impl PeerConnector + Clone,
+    node_id: PublicKey,
+    shutdown_listener: Listener,
+) -> Result<(), OfferError> {
+    let mut attempts = 0;
+    loop {
+        select! {
+            biased;
+            _ = shutdown_listener.clone() => {
+                info!("Received shutdown signal, exiting connect to peer loop.");
+                return Ok(())
+            }
+            _ = async {
+                if attempts > 0 {
+                    let mut delay = INITIAL_DELAY_MS * (2u64.pow(attempts - 1));
+                    delay = delay.min(MAX_DELAY_MS);
+
+                    info!("Attempt {attempts} to connect to peer failed. Retrying in {}ms...", delay);
+                    sleep(Duration::from_millis(delay)).await;
+                }
+            } => {
+                match connect_to_peer(connector.clone(), node_id).await {
+                    Ok(_) => {
+                        debug!("Connect to peer with node_id {node_id} successful.");
+                        return Ok(())
+                    },
+                    Err(e) => {
+                        error!("Connect to peer produced an error: {e}.");
+                        attempts += 1;
+                        if attempts > MAX_ATTEMPTS {
+                            error!("Max retry attempts reached for peer {node_id}. Giving up.");
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(crate) async fn connect_to_peer(
