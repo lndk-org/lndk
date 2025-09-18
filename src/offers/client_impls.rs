@@ -255,6 +255,10 @@ pub(super) mod tests {
     mock! {
         pub TestPeerConnector{}
 
+        impl Clone for TestPeerConnector {
+            fn clone(&self) -> Self;
+        }
+
          #[async_trait]
          impl PeerConnector for TestPeerConnector {
              async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
