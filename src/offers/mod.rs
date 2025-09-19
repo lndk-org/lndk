@@ -15,7 +15,8 @@ mod lnd_requests;
 mod parse;
 
 pub(crate) use lnd_requests::connect_to_peer_with_retry;
-pub use lnd_requests::create_reply_path;
+pub use lnd_requests::create_reply_path_for_offer_creation;
+pub use lnd_requests::create_reply_path_for_outgoing_payments;
 pub use parse::{decode, get_destination, validate_amount};
 
 #[derive(Debug)]
@@ -69,6 +70,8 @@ pub enum OfferError {
     ParseInvoiceFailure(DecodeError),
     /// Failed to encode invoice.
     EncodeInvoiceFailure(BitcoinIoError),
+    /// Cannot list channels.
+    ListChannelsFailure(LndStatus),
 }
 
 impl OfferError {
@@ -98,6 +101,7 @@ impl OfferError {
             OfferError::InvoiceTimeout(_) => "INVOICE_TIMEOUT",
             OfferError::IntroductionNodeNotFound => "INTRODUCTION_NODE_NOT_FOUND",
             OfferError::GetChannelInfo(_) => "GET_CHANNEL_INFO",
+            OfferError::ListChannelsFailure(_) => "LIST_CHANNELS_FAILURE",
         }
     }
 
@@ -173,6 +177,7 @@ impl Display for OfferError {
             OfferError::EncodeInvoiceFailure(e) => {
                 write!(f, "Failed to encode invoice to hex format. Error: {e:?}")
             }
+            OfferError::ListChannelsFailure(e) => write!(f, "Error listing channels: {e:?}"),
         }
     }
 }

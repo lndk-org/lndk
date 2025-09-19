@@ -28,8 +28,8 @@ use tonic::{Code, Status};
 use tonic_lnd::lnrpc::AddInvoiceResponse;
 use tonic_lnd::lnrpc::PayReq;
 use tonic_lnd::lnrpc::{
-    FeeLimit, GetInfoResponse, HtlcAttempt, ListPeersResponse, NodeInfo, Payment,
-    QueryRoutesResponse, Route,
+    FeeLimit, GetInfoResponse, HtlcAttempt, ListChannelsResponse, ListPeersResponse, NodeInfo,
+    Payment, QueryRoutesResponse, Route,
 };
 use tonic_lnd::signrpc::KeyLocator;
 use tonic_lnd::tonic::Status as LndStatus;
@@ -562,6 +562,7 @@ pub trait PeerConnector {
         pub_key: String,
         include_channels: bool,
     ) -> Result<NodeInfo, LndStatus>;
+    async fn list_active_public_channels(&mut self) -> Result<ListChannelsResponse, LndStatus>;
 }
 
 /// InvoicePayer provides a layer of abstraction over the LND API for paying for a BOLT 12 invoice.

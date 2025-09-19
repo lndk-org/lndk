@@ -12,7 +12,9 @@ use tonic_lnd::routerrpc::TrackPaymentRequest;
 use tonic_lnd::tonic::Status;
 use tonic_lnd::LightningClient;
 use tonic_lnd::{
-    lnrpc::{ListPeersRequest, ListPeersResponse, NodeInfo},
+    lnrpc::{
+        ListChannelsRequest, ListChannelsResponse, ListPeersRequest, ListPeersResponse, NodeInfo,
+    },
     signrpc::{KeyLocator, SignMessageReq},
     Client,
 };
@@ -57,6 +59,19 @@ impl PeerConnector for LightningClient {
         };
 
         self.get_node_info(req).await.map(|resp| resp.into_inner())
+    }
+
+    async fn list_active_public_channels(&mut self) -> Result<ListChannelsResponse, Status> {
+        let list_req = ListChannelsRequest {
+            active_only: true,
+            inactive_only: false,
+            public_only: true,
+            private_only: false,
+            ..Default::default()
+        };
+        self.list_channels(list_req)
+            .await
+            .map(|resp| resp.into_inner())
     }
 }
 
@@ -264,6 +279,7 @@ pub(super) mod tests {
              async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
              async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<NodeInfo, Status>;
              async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+             async fn list_active_public_channels(&mut self) -> Result<ListChannelsResponse, Status>;
          }
     }
 
@@ -291,6 +307,7 @@ pub(super) mod tests {
             async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, Status>;
             async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<NodeInfo, Status>;
             async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), Status>;
+            async fn list_active_public_channels(&mut self) -> Result<ListChannelsResponse, Status>;
         }
     }
 
