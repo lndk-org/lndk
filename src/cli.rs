@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
+use tonic_types::StatusExt;
 
 fn get_macaroon_path_default(network: &str) -> PathBuf {
     home::home_dir()
@@ -178,11 +179,7 @@ async fn main() {
                     println!("Decoded offer: {:?}.", offer)
                 }
                 Err(e) => {
-                    println!(
-                        "ERROR please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
+                    println!("ERROR ({}): {}", e.code(), e);
                     exit(1)
                 }
             }
@@ -196,11 +193,7 @@ async fn main() {
                     println!("Decoded invoice: {:?}.", invoice);
                 }
                 Err(e) => {
-                    println!(
-                        "ERROR please provide hex-encoded invoice string. Provided invoice is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
+                    println!("ERROR ({}): {}", e.code(), e);
                     exit(1);
                 }
             }
@@ -235,14 +228,10 @@ async fn main() {
 
             let mut client = OffersClient::new(channel);
 
-            let offer = match decode(offer_string.to_owned()) {
+            let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
                 Err(e) => {
-                    println!(
-                        "ERROR: please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
+                    println!("ERROR ({}): {}", e.code(), e);
                     exit(1)
                 }
             };
@@ -261,10 +250,7 @@ async fn main() {
 
             match client.pay_offer(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => {
-                    println!("Error paying for offer: {err:?}");
-                    exit(1)
-                }
+                Err(err) => print_grpc_error(err),
             };
         }
         Commands::GetInvoice {
@@ -278,30 +264,26 @@ async fn main() {
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
+                    println!("ERROR: failed to create endpoint {e:?}");
                     exit(1)
                 })
                 .tls_config(tls)
                 .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
+                    println!("ERROR: failed to configure tls {e:?}");
                     exit(1)
                 })
                 .connect()
                 .await
                 .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
+                    println!("ERROR: failed to connect {e:?}");
                     exit(1)
                 });
 
             let mut client = OffersClient::new(channel);
-            let offer = match decode(offer_string.to_owned()) {
+            let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
                 Err(e) => {
-                    println!(
-                        "ERROR: please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
+                    println!("ERROR ({}): {}", e.code(), e);
                     exit(1)
                 }
             };
@@ -316,13 +298,8 @@ async fn main() {
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.get_invoice(request).await {
-                Ok(response) => {
-                    println!("Invoice: {:?}.", response.get_ref())
-                }
-                Err(err) => {
-                    println!("Error getting invoice for offer: {err:?}");
-                    exit(1)
-                }
+                Ok(response) => println!("Invoice: {:?}.", response.get_ref()),
+                Err(err) => print_grpc_error(err),
             }
         }
         Commands::PayInvoice {
@@ -336,18 +313,18 @@ async fn main() {
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
+                    println!("ERROR: failed to create endpoint {e:?}");
                     exit(1)
                 })
                 .tls_config(tls)
                 .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
+                    println!("ERROR: failed to configure tls {e:?}");
                     exit(1)
                 })
                 .connect()
                 .await
                 .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
+                    println!("ERROR: failed to connect {e:?}");
                     exit(1)
                 });
 
@@ -363,10 +340,7 @@ async fn main() {
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.pay_invoice(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => {
-                    println!("Error paying invoice: {err:?}");
-                    exit(1)
-                }
+                Err(err) => print_grpc_error(err),
             }
         }
         Commands::CreateOffer {
@@ -381,18 +355,18 @@ async fn main() {
             let grpc_port = args.grpc_port;
             let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
                 .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
+                    println!("ERROR: failed to create endpoint {e:?}");
                     exit(1)
                 })
                 .tls_config(tls)
                 .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
+                    println!("ERROR: failed to configure tls {e:?}");
                     exit(1)
                 })
                 .connect()
                 .await
                 .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
+                    println!("ERROR: failed to connect {e:?}");
                     exit(1)
                 });
 
@@ -408,13 +382,8 @@ async fn main() {
             });
             add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
             match client.create_offer(request).await {
-                Ok(response) => {
-                    println!("Offer: {:?}.", response.get_ref())
-                }
-                Err(err) => {
-                    println!("Error creating offer: {err:?}");
-                    exit(1)
-                }
+                Ok(response) => println!("Offer: {:?}.", response.get_ref()),
+                Err(err) => print_grpc_error(err),
             }
         }
     }
@@ -422,7 +391,7 @@ async fn main() {
 
 fn add_metadata<R>(request: &mut Request<R>, macaroon: String) -> Result<(), ()> {
     let macaroon = macaroon.parse().map_err(|e| {
-        println!("Error parsing provided macaroon string into tonic metadata {e:?}")
+        println!("ERROR: failed to parse provided macaroon string into tonic metadata {e:?}")
     })?;
     request.metadata_mut().insert("macaroon", macaroon);
 
@@ -450,7 +419,7 @@ fn read_cert_from_args(
     let pem = match (&cert_pem, &cert_path) {
         (Some(pem), _) => pem.clone(),
         (None, Some(cert_path)) => std::fs::read_to_string(cert_path)
-            .map_err(|e| format!("ERROR reading cert: {:?}", e))?,
+            .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?,
         (None, None) => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
             // default location.
@@ -459,7 +428,7 @@ fn read_cert_from_args(
                 .join(DEFAULT_LNDK_DIR)
                 .join(DEFAULT_DATA_DIR);
             std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
-                .map_err(|e| format!("ERROR reading cert: {:?}", e))?
+                .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?
         }
     };
     let cert = Certificate::from_pem(pem);
@@ -496,7 +465,7 @@ fn read_macaroon_from_args(
     // set, use the default macaroon path.
     match macaroon_path {
         Some(path) => read_macaroon_from_file(path.clone()).unwrap_or_else(|e| {
-            println!("ERROR reading macaroon from file {e:?}");
+            println!("ERROR: failed to read macaroon from file {e:?}");
             exit(1)
         }),
         None => match &macaroon_hex {
@@ -504,12 +473,22 @@ fn read_macaroon_from_args(
             None => {
                 let path = get_macaroon_path_default(network);
                 read_macaroon_from_file(path).unwrap_or_else(|e| {
-                    println!("ERROR reading macaroon from file {e:?}");
+                    println!("ERROR: failed to read macaroon from file {e:?}");
                     exit(1)
                 })
             }
         },
     }
+}
+
+fn print_grpc_error(err: tonic::Status) {
+    let details = err.get_error_details();
+    if let Some(error_info) = details.error_info() {
+        println!("ERROR ({}): {}", error_info.reason, err.message());
+    } else {
+        println!("ERROR: {}", err.message());
+    }
+    exit(1)
 }
 
 #[cfg(test)]
@@ -568,7 +547,9 @@ mod tests {
         let result = read_cert_from_args(None, Some(invalid_path));
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().starts_with("ERROR reading cert:"));
+        assert!(result
+            .unwrap_err()
+            .starts_with("ERROR: failed to read cert:"));
     }
 
     #[test]
