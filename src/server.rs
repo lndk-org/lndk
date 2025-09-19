@@ -2,6 +2,7 @@ use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg, LndError};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
 use crate::offers::get_destination;
 use crate::offers::handler::{CreateOfferParams, PayOfferParams};
+use crate::offers::parse::decode;
 use crate::offers::validate_amount;
 use crate::offers::OfferError;
 use crate::{lndkrpc, Bolt12InvoiceString, OfferHandler};
@@ -10,7 +11,7 @@ use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::{Direction, IntroductionNode};
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::invoice::Bolt12Invoice;
-use lightning::offers::offer::{Offer, Quantity};
+use lightning::offers::offer::Quantity;
 use lightning::sign::EntropySource;
 use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
@@ -71,7 +72,7 @@ impl Offers for LNDKServer {
         let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
+        let offer = decode(inner_request.offer.clone())?;
 
         let destination = get_destination(&offer).await?;
         let reply_path = None;
@@ -139,7 +140,7 @@ impl Offers for LNDKServer {
         let mut client = get_lnd_client(lnd_cfg)?;
 
         let inner_request = request.get_ref();
-        let offer = Offer::from_str(&inner_request.offer).map_err(OfferError::ParseOfferFailure)?;
+        let offer = decode(inner_request.offer.clone())?;
 
         let destination = get_destination(&offer).await?;
         let reply_path = None;
