@@ -181,6 +181,7 @@ mod tests {
             async fn list_peers(&mut self) -> Result<tonic_lnd::lnrpc::ListPeersResponse, tonic_lnd::tonic::Status>;
             async fn connect_peer(&mut self, node_id: String, addr: String) -> Result<(), tonic_lnd::tonic::Status>;
             async fn get_node_info(&mut self, pub_key: String, include_channels: bool) -> Result<tonic_lnd::lnrpc::NodeInfo, tonic_lnd::tonic::Status>;
+            async fn list_active_public_channels(&mut self) -> Result<tonic_lnd::lnrpc::ListChannelsResponse, tonic_lnd::tonic::Status>;
         }
     }
 
