@@ -190,7 +190,9 @@ pub(super) async fn create_offer(
     let secp_ctx = Secp256k1::new();
 
     let message_context = MessageContext::Offers(OffersContext::InvoiceRequest { nonce });
-    let path = create_reply_path(creator, node_id, message_context, entropy_source).await?;
+    let path =
+        create_reply_path_for_offer_creation(creator, node_id, message_context, entropy_source)
+            .await?;
 
     let mut builder =
         OfferBuilder::deriving_signing_pubkey(node_id, expanded_key, nonce, &secp_ctx)
@@ -253,15 +255,94 @@ pub(super) async fn create_invoice_info_from_request(
         payment_paths,
     })
 }
-/// create_reply_path creates a blinded path to provide to the offer node when requesting an
-/// invoice so they know where to send the invoice back to. We try to find a peer that we're
-/// connected to with the necessary requirements to form a blinded path. The peer needs two
+/// create_reply_path_for_offer_creation creates a blinded path to provide to the offer.
+/// We try to find at least one active public channel and at most three active public channels.
+///
+/// Otherwise we create a blinded path directly to ourselves.
+pub async fn create_reply_path_for_offer_creation(
+    mut connector: impl PeerConnector + std::marker::Send + 'static,
+    node_id: PublicKey,
+    message_context: MessageContext,
+    messenger_utils: &MessengerUtilities,
+) -> Result<BlindedMessagePath, OfferError> {
+    // Find introduction channels for our blinded path.
+    let current_channels = connector.list_active_public_channels().await.map_err(|e| {
+        error!("Could not lookup current channels: {e}.");
+        OfferError::ListChannelsFailure(e)
+    })?;
+
+    let mut intro_channels = vec![];
+    let mut counter = 0;
+    for channel in current_channels.channels.iter() {
+        let pubkey = channel.remote_pubkey.clone();
+        if counter <= 3 {
+            match connector.get_node_info(pubkey, true).await {
+                Ok(node_info) => match node_info.node {
+                    Some(node) => {
+                        if node_info.channels.is_empty() {
+                            continue;
+                        }
+                        let onion_support = features_support_onion_messages(&node.features);
+                        let other_channels = node_info
+                            .channels
+                            .into_iter()
+                            .filter(|peer_channel| peer_channel.channel_id != channel.chan_id)
+                            .collect::<Vec<tonic_lnd::lnrpc::ChannelEdge>>();
+                        if !other_channels.is_empty() && onion_support {
+                            let pubkey = PublicKey::from_str(&channel.remote_pubkey).unwrap();
+                            intro_channels.push(pubkey);
+                            counter += 1;
+                        }
+                    }
+                    None => continue,
+                },
+                Err(_) => continue,
+            }
+        } else {
+            break;
+        }
+    }
+
+    let secp_ctx = Secp256k1::new();
+    if intro_channels.is_empty() {
+        debug!(
+            "Failed to create a blinded path for the offer. 
+            No active public channels were found on which to build a path."
+        );
+        Ok(
+            BlindedMessagePath::one_hop(node_id, message_context, messenger_utils, &secp_ctx)
+                .map_err(|_| {
+                    error!("Could not create blinded path.");
+                    OfferError::BuildBlindedPathFailure
+                })?,
+        )
+    } else {
+        let mut nodes = vec![];
+        for node in intro_channels {
+            nodes.push(lightning::blinded_path::message::MessageForwardNode {
+                node_id: node,
+                short_channel_id: None,
+            })
+        }
+        Ok(
+            BlindedMessagePath::new(&nodes, node_id, message_context, messenger_utils, &secp_ctx)
+                .map_err(|_| {
+                error!("Could not create blinded path.");
+                OfferError::BuildBlindedPathFailure
+            })?,
+        )
+    }
+}
+
+/// create_reply_path_for_outgoing_payments creates a blinded path to provide to the offer node when
+/// requesting an invoice so they know where to send the invoice back to. We try to find a peer that
+/// we're connected to with the necessary requirements to form a blinded path. The peer needs two
 /// things:
 /// 1) Onion messaging support.
 /// 2) To be an advertised node with at least one public channel.
 ///
 /// Otherwise we create a blinded path directly to ourselves.
-pub async fn create_reply_path(
+pub async fn create_reply_path_for_outgoing_payments(
     mut connector: impl PeerConnector + std::marker::Send + 'static,
     node_id: PublicKey,
     message_context: MessageContext,
@@ -349,7 +430,7 @@ pub async fn send_invoice_request(
 
     let pubkey = PublicKey::from_str(&info.identity_pubkey).unwrap();
     let message_context = MessageContext::Offers(offer_context);
-    let reply_path = create_reply_path(
+    let reply_path = create_reply_path_for_outgoing_payments(
         client.lightning().clone(),
         pubkey,
         message_context,
@@ -526,7 +607,8 @@ mod tests {
     use tonic_lnd::{
         lnrpc::{
             AddInvoiceResponse, ChannelEdge, GetInfoResponse, HtlcAttempt, LightningNode,
-            ListPeersResponse, NodeAddress, NodeInfo, PayReq, QueryRoutesResponse, Route,
+            ListChannelsResponse, ListPeersResponse, NodeAddress, NodeInfo, PayReq,
+            QueryRoutesResponse, Route,
         },
         tonic::Status,
     };
@@ -687,7 +769,24 @@ mod tests {
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
         let message_context = get_message_context();
-        let response = create_reply_path(
+        let response = create_reply_path_for_outgoing_payments(
+            connector_mock,
+            receiver_node_id,
+            message_context,
+            &MessengerUtilities::new([42; 32]),
+        )
+        .await;
+        assert!(response.is_ok());
+
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_active_public_channels()
+            .returning(|| Ok(ListChannelsResponse { channels: vec![] }));
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
+        let response = create_reply_path_for_offer_creation(
             connector_mock,
             receiver_node_id,
             message_context,
@@ -698,7 +797,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_reply_path() {
+    async fn test_reply_path_for_outgoing_payments() {
         let mut connector_mock = MockTestPeerConnector::new();
 
         connector_mock.expect_list_peers().returning(|| {
@@ -729,7 +828,54 @@ mod tests {
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
 
         let message_context = get_message_context();
-        let response = create_reply_path(
+        let response = create_reply_path_for_outgoing_payments(
+            connector_mock,
+            receiver_node_id,
+            message_context,
+            &MessengerUtilities::new([42; 32]),
+        )
+        .await;
+        assert!(response.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_reply_path_for_offer_creation() {
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_active_public_channels()
+            .returning(|| {
+                let channel = tonic_lnd::lnrpc::Channel {
+                    remote_pubkey: get_pubkeys()[0].clone(),
+                    ..Default::default()
+                };
+                Ok(ListChannelsResponse {
+                    channels: vec![channel],
+                })
+            });
+
+        connector_mock.expect_get_node_info().returning(|_, _| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = Some(LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            });
+
+            let node_info = NodeInfo {
+                node,
+                ..Default::default()
+            };
+
+            Ok(node_info)
+        });
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+
+        let message_context = get_message_context();
+        let response = create_reply_path_for_offer_creation(
             connector_mock,
             receiver_node_id,
             message_context,
@@ -749,7 +895,24 @@ mod tests {
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
         let message_context = get_message_context();
-        let response = create_reply_path(
+        let response = create_reply_path_for_outgoing_payments(
+            connector_mock,
+            receiver_node_id,
+            message_context,
+            &MessengerUtilities::new([42; 32]),
+        )
+        .await;
+        assert!(response.is_err());
+
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_active_public_channels()
+            .returning(|| Err(Status::unknown("unknown error")));
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
+        let response = create_reply_path_for_offer_creation(
             connector_mock,
             receiver_node_id,
             message_context,
@@ -760,7 +923,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_reply_path_not_advertised() {
+    async fn test_create_reply_path_for_outgoing_payments_not_advertised() {
         // First lets test that if we're only connected to one peer. It has onion support, but the
         // node isn't advertised, meaning it has no public channels. This should return
         // a blinded path with only one hop.
@@ -786,7 +949,7 @@ mod tests {
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
         let message_context = get_message_context();
-        let response = create_reply_path(
+        let response = create_reply_path_for_outgoing_payments(
             connector_mock,
             receiver_node_id,
             message_context,
@@ -851,7 +1014,7 @@ mod tests {
 
         let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
         let message_context = get_message_context();
-        let response = create_reply_path(
+        let response = create_reply_path_for_outgoing_payments(
             connector_mock,
             receiver_node_id,
             message_context,
@@ -861,6 +1024,126 @@ mod tests {
         assert!(response.is_ok());
         let reply_path = response.unwrap();
         let hops = reply_path.blinded_hops();
+        assert!(hops.len() == 2);
+    }
+
+    #[tokio::test]
+    async fn test_create_reply_path_for_offer_creation_not_advertised() {
+        // First lets test that the one that we are try to connecto does not have public channels
+        // This should return a blinded path with only one hop.
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        connector_mock
+            .expect_list_active_public_channels()
+            .returning(|| Ok(ListChannelsResponse { channels: vec![] }));
+
+        connector_mock.expect_get_node_info().returning(|_, _| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = Some(LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            });
+
+            let node_info = NodeInfo {
+                node,
+                ..Default::default()
+            };
+
+            Ok(node_info)
+        });
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
+        let response = create_reply_path_for_offer_creation(
+            connector_mock,
+            receiver_node_id,
+            message_context,
+            &MessengerUtilities::new([42; 32]),
+        )
+        .await;
+        assert!(response.is_ok());
+        let reply_path = response.unwrap();
+        let hops = reply_path.blinded_hops();
+        println!("hops are {:?}", hops.len());
+        assert!(hops.len() == 1);
+
+        // Now let's test that we are connecto to two channels.
+        // One channel isn't advertised (i.e. it has no public channels). But the second is. This
+        // should succeed.
+        let mut connector_mock = MockTestPeerConnector::new();
+
+        // Only second channel is advertised.
+        connector_mock
+            .expect_list_active_public_channels()
+            .returning(|| {
+                let keys = get_pubkeys();
+
+                let channel2 = tonic_lnd::lnrpc::Channel {
+                    remote_pubkey: keys[1].clone(),
+                    chan_id: 10,
+                    ..Default::default()
+                };
+
+                Ok(ListChannelsResponse {
+                    channels: vec![channel2],
+                })
+            });
+
+        connector_mock.expect_get_node_info().returning(|_, _| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let mut features = std::collections::HashMap::new();
+            // Add onion message feature (feature bit 38/39)
+            features.insert(
+                38,
+                tonic_lnd::lnrpc::Feature {
+                    name: "onion_messages_optional".to_string(),
+                    is_required: false,
+                    is_known: true,
+                },
+            );
+            let node = Some(LightningNode {
+                addresses: vec![node_addr],
+                features,
+                ..Default::default()
+            });
+
+            let node_info = NodeInfo {
+                node,
+                channels: vec![
+                    ChannelEdge {
+                        channel_id: 10,
+                        ..Default::default()
+                    },
+                    ChannelEdge {
+                        channel_id: 20,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            };
+
+            Ok(node_info)
+        });
+
+        let receiver_node_id = PublicKey::from_str(&get_pubkeys()[0]).unwrap();
+        let message_context = get_message_context();
+        let response = create_reply_path_for_offer_creation(
+            connector_mock,
+            receiver_node_id,
+            message_context,
+            &MessengerUtilities::new([42; 32]),
+        )
+        .await;
+        assert!(response.is_ok());
+        let reply_path = response.unwrap();
+        let hops = reply_path.blinded_hops();
+        println!("hops are {:?}", hops.len());
         assert!(hops.len() == 2);
     }
 
@@ -1078,6 +1361,36 @@ mod tests {
                 ..Default::default()
             };
             Ok(ListPeersResponse { peers: vec![peer] })
+        });
+
+        creator_mock
+            .expect_list_active_public_channels()
+            .returning(|| {
+                let channel = tonic_lnd::lnrpc::Channel {
+                    remote_pubkey: get_pubkeys()[0].clone(),
+                    ..Default::default()
+                };
+                Ok(ListChannelsResponse {
+                    channels: vec![channel],
+                })
+            });
+
+        creator_mock.expect_get_node_info().returning(|_, _| {
+            let node_addr = NodeAddress {
+                network: String::from("regtest"),
+                addr: String::from("127.0.0.1"),
+            };
+            let node = Some(LightningNode {
+                addresses: vec![node_addr],
+                ..Default::default()
+            });
+
+            let node_info = NodeInfo {
+                node,
+                ..Default::default()
+            };
+
+            Ok(node_info)
         });
 
         creator_mock

@@ -20,7 +20,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
-use lndk::offers::{create_reply_path, OfferError};
+use lndk::offers::{create_reply_path_for_outgoing_payments, OfferError};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
 use std::net::SocketAddr;
@@ -498,7 +498,7 @@ async fn test_reply_path_unannounced_peers() {
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
     // itself.
-    let reply_path = create_reply_path(
+    let reply_path = create_reply_path_for_outgoing_payments(
         lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
@@ -541,7 +541,7 @@ async fn test_reply_path_announced_peers() {
     // public channel and as such, is indeed an advertised node. Because of this, we make sure
     // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
     // expected.
-    let reply_path = create_reply_path(
+    let reply_path = create_reply_path_for_outgoing_payments(
         lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
@@ -1116,16 +1116,18 @@ async fn test_receive_payment_from_offer() {
         expiry: None,
     };
 
+    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
+
     let offer = handler.create_offer(create_offer_params).await;
     assert!(offer.is_ok());
     let offer = offer.unwrap();
-    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
 
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         res = pay_offer_and_wait_for_payment(&ldk1, offer, lnd.client.clone().unwrap()) => {
+            log::info!("res: {:?}", res);
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
