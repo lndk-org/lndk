@@ -15,12 +15,18 @@ use std::path::PathBuf;
 use std::process::exit;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
+use tonic_types::StatusExt;
 
 fn get_macaroon_path_default(network: &str) -> PathBuf {
     home::home_dir()
         .unwrap()
         .as_path()
         .join(format!(".lnd/data/chain/bitcoin/{network}/admin.macaroon"))
+}
+
+fn print_and_exit(msg: &str) -> ! {
+    println!("{msg}");
+    exit(1)
 }
 
 /// A cli for interacting with lndk.
@@ -174,17 +180,8 @@ async fn main() {
         Commands::DecodeOffer { offer_string } => {
             println!("Decoding offer: {offer_string}.");
             match decode(offer_string) {
-                Ok(offer) => {
-                    println!("Decoded offer: {:?}.", offer)
-                }
-                Err(e) => {
-                    println!(
-                        "ERROR please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
-                    exit(1)
-                }
+                Ok(offer) => println!("Decoded offer: {:?}.", offer),
+                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
             }
         }
         Commands::DecodeInvoice { invoice_string } => {
@@ -195,14 +192,7 @@ async fn main() {
                 Ok(invoice) => {
                     println!("Decoded invoice: {:?}.", invoice);
                 }
-                Err(e) => {
-                    println!(
-                        "ERROR please provide hex-encoded invoice string. Provided invoice is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
-                    exit(1);
-                }
+                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
             }
         }
         Commands::PayOffer {
@@ -214,41 +204,19 @@ async fn main() {
             fee_limit_percent,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
-            let grpc_host = args.grpc_host;
-            let grpc_port = args.grpc_port;
-            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
-                .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
-                    exit(1)
-                })
-                .tls_config(tls)
-                .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
-                    exit(1)
-                })
-                .connect()
-                .await
-                .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
-                    exit(1)
-                });
+            let channel = create_grpc_channel(args.grpc_host, args.grpc_port, tls).await;
+            let (mut client, macaroon) = create_authenticated_client(
+                channel,
+                args.macaroon_path,
+                args.macaroon_hex,
+                &args.network,
+            );
 
-            let mut client = OffersClient::new(channel);
-
-            let offer = match decode(offer_string.to_owned()) {
+            let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
-                Err(e) => {
-                    println!(
-                        "ERROR: please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
-                    exit(1)
-                }
+                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
             };
 
-            let macaroon =
-                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(PayOfferRequest {
                 offer: offer.to_string(),
                 amount,
@@ -257,14 +225,11 @@ async fn main() {
                 fee_limit,
                 fee_limit_percent,
             });
-            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            add_metadata(&mut request, macaroon);
 
             match client.pay_offer(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => {
-                    println!("Error paying for offer: {err:?}");
-                    exit(1)
-                }
+                Err(err) => print_grpc_error(err),
             };
         }
         Commands::GetInvoice {
@@ -274,55 +239,29 @@ async fn main() {
             response_invoice_timeout,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
-            let grpc_host = args.grpc_host;
-            let grpc_port = args.grpc_port;
-            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
-                .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
-                    exit(1)
-                })
-                .tls_config(tls)
-                .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
-                    exit(1)
-                })
-                .connect()
-                .await
-                .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
-                    exit(1)
-                });
+            let channel = create_grpc_channel(args.grpc_host, args.grpc_port, tls).await;
+            let (mut client, macaroon) = create_authenticated_client(
+                channel,
+                args.macaroon_path,
+                args.macaroon_hex,
+                &args.network,
+            );
 
-            let mut client = OffersClient::new(channel);
-            let offer = match decode(offer_string.to_owned()) {
+            let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
-                Err(e) => {
-                    println!(
-                        "ERROR: please provide offer starting with lno. Provided offer is \
-                        invalid, failed to decode with error: {:?}.",
-                        e
-                    );
-                    exit(1)
-                }
+                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
             };
 
-            let macaroon =
-                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(GetInvoiceRequest {
                 offer: offer.to_string(),
                 amount,
                 payer_note,
                 response_invoice_timeout,
             });
-            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            add_metadata(&mut request, macaroon);
             match client.get_invoice(request).await {
-                Ok(response) => {
-                    println!("Invoice: {:?}.", response.get_ref())
-                }
-                Err(err) => {
-                    println!("Error getting invoice for offer: {err:?}");
-                    exit(1)
-                }
+                Ok(response) => println!("Invoice: {:?}.", response.get_ref()),
+                Err(err) => print_grpc_error(err),
             }
         }
         Commands::PayInvoice {
@@ -332,41 +271,24 @@ async fn main() {
             fee_limit_percent,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
-            let grpc_host = args.grpc_host.clone();
-            let grpc_port = args.grpc_port;
-            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
-                .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
-                    exit(1)
-                })
-                .tls_config(tls)
-                .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
-                    exit(1)
-                })
-                .connect()
-                .await
-                .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
-                    exit(1)
-                });
+            let channel = create_grpc_channel(args.grpc_host, args.grpc_port, tls).await;
+            let (mut client, macaroon) = create_authenticated_client(
+                channel,
+                args.macaroon_path,
+                args.macaroon_hex,
+                &args.network,
+            );
 
-            let mut client = OffersClient::new(channel);
-            let macaroon =
-                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(PayInvoiceRequest {
                 invoice: invoice_string.to_owned(),
                 amount,
                 fee_limit,
                 fee_limit_percent,
             });
-            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            add_metadata(&mut request, macaroon);
             match client.pay_invoice(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => {
-                    println!("Error paying invoice: {err:?}");
-                    exit(1)
-                }
+                Err(err) => print_grpc_error(err),
             }
         }
         Commands::CreateOffer {
@@ -377,28 +299,14 @@ async fn main() {
             quantity,
         } => {
             let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
-            let grpc_host = args.grpc_host.clone();
-            let grpc_port = args.grpc_port;
-            let channel = Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
-                .unwrap_or_else(|e| {
-                    println!("ERROR creating endpoint: {e:?}");
-                    exit(1)
-                })
-                .tls_config(tls)
-                .unwrap_or_else(|e| {
-                    println!("ERROR tls config: {e:?}");
-                    exit(1)
-                })
-                .connect()
-                .await
-                .unwrap_or_else(|e| {
-                    println!("ERROR connecting: {e:?}");
-                    exit(1)
-                });
+            let channel = create_grpc_channel(args.grpc_host, args.grpc_port, tls).await;
+            let (mut client, macaroon) = create_authenticated_client(
+                channel,
+                args.macaroon_path,
+                args.macaroon_hex,
+                &args.network,
+            );
 
-            let mut client = OffersClient::new(channel);
-            let macaroon =
-                read_macaroon_from_args(args.macaroon_path, args.macaroon_hex, &args.network);
             let mut request = Request::new(CreateOfferRequest {
                 amount,
                 quantity,
@@ -406,27 +314,43 @@ async fn main() {
                 issuer,
                 expiry,
             });
-            add_metadata(&mut request, macaroon).unwrap_or_else(|_| exit(1));
+            add_metadata(&mut request, macaroon);
             match client.create_offer(request).await {
-                Ok(response) => {
-                    println!("Offer: {:?}.", response.get_ref())
-                }
-                Err(err) => {
-                    println!("Error creating offer: {err:?}");
-                    exit(1)
-                }
+                Ok(response) => println!("Offer: {:?}.", response.get_ref()),
+                Err(err) => print_grpc_error(err),
             }
         }
     }
 }
 
-fn add_metadata<R>(request: &mut Request<R>, macaroon: String) -> Result<(), ()> {
-    let macaroon = macaroon.parse().map_err(|e| {
-        println!("Error parsing provided macaroon string into tonic metadata {e:?}")
-    })?;
-    request.metadata_mut().insert("macaroon", macaroon);
+async fn create_grpc_channel(grpc_host: String, grpc_port: u16, tls: ClientTlsConfig) -> Channel {
+    Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
+        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to create endpoint {e:?}")))
+        .tls_config(tls)
+        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to configure tls {e:?}")))
+        .connect()
+        .await
+        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to connect {e:?}")))
+}
 
-    Ok(())
+fn create_authenticated_client(
+    channel: Channel,
+    macaroon_path: Option<PathBuf>,
+    macaroon_hex: Option<String>,
+    network: &str,
+) -> (OffersClient<Channel>, String) {
+    let client = OffersClient::new(channel);
+    let macaroon = read_macaroon_from_args(macaroon_path, macaroon_hex, network);
+    (client, macaroon)
+}
+
+fn add_metadata<R>(request: &mut Request<R>, macaroon: String) {
+    let macaroon = macaroon.parse().unwrap_or_else(|e| {
+        print_and_exit(&format!(
+            "ERROR: failed to parse provided macaroon string into tonic metadata {e:?}"
+        ))
+    });
+    request.metadata_mut().insert("macaroon", macaroon);
 }
 
 fn read_macaroon_from_file(path: PathBuf) -> Result<String, std::io::Error> {
@@ -450,7 +374,7 @@ fn read_cert_from_args(
     let pem = match (&cert_pem, &cert_path) {
         (Some(pem), _) => pem.clone(),
         (None, Some(cert_path)) => std::fs::read_to_string(cert_path)
-            .map_err(|e| format!("ERROR reading cert: {:?}", e))?,
+            .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?,
         (None, None) => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
             // default location.
@@ -459,7 +383,7 @@ fn read_cert_from_args(
                 .join(DEFAULT_LNDK_DIR)
                 .join(DEFAULT_DATA_DIR);
             std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
-                .map_err(|e| format!("ERROR reading cert: {:?}", e))?
+                .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?
         }
     };
     let cert = Certificate::from_pem(pem);
@@ -474,10 +398,7 @@ fn read_cert_from_args_or_exit(
 ) -> ClientTlsConfig {
     match read_cert_from_args(cert_pem, cert_path) {
         Ok(config) => config,
-        Err(err) => {
-            println!("{}", err);
-            exit(1);
-        }
+        Err(err) => print_and_exit(&format!("ERROR: {}", err)),
     }
 }
 
@@ -488,27 +409,33 @@ fn read_macaroon_from_args(
 ) -> String {
     // Make sure both macaroon options are not set.
     if macaroon_path.is_some() && macaroon_hex.is_some() {
-        println!("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
-        exit(1)
+        print_and_exit("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
     }
 
     // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
     // set, use the default macaroon path.
     match macaroon_path {
         Some(path) => read_macaroon_from_file(path.clone()).unwrap_or_else(|e| {
-            println!("ERROR reading macaroon from file {e:?}");
-            exit(1)
+            print_and_exit(&format!("ERROR: failed to read macaroon from file {e:?}"))
         }),
         None => match &macaroon_hex {
             Some(macaroon) => macaroon.clone(),
             None => {
                 let path = get_macaroon_path_default(network);
                 read_macaroon_from_file(path).unwrap_or_else(|e| {
-                    println!("ERROR reading macaroon from file {e:?}");
-                    exit(1)
+                    print_and_exit(&format!("ERROR: failed to read macaroon from file {e:?}"))
                 })
             }
         },
+    }
+}
+
+fn print_grpc_error(err: tonic::Status) -> ! {
+    let details = err.get_error_details();
+    if let Some(error_info) = details.error_info() {
+        print_and_exit(&format!("ERROR ({}): {}", error_info.reason, err.message()));
+    } else {
+        print_and_exit(&format!("ERROR: {}", err.message()));
     }
 }
 
@@ -568,7 +495,9 @@ mod tests {
         let result = read_cert_from_args(None, Some(invalid_path));
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().starts_with("ERROR reading cert:"));
+        assert!(result
+            .unwrap_err()
+            .starts_with("ERROR: failed to read cert:"));
     }
 
     #[test]
