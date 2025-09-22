@@ -8,7 +8,7 @@ or inconsistencies between releases based on local environments.
 ### Prerequisites
 
 ```shell
-cargo install --locked dist cargo-release
+cargo install --locked cargo-dist cargo-release
 ```
 
 ### Use of `dist` in this project
@@ -79,5 +79,6 @@ dist plan
 cargo release --no-publish
 
 ```
-[dist]: https://opensource.axo.dev/cargo-dist
-[the dist book]: https://opensource.axo.dev/cargo-dist/book/workspaces/cargo-release-guide.html#using-cargo-release-with-pull-requests
+
+[dist]: https://axodotdev.github.io/cargo-dist/
+[the dist book]: https://axodotdev.github.io/cargo-dist/book/workspaces/cargo-release-guide.html#using-cargo-release-with-pull-requests
