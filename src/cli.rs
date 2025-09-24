@@ -17,16 +17,40 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
 use tonic_types::StatusExt;
 
+trait ExitGracefully {
+    fn exit_gracefully(self) -> !;
+}
+
+impl ExitGracefully for &str {
+    fn exit_gracefully(self) -> ! {
+        println!("{self}");
+        exit(1)
+    }
+}
+
+impl ExitGracefully for tonic::Status {
+    fn exit_gracefully(self) -> ! {
+        let details = self.get_error_details();
+        let error_msg = if let Some(error_info) = details.error_info() {
+            format!("ERROR ({}): {}", error_info.reason, self.message())
+        } else {
+            format!("ERROR: {}", self.message())
+        };
+        error_msg.exit_gracefully();
+    }
+}
+
+impl ExitGracefully for lndk::offers::OfferError {
+    fn exit_gracefully(self) -> ! {
+        format!("ERROR ({}): {}", self.code(), self).exit_gracefully();
+    }
+}
+
 fn get_macaroon_path_default(network: &str) -> PathBuf {
     home::home_dir()
         .unwrap()
         .as_path()
         .join(format!(".lnd/data/chain/bitcoin/{network}/admin.macaroon"))
-}
-
-fn print_and_exit(msg: &str) -> ! {
-    println!("{msg}");
-    exit(1)
 }
 
 /// A cli for interacting with lndk.
@@ -181,7 +205,7 @@ async fn main() {
             println!("Decoding offer: {offer_string}.");
             match decode(offer_string) {
                 Ok(offer) => println!("Decoded offer: {:?}.", offer),
-                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
+                Err(e) => e.exit_gracefully(),
             }
         }
         Commands::DecodeInvoice { invoice_string } => {
@@ -192,7 +216,7 @@ async fn main() {
                 Ok(invoice) => {
                     println!("Decoded invoice: {:?}.", invoice);
                 }
-                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
+                Err(e) => e.exit_gracefully(),
             }
         }
         Commands::PayOffer {
@@ -214,7 +238,7 @@ async fn main() {
 
             let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
-                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
+                Err(e) => e.exit_gracefully(),
             };
 
             let mut request = Request::new(PayOfferRequest {
@@ -229,7 +253,7 @@ async fn main() {
 
             match client.pay_offer(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => print_grpc_error(err),
+                Err(err) => err.exit_gracefully(),
             };
         }
         Commands::GetInvoice {
@@ -249,7 +273,7 @@ async fn main() {
 
             let offer = match decode(offer_string.to_string()) {
                 Ok(offer) => offer,
-                Err(e) => print_and_exit(&format!("ERROR ({}): {}", e.code(), e)),
+                Err(e) => e.exit_gracefully(),
             };
 
             let mut request = Request::new(GetInvoiceRequest {
@@ -261,7 +285,7 @@ async fn main() {
             add_metadata(&mut request, macaroon);
             match client.get_invoice(request).await {
                 Ok(response) => println!("Invoice: {:?}.", response.get_ref()),
-                Err(err) => print_grpc_error(err),
+                Err(err) => err.exit_gracefully(),
             }
         }
         Commands::PayInvoice {
@@ -288,7 +312,7 @@ async fn main() {
             add_metadata(&mut request, macaroon);
             match client.pay_invoice(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
-                Err(err) => print_grpc_error(err),
+                Err(err) => err.exit_gracefully(),
             }
         }
         Commands::CreateOffer {
@@ -317,7 +341,7 @@ async fn main() {
             add_metadata(&mut request, macaroon);
             match client.create_offer(request).await {
                 Ok(response) => println!("Offer: {:?}.", response.get_ref()),
-                Err(err) => print_grpc_error(err),
+                Err(err) => err.exit_gracefully(),
             }
         }
     }
@@ -325,12 +349,12 @@ async fn main() {
 
 async fn create_grpc_channel(grpc_host: String, grpc_port: u16, tls: ClientTlsConfig) -> Channel {
     Channel::from_shared(format!("{grpc_host}:{grpc_port}"))
-        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to create endpoint {e:?}")))
+        .unwrap_or_else(|e| format!("ERROR: failed to create endpoint {e:?}").exit_gracefully())
         .tls_config(tls)
-        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to configure tls {e:?}")))
+        .unwrap_or_else(|e| format!("ERROR: failed to configure tls {e:?}").exit_gracefully())
         .connect()
         .await
-        .unwrap_or_else(|e| print_and_exit(&format!("ERROR: failed to connect {e:?}")))
+        .unwrap_or_else(|e| format!("ERROR: failed to connect {e:?}").exit_gracefully())
 }
 
 fn create_authenticated_client(
@@ -346,9 +370,8 @@ fn create_authenticated_client(
 
 fn add_metadata<R>(request: &mut Request<R>, macaroon: String) {
     let macaroon = macaroon.parse().unwrap_or_else(|e| {
-        print_and_exit(&format!(
-            "ERROR: failed to parse provided macaroon string into tonic metadata {e:?}"
-        ))
+        format!("ERROR: failed to parse provided macaroon string into tonic metadata {e:?}")
+            .exit_gracefully()
     });
     request.metadata_mut().insert("macaroon", macaroon);
 }
@@ -398,7 +421,7 @@ fn read_cert_from_args_or_exit(
 ) -> ClientTlsConfig {
     match read_cert_from_args(cert_pem, cert_path) {
         Ok(config) => config,
-        Err(err) => print_and_exit(&format!("ERROR: {}", err)),
+        Err(err) => err.exit_gracefully(),
     }
 }
 
@@ -409,33 +432,24 @@ fn read_macaroon_from_args(
 ) -> String {
     // Make sure both macaroon options are not set.
     if macaroon_path.is_some() && macaroon_hex.is_some() {
-        print_and_exit("ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.");
+        "ERROR: Only one of `macaroon_path` or `macaroon_hex` should be set.".exit_gracefully();
     }
 
     // Let's grab the macaroon string now. If neither macaroon_path nor macaroon_hex are
     // set, use the default macaroon path.
     match macaroon_path {
         Some(path) => read_macaroon_from_file(path.clone()).unwrap_or_else(|e| {
-            print_and_exit(&format!("ERROR: failed to read macaroon from file {e:?}"))
+            format!("ERROR: failed to read macaroon from file {e:?}").exit_gracefully()
         }),
         None => match &macaroon_hex {
             Some(macaroon) => macaroon.clone(),
             None => {
                 let path = get_macaroon_path_default(network);
                 read_macaroon_from_file(path).unwrap_or_else(|e| {
-                    print_and_exit(&format!("ERROR: failed to read macaroon from file {e:?}"))
+                    format!("ERROR: failed to read macaroon from file {e:?}").exit_gracefully()
                 })
             }
         },
-    }
-}
-
-fn print_grpc_error(err: tonic::Status) -> ! {
-    let details = err.get_error_details();
-    if let Some(error_info) = details.error_info() {
-        print_and_exit(&format!("ERROR ({}): {}", error_info.reason, err.message()));
-    } else {
-        print_and_exit(&format!("ERROR: {}", err.message()));
     }
 }
 

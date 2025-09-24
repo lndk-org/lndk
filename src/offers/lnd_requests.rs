@@ -122,13 +122,13 @@ pub(crate) async fn send_payment(
             params.fee_limit,
         )
         .await
-        .map_err(OfferError::RouteFailure)?;
+        .map_err(|e| OfferError::RouteFailure(e.message().to_string()))?;
 
     trace!("Routes found {}...", resp.routes.len());
     let resp = payer
         .send_to_route(params.payment_hash, resp.routes[0].clone())
         .await
-        .map_err(OfferError::RouteFailure)?;
+        .map_err(|e| OfferError::RouteFailure(e.message().to_string()))?;
 
     trace!(
         "Sent payment using preimage {} using attempt_id {} with status {}. {}",
@@ -253,13 +253,13 @@ pub(super) async fn create_invoice_info_from_request(
     let invoice_response = creator
         .add_invoice(invoice_request)
         .await
-        .map_err(OfferError::AddInvoiceFailure)?;
+        .map_err(|e| OfferError::AddInvoiceFailure(e.message().to_string()))?;
     let payment_request = invoice_response.payment_request;
     log::trace!("Payment request: {:?}", payment_request);
     let payreq = creator
         .decode_payment_request(payment_request)
         .await
-        .map_err(OfferError::DecodePaymentRequestFailure)?;
+        .map_err(|e| OfferError::DecodePaymentRequestFailure(e.message().to_string()))?;
     log::trace!("Decoded payment request: {:?}", payreq);
     let payment_hash =
         bitcoin::hashes::sha256::Hash::from_str(&payreq.payment_hash).map_err(|e| {
@@ -290,7 +290,7 @@ pub async fn create_reply_path_for_offer_creation(
     // Find introduction channels for our blinded paths.
     let current_channels = connector.list_active_public_channels().await.map_err(|e| {
         error!("Could not lookup current channels: {e}.");
-        OfferError::ListChannelsFailure(e)
+        OfferError::ListChannelsFailure(e.message().to_string())
     })?;
 
     let mut intro_channels = HashSet::new();
@@ -376,7 +376,7 @@ pub async fn create_reply_path_for_outgoing_payments(
     // Find an introduction node for our blinded path.
     let current_peers = connector.list_peers().await.map_err(|e| {
         error!("Could not lookup current peers: {e}.");
-        OfferError::ListPeersFailure(e)
+        OfferError::ListPeersFailure(e.message().to_string())
     })?;
 
     let mut intro_node = None;
@@ -535,7 +535,7 @@ pub(crate) async fn connect_to_peer(
     let resp = connector
         .list_peers()
         .await
-        .map_err(OfferError::PeerConnectError)?;
+        .map_err(|e| OfferError::PeerConnectError(e.message().to_string()))?;
 
     let node_id_str = node_id.to_string();
     for peer in resp.peers.iter() {
@@ -551,7 +551,7 @@ pub(crate) async fn connect_to_peer(
     let node = connector
         .get_node_info(node_id_str.clone(), false)
         .await
-        .map_err(OfferError::PeerConnectError)?;
+        .map_err(|e| OfferError::PeerConnectError(e.message().to_string()))?;
 
     let node = match node.node {
         Some(node) => node,
@@ -565,7 +565,7 @@ pub(crate) async fn connect_to_peer(
     connector
         .connect_peer(node_id_str, node.addresses[0].clone().addr)
         .await
-        .map_err(OfferError::PeerConnectError)?;
+        .map_err(|e| OfferError::PeerConnectError(e.message().to_string()))?;
 
     Ok(())
 }
@@ -596,7 +596,7 @@ pub(super) async fn get_node_id_from_scid(
         .lightning_read_only()
         .get_chan_info(get_info_request)
         .await
-        .map_err(OfferError::GetChannelInfo)?
+        .map_err(|e| OfferError::GetChannelInfo(e.message().to_string()))?
         .into_inner();
     match direction {
         Direction::NodeOne => Ok(channel_info.node1_pub),

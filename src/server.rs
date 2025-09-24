@@ -80,7 +80,7 @@ impl Offers for LNDKServer {
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .map_err(LndError::ServiceUnavailable)?
+            .map_err(|e| LndError::ServiceUnavailable(e.message().to_string()))?
             .into_inner();
         let network = get_network(info).await?;
 
@@ -149,7 +149,7 @@ impl Offers for LNDKServer {
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .map_err(LndError::ServiceUnavailable)?
+            .map_err(|e| LndError::ServiceUnavailable(e.message().to_string()))?
             .into_inner();
         let network = get_network(info).await?;
 
@@ -239,7 +239,7 @@ impl Offers for LNDKServer {
             .lightning()
             .get_info(GetInfoRequest {})
             .await
-            .map_err(LndError::ServiceUnavailable)?
+            .map_err(|e| LndError::ServiceUnavailable(e.message().to_string()))?
             .into_inner();
         let network = get_network(info).await?;
         let quantity = parse_quantity(inner_request.quantity);

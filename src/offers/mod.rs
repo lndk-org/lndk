@@ -6,7 +6,6 @@ use lightning::{
     offers::{merkle::SignError, parse::Bolt12ParseError, parse::Bolt12SemanticError},
 };
 use tonic::{Code, Status};
-use tonic_lnd::tonic::Status as LndStatus;
 use tonic_types::{ErrorDetails, StatusExt};
 
 mod client_impls;
@@ -29,23 +28,23 @@ pub enum OfferError {
     /// SignError indicates a failure to sign the invoice request.
     SignError(SignError),
     /// DeriveKeyFailure indicates a failure to derive key for signing the invoice request.
-    DeriveKeyFailure(LndStatus),
+    DeriveKeyFailure(String),
     /// User provided an invalid amount.
     InvalidAmount(String),
     /// Invalid currency contained in the offer.
     InvalidCurrency,
     /// Unable to connect to peer.
-    PeerConnectError(LndStatus),
+    PeerConnectError(String),
     /// No node address.
     NodeAddressNotFound,
     /// Cannot list peers.
-    ListPeersFailure(LndStatus),
+    ListPeersFailure(String),
     /// Failure to build a reply path.
     BuildBlindedPathFailure,
     /// Unable to find or send to payment route.
-    RouteFailure(LndStatus),
+    RouteFailure(String),
     /// Failed to track payment.
-    TrackFailure(LndStatus),
+    TrackFailure(String),
     /// Failed to send payment.
     PaymentFailure,
     /// Failed to receive an invoice back from offer creator before the timeout.
@@ -53,15 +52,15 @@ pub enum OfferError {
     /// Failed to find introduction node for blinded path.
     IntroductionNodeNotFound,
     /// Cannot fetch channel info.
-    GetChannelInfo(LndStatus),
+    GetChannelInfo(String),
     /// Failed to create offer.
     CreateOfferFailure(Bolt12SemanticError),
     /// Failed to create offer with expiry time given system clock.
     CreateOfferTimeFailure,
     /// Failed to add invoice.
-    AddInvoiceFailure(LndStatus),
+    AddInvoiceFailure(String),
     /// Failed to decode payment request.
-    DecodePaymentRequestFailure(LndStatus),
+    DecodePaymentRequestFailure(String),
     /// Failed to parse payment hash.
     ParsePaymentHashFailure(String),
     /// Failed to parse offer.
@@ -71,7 +70,7 @@ pub enum OfferError {
     /// Failed to encode invoice.
     EncodeInvoiceFailure(BitcoinIoError),
     /// Cannot list channels.
-    ListChannelsFailure(LndStatus),
+    ListChannelsFailure(String),
 }
 
 impl OfferError {
@@ -135,28 +134,28 @@ impl Display for OfferError {
             }
             OfferError::BuildUIRFailure(e) => write!(f, "Failed to build invoice request: {e:?}"),
             OfferError::SignError(e) => write!(f, "Failed to sign invoice request: {e:?}"),
-            OfferError::DeriveKeyFailure(e) => write!(f, "Failed to derive key: {e:?}"),
-            OfferError::InvalidAmount(e) => write!(f, "Invalid amount: {e:?}"),
+            OfferError::DeriveKeyFailure(e) => write!(f, "Failed to derive key: {e}"),
+            OfferError::InvalidAmount(e) => write!(f, "Invalid amount: {e}"),
             OfferError::InvalidCurrency => write!(f, "Only bitcoin currency is supported"),
-            OfferError::PeerConnectError(e) => write!(f, "Failed to connect to peer: {e:?}"),
+            OfferError::PeerConnectError(e) => write!(f, "Failed to connect to peer: {e}"),
             OfferError::NodeAddressNotFound => write!(f, "Node address not found"),
-            OfferError::ListPeersFailure(e) => write!(f, "Failed to list peers: {e:?}"),
+            OfferError::ListPeersFailure(e) => write!(f, "Failed to list peers: {e}"),
             OfferError::BuildBlindedPathFailure => write!(f, "Failed to build blinded path"),
-            OfferError::RouteFailure(e) => write!(f, "Failed to route payment: {e:?}"),
-            OfferError::TrackFailure(e) => write!(f, "Failed to track payment: {e:?}"),
+            OfferError::RouteFailure(e) => write!(f, "Failed to route payment: {e}"),
+            OfferError::TrackFailure(e) => write!(f, "Failed to track payment: {e}"),
             OfferError::PaymentFailure => write!(f, "Payment failed"),
             OfferError::InvoiceTimeout(e) => {
-                write!(f, "Invoice request timed out after {e:?} seconds")
+                write!(f, "Invoice request timed out after {e} seconds")
             }
             OfferError::IntroductionNodeNotFound => write!(f, "Introduction node not found"),
-            OfferError::GetChannelInfo(e) => write!(f, "Failed to get channel info: {e:?}"),
+            OfferError::GetChannelInfo(e) => write!(f, "Failed to get channel info: {e}"),
             OfferError::CreateOfferFailure(e) => write!(f, "Failed to create offer: {e:?}"),
             OfferError::CreateOfferTimeFailure => write!(f, "Invalid offer expiry time"),
             OfferError::AddInvoiceFailure(e) => {
-                write!(f, "Failed to add invoice to lnd node: {e:?}")
+                write!(f, "Failed to add invoice to lnd node: {e}")
             }
             OfferError::DecodePaymentRequestFailure(e) => {
-                write!(f, "Failed to decode payment request: {e:?}")
+                write!(f, "Failed to decode payment request: {e}")
             }
             OfferError::ParsePaymentHashFailure(e) => {
                 write!(f, "Failed to parse payment hash: {e:?}")
