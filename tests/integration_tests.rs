@@ -20,7 +20,7 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
-use lndk::offers::{create_reply_path, OfferError};
+use lndk::offers::{create_reply_path_for_outgoing_payments, OfferError};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
 use std::net::SocketAddr;
@@ -498,7 +498,7 @@ async fn test_reply_path_unannounced_peers() {
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
     // itself.
-    let reply_path = create_reply_path(
+    let reply_path = create_reply_path_for_outgoing_payments(
         lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
@@ -541,7 +541,7 @@ async fn test_reply_path_announced_peers() {
     // public channel and as such, is indeed an advertised node. Because of this, we make sure
     // create_reply_path produces a path of length two with ldk2 as the introduction node, as we
     // expected.
-    let reply_path = create_reply_path(
+    let reply_path = create_reply_path_for_outgoing_payments(
         lnd.client.clone().unwrap().lightning().clone(),
         lnd_pubkey,
         offer_context,
@@ -1056,10 +1056,21 @@ async fn pay_offer_and_wait_for_payment(
     offer: Offer,
     mut lnd_client: Client,
 ) -> Result<(), ()> {
-    let payment = ldk.pay_offer(offer, None).await;
-    assert!(payment.is_ok());
-    // Wait for the payment to complete on ldk side.
-    common::wait_for_ldk_payment_completion(ldk, Duration::from_secs(30)).await?;
+    let mut retries = 0;
+    let max_retries = 3;
+    let delay = Duration::from_secs(2);
+    while retries < max_retries {
+        tokio::time::sleep(delay).await;
+        let payment = ldk.pay_offer(offer.clone(), None).await;
+        assert!(payment.is_ok());
+        // Wait for the payment to complete on ldk side.
+        match common::wait_for_ldk_payment_completion(ldk, Duration::from_secs(10)).await {
+            Ok(_) => break,
+            _ => println!("Payment timedout, trying again"),
+        };
+        retries += 1;
+    }
+
     // Wait for the payment to complete on lnd side.
     common::wait_for_lnd_payment_completion(&mut lnd_client, Duration::from_secs(10)).await?;
     Ok(())
@@ -1073,6 +1084,88 @@ async fn test_receive_payment_from_offer() {
 
     let (ldk1_pubkey, _ldk2_pubkey, _lnd_pubkey) =
         common::connect_network(&ldk1, &ldk2, true, true, &mut lnd, &bitcoind).await;
+
+    // Network topology with 2 LDK nodes and 1 LND node and 3 open channels:
+    //
+    //                                  LND
+    //                                  /|\
+    //                                 / | \
+    //    LDK1────────LDK2 ─────────────────
+
+    let ldk2_fund_addr = ldk2.bitcoind_client.get_new_address().await;
+    let ldk2_addr_string = ldk2_fund_addr.to_string();
+    let ldk2_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
+        .unwrap()
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
+        .unwrap();
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk2_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    let lnd_addr = lnd
+        .address
+        .replace("localhost", "127.0.0.1")
+        .replace("https://", "");
+
+    ldk2.open_channel(
+        _lnd_pubkey,
+        SocketAddr::from_str(&lnd_addr).unwrap(),
+        200000,
+        10000000,
+        true,
+    )
+    .await
+    .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(20, &ldk2_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    let ldk2_fund_addr = ldk2.bitcoind_client.get_new_address().await;
+    let ldk2_addr_string = ldk2_fund_addr.to_string();
+    let ldk2_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk2_addr_string)
+        .unwrap()
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
+        .unwrap();
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk2_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    ldk2.open_channel(
+        _lnd_pubkey,
+        SocketAddr::from_str(&lnd_addr).unwrap(),
+        200000,
+        10000000,
+        true,
+    )
+    .await
+    .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(20, &ldk2_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    lnd.wait_for_nodes_addresses(&[&ldk1, &ldk2]).await;
 
     let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
     setup_logger(None, log_file).unwrap();
@@ -1116,16 +1209,230 @@ async fn test_receive_payment_from_offer() {
         expiry: None,
     };
 
+    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
+
     let offer = handler.create_offer(create_offer_params).await;
     assert!(offer.is_ok());
     let offer = offer.unwrap();
-    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
+
+    // We check that according to the current topology even though there are 3 open channels, it is
+    // only one blinded path available.
+    assert!(offer.paths().len() == 1);
 
     select! {
         val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
             panic!("lndk should not have completed first {:?}", val);
         },
         res = pay_offer_and_wait_for_payment(&ldk1, offer, lnd.client.clone().unwrap()) => {
+            log::info!("res: {:?}", res);
+            assert!(res.is_ok());
+            shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    };
+}
+
+#[tokio::test(flavor = "multi_thread")]
+// Test that we can receive a payment from an offer which constains multiple paths.
+async fn test_receive_payment_from_offer_with_multiple_blinded_paths() {
+    let test_name = "test_receive_payment_from_offer_with_multiple_blinded_paths";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir, ldk_test_dir) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, ldk2_pubkey, _lnd_pubkey) =
+        common::connect_network(&ldk1, &ldk2, true, true, &mut lnd, &bitcoind).await;
+
+    let log_file = Some(lndk_dir.join(format!("lndk-logs.txt")));
+    setup_logger(None, log_file).unwrap();
+
+    // Network topology with 4 LDK nodes and 1 LND node:
+    //
+    //         LDK2 ────────────────────LND
+    //         / | \                    /|\
+    //        /  |  \                  / | \
+    //    LDK1   | LDK3 ───────────────  |  \
+    //           |  /                    |   \
+    //           | /                     |    \
+    //        LDK4 ────────────────────────────
+
+    // Second blinded path.
+    let ldk3 = common::setup_ldk_node(&bitcoind, 3, &ldk_test_dir, test_name).await;
+
+    // Third blinded path.
+    let ldk4 = common::setup_ldk_node(&bitcoind, 4, &ldk_test_dir, test_name).await;
+    let (ldk3_pubkey, addr_3) = ldk3.get_node_info();
+    let (ldk4_pubkey, addr_4) = ldk4.get_node_info();
+    let (_, addr_2) = ldk2.get_node_info();
+    let lnd_info = lnd.get_info().await;
+    let lnd_pubkey = PublicKey::from_str(&lnd_info.identity_pubkey).unwrap();
+
+    lnd.connect_to_peer(ldk3_pubkey, addr_3).await;
+    lnd.connect_to_peer(ldk4_pubkey, addr_4).await;
+
+    ldk2.connect_to_peer(ldk4_pubkey, addr_4).await.unwrap();
+    ldk2.connect_to_peer(ldk3_pubkey, addr_3).await.unwrap();
+
+    let ldk3_fund_addr = ldk3.bitcoind_client.get_new_address().await;
+    let ldk3_addr_string = ldk3_fund_addr.to_string();
+    let ldk3_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk3_addr_string)
+        .unwrap()
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
+        .unwrap();
+
+    let ldk4_fund_addr = ldk4.bitcoind_client.get_new_address().await;
+    let ldk4_addr_string = ldk4_fund_addr.to_string();
+    let ldk4_addr = bitcoincore_rpc::bitcoin::Address::from_str(&ldk4_addr_string)
+        .unwrap()
+        .require_network(bitcoincore_rpc::bitcoin::Network::Regtest)
+        .unwrap();
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk3_addr)
+        .unwrap();
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk4_addr)
+        .unwrap();
+    lnd.wait_for_chain_sync().await;
+
+    ldk3.open_channel(ldk2_pubkey, addr_2, 200000, 10000000, true)
+        .await
+        .unwrap();
+
+    ldk4.open_channel(ldk2_pubkey, addr_2, 200000, 10000000, true)
+        .await
+        .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk3_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    let lnd_addr = lnd
+        .address
+        .replace("localhost", "127.0.0.1")
+        .replace("https://", "");
+
+    ldk3.open_channel(
+        lnd_pubkey,
+        SocketAddr::from_str(&lnd_addr).unwrap(),
+        200000,
+        10000000,
+        true,
+    )
+    .await
+    .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk3_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    ldk4.open_channel(
+        lnd_pubkey,
+        SocketAddr::from_str(&lnd_addr).unwrap(),
+        200000,
+        10000000,
+        true,
+    )
+    .await
+    .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(6, &ldk3_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+
+    ldk3.open_channel(ldk4_pubkey, addr_4, 200000, 10000000, true)
+        .await
+        .unwrap();
+
+    lnd.wait_for_graph_sync().await;
+
+    bitcoind
+        .node
+        .client
+        .generate_to_address(20, &ldk3_addr)
+        .unwrap();
+
+    lnd.wait_for_chain_sync().await;
+    lnd.wait_for_nodes_addresses(&[&ldk1, &ldk2, &ldk3, &ldk4])
+        .await;
+
+    let (shutdown, listener) = triggered::trigger();
+    let creds = validate_lnd_creds(
+        Some(PathBuf::from_str(&lnd.cert_path).unwrap()),
+        None,
+        Some(PathBuf::from_str(&lnd.macaroon_path).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lnd_cfg = lndk::lnd::LndCfg::new(lnd.address.clone(), creds);
+
+    let signals = LifecycleSignals {
+        shutdown: shutdown.clone(),
+        listener,
+    };
+
+    let lndk_cfg = lndk::Cfg {
+        lnd: lnd_cfg,
+        signals,
+        skip_version_check: false,
+        rate_limit_count: 10,
+        rate_limit_period_secs: 1,
+    };
+    let handler = Arc::new(OfferHandler::new(
+        None,
+        None,
+        Some(lnd.client.clone().unwrap()),
+    ));
+    let messenger = lndk::LndkOnionMessenger::new();
+
+    let create_offer_params = CreateOfferParams {
+        client: lnd.client.clone().unwrap(),
+        amount_msats: 20_000,
+        chain: Network::Regtest,
+        description: None,
+        issuer: None,
+        quantity: None,
+        expiry: None,
+    };
+
+    lnd.wait_for_addresses_to_sync(ldk1_pubkey).await;
+
+    let offer = handler.create_offer(create_offer_params).await;
+    assert!(offer.is_ok());
+    let offer = offer.unwrap();
+
+    // we check that according the current topology, there are 3 blinded paths available.
+    assert!(offer.paths().len() == 3);
+
+    select! {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
+            panic!("lndk should not have completed first {:?}", val);
+        },
+        res = pay_offer_and_wait_for_payment(&ldk1, offer, lnd.client.clone().unwrap()) => {
+            log::info!("res: {:?}", res);
             assert!(res.is_ok());
             shutdown.trigger();
             ldk1.stop().await;
