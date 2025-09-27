@@ -189,11 +189,15 @@ impl InvoicePayer for Client {
             .router()
             .track_payment_v2(req)
             .await
-            .map_err(OfferError::TrackFailure)?
+            .map_err(|e| OfferError::TrackFailure(e.message().to_string()))?
             .into_inner();
 
         // Wait for a failed or successful payment.
-        while let Some(payment) = stream.message().await.map_err(OfferError::TrackFailure)? {
+        while let Some(payment) = stream
+            .message()
+            .await
+            .map_err(|e| OfferError::TrackFailure(e.message().to_string()))?
+        {
             if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Succeeded {
                 return Ok(payment);
             } else if payment.status() == tonic_lnd::lnrpc::payment::PaymentStatus::Failed {

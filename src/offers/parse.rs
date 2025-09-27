@@ -1,16 +1,14 @@
 use lightning::{
-    offers::{
-        offer::{Amount, Offer},
-        parse::Bolt12ParseError,
-    },
+    offers::offer::{Amount, Offer},
     onion_message::messenger::Destination,
 };
+use std::str::FromStr;
 
 use super::OfferError;
 
 /// Decodes a bech32 offer string into an LDK offer.
-pub fn decode(offer_str: String) -> Result<Offer, Bolt12ParseError> {
-    offer_str.parse::<Offer>()
+pub fn decode(offer_str: String) -> Result<Offer, OfferError> {
+    Offer::from_str(&offer_str).map_err(OfferError::ParseOfferFailure)
 }
 
 /// Get the destination of an offer.

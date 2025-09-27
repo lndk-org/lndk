@@ -373,7 +373,7 @@ pub enum LndError {
     /// LND node is not connected to bitcoin network.
     NetworkNotConnected,
     /// LND service is unavailable or not responding.
-    ServiceUnavailable(LndStatus),
+    ServiceUnavailable(String),
 }
 
 impl LndError {
