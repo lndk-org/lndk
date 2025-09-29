@@ -26,7 +26,7 @@ protobuf = { version = "27.3_1" }
 
 # Release dependencies for Linux
 [dist.dependencies.apt]
-protobuf-compiler = { version = "3.21.12-8.2build1" }
+protobuf-compiler = { version = "3.21.12-8.2ubuntu0.2" }
 
 # Use more recent version of ubuntu
 [dist.github-custom-runners]
