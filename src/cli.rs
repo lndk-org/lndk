@@ -68,10 +68,13 @@ struct Cli {
     )]
     network: String,
 
+    /// Option for passing a file path to a macaroon file obtained from LND node.
+    /// Either this option or macaroon_hex must be set, there is no default.
     #[arg(short, long, global = true, required = false)]
     macaroon_path: Option<PathBuf>,
 
-    /// A hex-encoded macaroon string to pass in directly to the cli.
+    /// A hex-encoded macaroon string to pass in directly to the cli to authenticate with LND node.
+    /// Either this option or macaroon_path must be set, there is no default.
     #[arg(long, global = true, required = false)]
     macaroon_hex: Option<String>,
 
@@ -89,9 +92,11 @@ struct Cli {
     #[arg(long, global = true, required = false)]
     cert_path: Option<PathBuf>,
 
+    /// Host of the LNDK server.
     #[arg(long, global = true, required = false, default_value = format!("https://{DEFAULT_SERVER_HOST}"))]
     grpc_host: String,
 
+    /// Port of the LNDK server.
     #[arg(long, global = true, required = false, default_value = DEFAULT_SERVER_PORT.to_string())]
     grpc_port: u16,
 
