@@ -179,20 +179,20 @@ enum Commands {
     /// CreateOffer creates a BOLT 12 offer.
     CreateOffer {
         /// The amount of the offer in millisatoshis.
-        #[arg(required = false)]
+        #[arg(long, required = false)]
         amount: Option<u64>,
         /// The description of the offer.
-        #[arg(required = false)]
+        #[arg(long, required = false)]
         description: Option<String>,
         /// The issuer of the offer.
-        #[arg(required = false)]
+        #[arg(long, required = false)]
         issuer: Option<String>,
         /// Relative expiry of the offer in seconds.
-        #[arg(required = false)]
+        #[arg(long, required = false)]
         expiry: Option<u64>,
         /// The quantity of the offer. If 0, unbounded quantity is assumed. If None,
         /// quantity defaults to 1.
-        #[arg(required = false)]
+        #[arg(long, required = false)]
         quantity: Option<u64>,
     },
 }
