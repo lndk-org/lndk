@@ -1,14 +1,16 @@
 # Interacting with LNDK server
 
 There are two ways you can connect to the server:
+
 - You can use `lndk-cli` to connect to a running instance of `LNDK` and pay an offer.
 - Write a gRPC client in the language of your choice.
 
 ## lndk-cli installation
 
 To use the `lndk-cli` to pay a BOLT 12 offer, follow these instructions:
-- To install lndk-cli: 
-	`cargo install --bin=lndk-cli --path .`
+
+- To install lndk-cli:
+  `cargo install --bin=lndk-cli --path .`
 - With the above command, `lndk-cli` will be installed to `~/.cargo/bin`. So make sure `~/.cargo/bin` is on your PATH so we can properly run `lndk-cli`.
 - Run `lndk-cli -h` to make sure it's working. You'll see output similar to:
 
@@ -19,19 +21,21 @@ Usage: lndk-cli [OPTIONS] <COMMAND>
 
 Commands:
   decode-offer    Decodes a bech32-encoded offer string into a BOLT 12 offer
-  decode-invoice  Decodes a bech32-encoded invoice string into a BOLT 12 invoice
+  decode-invoice  Decodes a hex-encoded invoice string into a BOLT 12 invoice
   pay-offer       PayOffer pays a BOLT 12 offer, provided as a 'lno'-prefaced offer string
   get-invoice     GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string
   pay-invoice     PayInvoice pays a hex-encoded BOLT12 invoice
+  create-offer    CreateOffer creates a BOLT 12 offer
   help            Print this message or the help of the given subcommand(s)
 
 Options:
   -n, --network <NETWORK>              Global variables [default: regtest]
-  -m, --macaroon-path <MACAROON_PATH>  
-      --macaroon-hex <MACAROON_HEX>    A hex-encoded macaroon string to pass in directly to the cli
-      --cert-pem <CERT_PEM>            This option is for passing a pem-encoded TLS certificate string to establish a connection with the LNDK server. If this isn't set, the cli will look for the TLS file in the default location (~.lndk)
-      --grpc-host <GRPC_HOST>          [default: https://127.0.0.1]
-      --grpc-port <GRPC_PORT>          [default: 7000]
+  -m, --macaroon-path <MACAROON_PATH>  Option for passing a file path to a macaroon file obtained from LND node. Either this option or macaroon_hex must be set, there is no default
+      --macaroon-hex <MACAROON_HEX>    A hex-encoded macaroon string to pass in directly to the cli to authenticate with LND node. Either this option or macaroon_path must be set, there is no default
+      --cert-pem <CERT_PEM>            This option is for passing a pem-encoded TLS certificate string to establish a connection with the LNDK server. If this isn't set, the cli will look for the TLS file in the default location (~.lndk/data). Only one of cert_pem or cert_path can be set at once
+      --cert-path <CERT_PATH>          This option is for passing a file path to a pem-encoded TLS certificate string to establish a connection with the LNDK server. If this isn't set, the cli will look for the TLS file in the default location (~.lndk/data). Only one of cert_pem or cert_path can be set at once
+      --grpc-host <GRPC_HOST>          Host of the LNDK server [default: https://127.0.0.1]
+      --grpc-port <GRPC_PORT>          Port of the LNDK server [default: 7000]
   -h, --help                           Print help
 ```
 
@@ -39,7 +43,7 @@ Options:
 
 Once `lndk-cli` is installed, you can use it to pay an offer.
 
-Since `lndk-cli` needs to connect to lnd, you'll need to provide an lnd macaroon to the binary. 
+Since `lndk-cli` needs to connect to lnd, you'll need to provide an lnd macaroon to the binary.
 
 If your macaroon is not in the default lnd location, you'll need to specify them manually.
 
@@ -54,12 +58,27 @@ If your macaroon is not in the default location, an example command looks like:
 Or you can pass in the credentials directly with a macaroon string like:
 `lndk-cli --network=mainnet --macaroon-hex=<MACAROON_HEX_STR> pay-offer <OFFER_STRING> <AMOUNT_MSATS>`
 
+#### Creating an offer
+
+To create a BOLT 12 offer with default settings:
+
+`lndk-cli create-offer --amount <AMOUNT_MSATS> --description "a nice description"`
+
+To create an offer with additional options:
+
+`lndk-cli create-offer --amount <AMOUNT_MSATS> --description "a nice description" --issuer "ACME-inc" --expiry 3600 --quantity 5`
+
+If your macaroon is not in the default location:
+
+`lndk-cli --network=mainnet --macaroon-path=/credentials/custom.macaroon create-offer --amount <AMOUNT_MSATS> --description "cool description"`
+
 ## gRPC client example
 
 Another option for interacting with `LNDK` is to connect to the LNDK server with a gRPC client,
 which you can do in [most languages](https://grpc.io/docs/languages/).
 
 Again, since LNDK needs to connect to LND, you'll need to pass in your LND macaroon to establish a connection. Note that:
+
 - The client must pass in this data via gRPC metadata. You can find an example of this in the [Rust client](https://github.com/lndk-org/lndk/blob/master/src/cli.rs) used to connect `lndk-cli` to the server.
 
 ## Baking a custom macaroon
@@ -80,6 +99,6 @@ lncli bakemacaroon --save_to=<FILEPATH>/lndk-pay.macaroon uri:/walletrpc.WalletK
 
 ## TLS: Running `lndk-cli` remotely
 
-When `LNDK` is started up, self-signed TLS credentials are automatically generated and stored in `~/.lndk`. If you're running `lndk-cli` locally, it'll know where to find the certificate file it needs to establish a secure connection with the LNDK server.
+When `LNDK` is started up, self-signed TLS credentials are automatically generated and stored in `~/.lndk` or your `--data-dir <PATH>` configured. If you're running `lndk-cli` locally, it'll know where to find the certificate file it needs to establish a secure connection with the LNDK server.
 
-To run `lndk-cli` on a remote machine, users need to copy the `tls-cert.pem` file to the corresponding LNDK data directory (`~/.lndk`) on the machine where `lndk-cli` is being run.
+To run `lndk-cli` on a remote machine, users need to copy the `tls-cert.pem` file to the corresponding LNDK data directory on the machine where `lndk-cli` is being run.
