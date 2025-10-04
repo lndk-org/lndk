@@ -6,6 +6,8 @@ Project Milestones:
 
 - [x] [v0.1.0](https://github.com/lndk-org/lndk/milestone/1): Onion message forwarding for LND.
 - [x] [v0.2.0](https://github.com/lndk-org/lndk/milestone/2): Payment to offers with blinded paths.
+- [x] v0.3.0: Create offers and receive payments with blinded paths.
+- [] v0.4.0: Support BIP-353 && merchant-pays-user flow
 
 _Please note that this project is still experimental._
 
@@ -48,14 +50,15 @@ protocol.custom-nodeann=39
 protocol.custom-init=39
 ```
 
-#### Two features of LNDK
+#### Three features of LNDK
 
-Now that we have LND set up properly, there are two key things you can do with LNDK:
+Now that we have LND set up properly, there are three key things you can do with LNDK:
 
 1. Forward onion messages. By increasing the number of Lightning nodes out there that can forward onion messages, this increases the anonymity set and helps to bootstrap BOLT 12 for more private payments.
 2. Pay BOLT 12 offers, a more private standard for receiving payments over Lightning, which also allows for static invoices.
+3. Create offers and receive payments using blinded paths.
 
-To accomplish #1, follow the instructions below to get the LNDK binary up and running. Once you have LNDK up and running, you can accomplish #2
+To accomplish #1, follow the instructions below to get the LNDK binary up and running. Once you have LNDK up and running, you can accomplish #2 or #3.
 [here](https://github.com/lndk-org/lndk/blob/master/docs/cli_commands.md) with either `lndk-cli` or setting up your own gRPC client.
 
 #### Running LNDK
@@ -113,6 +116,8 @@ Or in a more concrete example:
 - Run `cargo run --bin=lndk -- --conf lndk.conf`
 
 - Use any of the commands with the --help option for more information about each argument.
+
+**Note:** By default, LNDK stores its data in `~/.lndk/data`. You can configure a custom data directory by adding `--data-dir=<PATH>` to the command line or `data_dir="<PATH>"` to your configuration file.
 
 #### Custom macaroon
 
