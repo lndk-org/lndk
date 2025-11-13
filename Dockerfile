@@ -1,5 +1,5 @@
 # Use the official Rust image as the base image
-FROM rust:1.81 AS builder
+FROM rust:1.85 AS builder
 
 # Install protobuf compiler
 RUN apt-get update && apt-get install -y protobuf-compiler git
