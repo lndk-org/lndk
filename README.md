@@ -7,7 +7,7 @@ Project Milestones:
 - [x] [v0.1.0](https://github.com/lndk-org/lndk/milestone/1): Onion message forwarding for LND.
 - [x] [v0.2.0](https://github.com/lndk-org/lndk/milestone/2): Payment to offers with blinded paths.
 - [x] v0.3.0: Create offers and receive payments with blinded paths.
-- [] v0.4.0: Support BIP-353 && merchant-pays-user flow
+- [ ] v0.4.0: Support BIP-353 && merchant-pays-user flow
 
 _Please note that this project is still experimental._
 
