@@ -71,6 +71,12 @@ pub enum OfferError {
     EncodeInvoiceFailure(BitcoinIoError),
     /// Cannot list channels.
     ListChannelsFailure(String),
+    /// Failed to parse human-readable name.
+    ParseHrnFailure(String),
+    /// HRN resolution failed.
+    HrnResolutionFailure(String),
+    /// DNS resolution or URI parsing error.
+    ResolveUriError(String),
 }
 
 impl OfferError {
@@ -101,6 +107,9 @@ impl OfferError {
             OfferError::IntroductionNodeNotFound => "INTRODUCTION_NODE_NOT_FOUND",
             OfferError::GetChannelInfo(_) => "GET_CHANNEL_INFO",
             OfferError::ListChannelsFailure(_) => "LIST_CHANNELS_FAILURE",
+            OfferError::ParseHrnFailure(_) => "PARSE_HRN_FAILURE",
+            OfferError::HrnResolutionFailure(_) => "HRN_RESOLUTION_FAILURE",
+            OfferError::ResolveUriError(_) => "RESOLVE_URI_ERROR",
         }
     }
 
@@ -110,7 +119,10 @@ impl OfferError {
             | OfferError::InvalidCurrency
             | OfferError::ParseOfferFailure(_)
             | OfferError::ParseInvoiceFailure(_)
-            | OfferError::EncodeInvoiceFailure(_) => Code::InvalidArgument,
+            | OfferError::EncodeInvoiceFailure(_)
+            | OfferError::ParseHrnFailure(_)
+            | OfferError::HrnResolutionFailure(_)
+            | OfferError::ResolveUriError(_) => Code::InvalidArgument,
             _ => Code::Internal,
         }
     }
@@ -168,6 +180,15 @@ impl Display for OfferError {
             }
             OfferError::ListChannelsFailure(e) => write!(f, "Error listing channels: {e:?}"),
             OfferError::EncodeInvoiceFailure(e) => write!(f, "Failed to encode invoice: {e:?}"),
+            OfferError::ParseHrnFailure(e) => {
+                write!(f, "Invalid human-readable name: {}", e)
+            }
+            OfferError::HrnResolutionFailure(e) => {
+                write!(f, "HRN resolution failed: {}", e)
+            }
+            OfferError::ResolveUriError(e) => {
+                write!(f, "Failed to resolve URI: {}", e)
+            }
         }
     }
 }

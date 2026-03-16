@@ -1,4 +1,5 @@
 mod clock;
+pub mod dns_resolver;
 mod grpc;
 #[allow(dead_code)]
 pub mod lnd;

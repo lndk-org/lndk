@@ -27,9 +27,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tokio::time;
-use tokio::time::Duration;
+
 use tokio::{select, try_join};
 use tonic_lnd::Client;
 
@@ -1439,4 +1439,130 @@ async fn test_receive_payment_from_offer_with_multiple_blinded_paths() {
             ldk2.stop().await;
         }
     };
+}
+
+struct MockHrnResolver {
+    response_uri: String,
+}
+
+impl bitcoin_payment_instructions::hrn_resolution::HrnResolver for MockHrnResolver {
+    fn resolve_hrn<'a>(
+        &'a self,
+        _hrn: &'a bitcoin_payment_instructions::hrn_resolution::HumanReadableName,
+    ) -> bitcoin_payment_instructions::hrn_resolution::HrnResolutionFuture<'a> {
+        let uri = self.response_uri.clone();
+        Box::pin(async move {
+            Ok(
+                bitcoin_payment_instructions::hrn_resolution::HrnResolution::DNSSEC {
+                    proof: None,
+                    result: uri,
+                },
+            )
+        })
+    }
+
+    fn resolve_lnurl<'a>(
+        &'a self,
+        _url: &'a str,
+    ) -> bitcoin_payment_instructions::hrn_resolution::HrnResolutionFuture<'a> {
+        Box::pin(async { Err("LNURL resolution not supported in mock") })
+    }
+
+    fn resolve_lnurl_to_invoice<'a>(
+        &'a self,
+        _callback_url: String,
+        _amount: bitcoin_payment_instructions::amount::Amount,
+        _expected_description_hash: [u8; 32],
+    ) -> bitcoin_payment_instructions::hrn_resolution::LNURLResolutionFuture<'a> {
+        Box::pin(async { Err("LNURL invoice resolution not supported in mock") })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pay_offer_with_name_and_dns() {
+    use lndk::offers::handler::PayHumanReadableAddressParams;
+    use std::time::{Duration, SystemTime};
+
+    let test_name = "lndk_pay_offer_with_name";
+    let (bitcoind, mut lnd, ldk1, ldk2, lndk_dir, _) =
+        common::setup_test_infrastructure(test_name).await;
+
+    let (ldk1_pubkey, ldk2_pubkey, _) =
+        common::connect_network(&ldk1, &ldk2, false, true, &mut lnd, &bitcoind).await;
+
+    let path_pubkeys = vec![ldk2_pubkey, ldk1_pubkey];
+    let expiration = SystemTime::now() + Duration::from_secs(24 * 60 * 60);
+    let offer = ldk1
+        .create_offer(
+            &path_pubkeys,
+            Network::Regtest,
+            20_000,
+            Quantity::One,
+            expiration,
+        )
+        .await
+        .expect("should create offer");
+
+    let offer_string = offer.to_string();
+    let human_readable_name = "satoshi@bip353.test";
+
+    let mock_resolver = MockHrnResolver {
+        response_uri: format!("bitcoin:?lno={}", offer_string),
+    };
+
+    let dns_resolver =
+        lndk::dns_resolver::LndkDNSResolverMessageHandler::with_resolver(mock_resolver);
+
+    let resolved_offer = dns_resolver
+        .resolver_hrn_to_offer(human_readable_name)
+        .await;
+    assert!(
+        resolved_offer.is_ok(),
+        "DNS resolution failed: {:?}",
+        resolved_offer.err()
+    );
+    assert_eq!(resolved_offer.unwrap(), offer_string);
+
+    let handler = Arc::new(lndk::offers::handler::OfferHandler::with_dns_resolver(
+        None,
+        None,
+        None,
+        dns_resolver.clone(),
+    ));
+
+    let (lndk_cfg, _, messenger, shutdown) = common::setup_lndk(
+        &lnd.cert_path,
+        &lnd.macaroon_path,
+        lnd.address.clone(),
+        lndk_dir,
+    )
+    .await;
+
+    let client = lnd.client.clone().unwrap();
+
+    let pay_cfg = PayHumanReadableAddressParams {
+        name: human_readable_name.to_string(),
+        amount: Some(20_000),
+        payer_note: None,
+        network: Network::Regtest,
+        client: client.clone(),
+        reply_path: None,
+        response_invoice_timeout: None,
+        fee_limit: None,
+    };
+
+    select! {
+        val = messenger.run(lndk_cfg, Arc::clone(&handler)) => {
+            panic!("messenger should not complete first {:?}", val);
+        },
+        res = handler.pay_hrn(pay_cfg) => {
+            assert!(res.is_ok(), "pay_hrn failed: {:?}", res.err());
+            let payment = res.unwrap();
+            assert!(!payment.payment_preimage.is_empty(), "Payment should have a preimage");
+
+            shutdown.trigger();
+            ldk1.stop().await;
+            ldk2.stop().await;
+        }
+    }
 }

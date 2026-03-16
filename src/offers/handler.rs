@@ -31,7 +31,9 @@ use super::lnd_requests::{
     send_invoice_request, LndkBolt12InvoiceInfo,
 };
 use super::OfferError;
+use crate::dns_resolver::LndkDNSResolverMessageHandler;
 use crate::offers::lnd_requests::{send_payment, track_payment, CreateOfferArgs};
+use crate::offers::{get_destination, parse::decode};
 use crate::onion_messenger::MessengerUtilities;
 
 pub const DEFAULT_RESPONSE_INVOICE_TIMEOUT: u32 = 15;
@@ -57,6 +59,7 @@ pub struct OfferHandler {
     /// an invoice. If not provided, we will use the default value of 15 seconds.
     pub response_invoice_timeout: u32,
     client: Option<Client>,
+    dns_resolver: LndkDNSResolverMessageHandler,
 }
 
 #[derive(Clone)]
@@ -73,6 +76,18 @@ pub struct PayOfferParams {
     pub reply_path: Option<BlindedMessagePath>,
     /// The amount of time in seconds that we will wait for the offer creator to respond with
     /// an invoice. If not provided, we will use the default value of 15 seconds.
+    pub response_invoice_timeout: Option<u32>,
+    pub fee_limit: Option<FeeLimit>,
+}
+
+#[derive(Clone)]
+pub struct PayHumanReadableAddressParams {
+    pub name: String,
+    pub amount: Option<u64>,
+    pub payer_note: Option<String>,
+    pub network: Network,
+    pub client: Client,
+    pub reply_path: Option<BlindedMessagePath>,
     pub response_invoice_timeout: Option<u32>,
     pub fee_limit: Option<FeeLimit>,
 }
@@ -114,6 +129,20 @@ impl OfferHandler {
         seed: Option<[u8; 32]>,
         client: Option<Client>,
     ) -> Self {
+        Self::with_dns_resolver(
+            response_invoice_timeout,
+            seed,
+            client,
+            LndkDNSResolverMessageHandler::new(),
+        )
+    }
+
+    pub fn with_dns_resolver(
+        response_invoice_timeout: Option<u32>,
+        seed: Option<[u8; 32]>,
+        client: Option<Client>,
+        dns_resolver: LndkDNSResolverMessageHandler,
+    ) -> Self {
         let messenger_utils = MessengerUtilities::default();
         let random_bytes = match seed {
             Some(seed) => seed,
@@ -130,6 +159,7 @@ impl OfferHandler {
             expanded_key,
             response_invoice_timeout,
             client,
+            dns_resolver,
         }
     }
 
@@ -148,6 +178,28 @@ impl OfferHandler {
             fee_limit,
         )
         .await
+    }
+
+    /// Resolves a human-readable name (BIP-353) to an offer and pays it.
+    pub async fn pay_hrn(&self, cfg: PayHumanReadableAddressParams) -> Result<Payment, OfferError> {
+        let offer_str = self.dns_resolver.resolver_hrn_to_offer(&cfg.name).await?;
+
+        let offer = decode(offer_str)?;
+        let destination = get_destination(&offer).await?;
+
+        let pay_offer_cfg = PayOfferParams {
+            offer,
+            amount: cfg.amount,
+            payer_note: cfg.payer_note,
+            network: cfg.network,
+            client: cfg.client,
+            destination,
+            reply_path: cfg.reply_path,
+            response_invoice_timeout: cfg.response_invoice_timeout,
+            fee_limit: cfg.fee_limit,
+        };
+
+        self.pay_offer(pay_offer_cfg).await
     }
 
     /// Sends an invoice request and waits for an invoice to be sent back to us.

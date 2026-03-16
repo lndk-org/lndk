@@ -1,7 +1,7 @@
 use crate::lnd::{get_lnd_client, get_network, Creds, LndCfg, LndError};
 use crate::lndkrpc::{CreateOfferRequest, CreateOfferResponse};
 use crate::offers::get_destination;
-use crate::offers::handler::{CreateOfferParams, PayOfferParams};
+use crate::offers::handler::{CreateOfferParams, PayHumanReadableAddressParams, PayOfferParams};
 use crate::offers::parse::decode;
 use crate::offers::validate_amount;
 use crate::offers::OfferError;
@@ -17,8 +17,8 @@ use lightning::util::ser::Writeable;
 use lndkrpc::offers_server::Offers;
 use lndkrpc::{
     Bolt12InvoiceContents, DecodeInvoiceRequest, FeatureBit, GetInvoiceRequest, GetInvoiceResponse,
-    PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest, PayOfferResponse, PaymentHash,
-    PaymentPaths,
+    PayHumanReadableAddressRequest, PayInvoiceRequest, PayInvoiceResponse, PayOfferRequest,
+    PayOfferResponse, PaymentHash, PaymentPaths,
 };
 use std::num::NonZeroU64;
 use std::str::FromStr;
@@ -99,6 +99,57 @@ impl Offers for LNDKServer {
         };
 
         let payment = self.offer_handler.pay_offer(cfg).await?;
+        log::info!(
+            "Payment succeeded with preimage: {}",
+            payment.payment_preimage
+        );
+
+        let reply = PayOfferResponse {
+            payment_preimage: payment.payment_preimage,
+        };
+
+        Ok(Response::new(reply))
+    }
+
+    async fn pay_human_readable_address(
+        &self,
+        request: Request<PayHumanReadableAddressRequest>,
+    ) -> Result<Response<PayOfferResponse>, Status> {
+        log::info!("Received a request: {:?}", request.get_ref());
+
+        let metadata = request.metadata();
+        let macaroon = check_auth_metadata(metadata)?;
+        let creds = Creds::String {
+            cert: self.lnd_cert.clone(),
+            macaroon,
+        };
+        let lnd_cfg = LndCfg::new(self.address.clone(), creds);
+        let mut client = get_lnd_client(lnd_cfg)?;
+
+        let inner_request = request.get_ref();
+        let reply_path = None;
+        let info = client
+            .lightning()
+            .get_info(GetInfoRequest {})
+            .await
+            .map_err(|e| LndError::ServiceUnavailable(e.message().to_string()))?
+            .into_inner();
+        let network = get_network(info).await?;
+
+        let fee_limit = create_fee_limit(inner_request.fee_limit, inner_request.fee_limit_percent);
+
+        let cfg = PayHumanReadableAddressParams {
+            name: inner_request.name.clone(),
+            amount: inner_request.amount,
+            payer_note: inner_request.payer_note.clone(),
+            network,
+            client,
+            reply_path,
+            response_invoice_timeout: inner_request.response_invoice_timeout,
+            fee_limit,
+        };
+
+        let payment = self.offer_handler.pay_hrn(cfg).await?;
         log::info!(
             "Payment succeeded with preimage: {}",
             payment.payment_preimage

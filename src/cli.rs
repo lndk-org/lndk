@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 use lightning::offers::invoice::Bolt12Invoice;
 use lndk::lndkrpc::offers_client::OffersClient;
-use lndk::lndkrpc::{CreateOfferRequest, GetInvoiceRequest, PayInvoiceRequest, PayOfferRequest};
+use lndk::lndkrpc::{
+    CreateOfferRequest, GetInvoiceRequest, PayHumanReadableAddressRequest, PayInvoiceRequest,
+    PayOfferRequest,
+};
 use lndk::offers::decode;
 use lndk::offers::handler::DEFAULT_RESPONSE_INVOICE_TIMEOUT;
 use lndk::{
@@ -144,6 +147,34 @@ enum Commands {
         #[arg(long, required = false, conflicts_with = "fee_limit")]
         fee_limit_percent: Option<u32>,
     },
+    /// PayHumanReadableAddress pays a BOLT 12 offer by resolving a human-readable name (BIP-353).
+    PayHumanReadableAddress {
+        /// The human-readable name to resolve (e.g., "user@example.com").
+        name: String,
+
+        /// Amount the user would like to pay. If this isn't set, we'll assume the user is paying
+        /// whatever the offer amount is.
+        #[arg(required = false)]
+        amount: Option<u64>,
+
+        /// A payer-provided note which will be seen by the recipient.
+        #[arg(required = false)]
+        payer_note: Option<String>,
+
+        /// The amount of time in seconds that the user would like to wait for an invoice to
+        /// arrive. If this isn't set, we'll use the default value.
+        #[arg(long, global = false, required = false, default_value = DEFAULT_RESPONSE_INVOICE_TIMEOUT.to_string())]
+        response_invoice_timeout: Option<u32>,
+
+        /// A fixed fee limit in millisatoshis.
+        /// Mutually exclusive with fee_limit_percent - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit_percent")]
+        fee_limit: Option<u32>,
+        /// A percentage-based fee limit of the payment amount.
+        /// Mutually exclusive with fee_limit - only one can be set.
+        #[arg(long, required = false, conflicts_with = "fee_limit")]
+        fee_limit_percent: Option<u32>,
+    },
     /// GetInvoice fetch a BOLT 12 invoice, which will be returned as a hex-encoded string. It
     /// fetches the invoice from a BOLT 12 offer, provided as a 'lno'-prefaced offer string.
     GetInvoice {
@@ -258,6 +289,38 @@ async fn main() {
 
             match client.pay_offer(request).await {
                 Ok(_) => println!("Successfully paid for offer!"),
+                Err(err) => err.exit_gracefully(),
+            };
+        }
+        Commands::PayHumanReadableAddress {
+            ref name,
+            amount,
+            payer_note,
+            response_invoice_timeout,
+            fee_limit,
+            fee_limit_percent,
+        } => {
+            let tls = read_cert_from_args_or_exit(args.cert_pem, args.cert_path);
+            let channel = create_grpc_channel(args.grpc_host, args.grpc_port, tls).await;
+            let (mut client, macaroon) = create_authenticated_client(
+                channel,
+                args.macaroon_path,
+                args.macaroon_hex,
+                &args.network,
+            );
+
+            let mut request = Request::new(PayHumanReadableAddressRequest {
+                name: name.clone(),
+                amount,
+                payer_note,
+                response_invoice_timeout,
+                fee_limit,
+                fee_limit_percent,
+            });
+            add_metadata(&mut request, macaroon);
+
+            match client.pay_human_readable_address(request).await {
+                Ok(_) => println!("Successfully paid for name {}!", name),
                 Err(err) => err.exit_gracefully(),
             };
         }

@@ -5,6 +5,7 @@ import "external/google/rpc/error_details.proto";
 
 service Offers {
     rpc PayOffer (PayOfferRequest) returns (PayOfferResponse);
+    rpc PayHumanReadableAddress (PayHumanReadableAddressRequest) returns (PayOfferResponse);
     rpc GetInvoice (GetInvoiceRequest) returns (GetInvoiceResponse);
     rpc DecodeInvoice (DecodeInvoiceRequest) returns (Bolt12InvoiceContents);
     rpc PayInvoice (PayInvoiceRequest) returns (PayInvoiceResponse);
@@ -13,6 +14,15 @@ service Offers {
 
 message PayOfferRequest {
    string offer = 1;
+   optional uint64 amount = 2;
+   optional string payer_note = 3;
+   optional uint32 response_invoice_timeout = 4;
+   optional uint32 fee_limit = 5;
+   optional uint32 fee_limit_percent = 6;
+}
+
+message PayHumanReadableAddressRequest {
+   string name = 1;
    optional uint64 amount = 2;
    optional string payer_note = 3;
    optional uint32 response_invoice_timeout = 4;
