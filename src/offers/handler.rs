@@ -92,8 +92,10 @@ pub struct SendPaymentParams {
 pub struct CreateOfferParams {
     /// LND tonic client used to query information from the node.
     pub client: Client,
-    /// The amount of the offer in millisatoshis.
-    pub amount_msats: u64,
+    /// The amount of the offer in millisatoshis. If None, the offer has no
+    /// minimum amount and the payer decides. Per BOLT 12 (bolts #1316),
+    /// offer_amount must be greater than zero when present.
+    pub amount_msats: Option<u64>,
     /// The chain the offer is valid on.
     pub chain: Network,
     /// Optional description of the offer. If not provided, the offer will have description "".
