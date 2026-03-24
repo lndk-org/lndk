@@ -209,7 +209,7 @@ async fn main() {
         Commands::DecodeOffer { offer_string } => {
             println!("Decoding offer: {offer_string}.");
             match decode(offer_string) {
-                Ok(offer) => println!("Decoded offer: {:?}.", offer),
+                Ok(offer) => println!("Decoded offer: {offer:?}."),
                 Err(e) => e.exit_gracefully(),
             }
         }
@@ -219,7 +219,7 @@ async fn main() {
             let invoice_string: Bolt12InvoiceString = invoice_string.clone().into();
             match Bolt12Invoice::try_from(invoice_string) {
                 Ok(invoice) => {
-                    println!("Decoded invoice: {:?}.", invoice);
+                    println!("Decoded invoice: {invoice:?}.");
                 }
                 Err(e) => e.exit_gracefully(),
             }
@@ -402,7 +402,7 @@ fn read_cert_from_args(
     let pem = match (&cert_pem, &cert_path) {
         (Some(pem), _) => pem.clone(),
         (None, Some(cert_path)) => std::fs::read_to_string(cert_path)
-            .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?,
+            .map_err(|e| format!("ERROR: failed to read cert: {e:?}"))?,
         (None, None) => {
             // If no cert pem string is provided, we'll look for the tls certificate in the
             // default location.
@@ -411,7 +411,7 @@ fn read_cert_from_args(
                 .join(DEFAULT_LNDK_DIR)
                 .join(DEFAULT_DATA_DIR);
             std::fs::read_to_string(data_dir.join(TLS_CERT_FILENAME))
-                .map_err(|e| format!("ERROR: failed to read cert: {:?}", e))?
+                .map_err(|e| format!("ERROR: failed to read cert: {e:?}"))?
         }
     };
     let cert = Certificate::from_pem(pem);

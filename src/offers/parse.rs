@@ -42,8 +42,7 @@ pub async fn validate_amount(
                     if let Some(msats) = pay_amount_msats {
                         if msats < bitcoin_amt {
                             return Err(OfferError::InvalidAmount(format!(
-                                "{msats} is less than offer amount {}",
-                                bitcoin_amt
+                                "{msats} is less than offer amount {bitcoin_amt}"
                             )));
                         }
                         msats
