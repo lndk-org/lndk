@@ -124,7 +124,7 @@ async fn main() -> Result<(), ()> {
         .unwrap_or_exit()
         .0;
     let data_dir = create_data_dir(&config.data_dir).map_err(|e| {
-        println!("Error creating LNDK's data dir: {:?}", e);
+        println!("Error creating LNDK's data dir: {e:?}");
     })?;
     let log_file = config.log_file.map(PathBuf::from).or(config
         .data_dir

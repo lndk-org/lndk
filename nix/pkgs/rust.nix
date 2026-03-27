@@ -8,9 +8,9 @@
 let
   inherit (pkgs) lib stdenv;
   src = ../../.;
-  rustToolchainFile = builtins.fromTOML (builtins.readFile ../../rust-toolchain.toml);
-  rustChannel = rustToolchainFile.toolchain.channel;
-  craneLib = (crane.mkLib pkgs).overrideToolchain (pkgs.rust-bin.stable.${rustChannel}.default);
+  craneLib = (crane.mkLib pkgs).overrideToolchain (
+    pkgs.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml
+  );
   commonDeps = {
     nativeBuildInputs = with pkgs; [
       pkg-config
