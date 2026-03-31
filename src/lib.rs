@@ -71,9 +71,8 @@ pub fn setup_logger(log_level: Option<String>, log_file: Option<PathBuf>) -> Res
             Err(_) => {
                 // Since the logger isn't set up yet, we use a println just this once.
                 println!(
-                    "User provided log level '{}' is invalid. Make sure it is set to either 'error',
-                    'warn', 'info', 'debug' or 'trace'",
-                    level_str
+                    "User provided log level '{level_str}' is invalid. Make sure it is set to either 'error',
+                    'warn', 'info', 'debug' or 'trace'"
                 );
                 return Err(());
             }
