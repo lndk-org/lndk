@@ -1,11 +1,12 @@
 use bitcoin::secp256k1::{PublicKey, Secp256k1};
 use futures::executor::block_on;
-use lightning::blinded_path::message::{BlindedMessagePath, MessageContext};
+use lightning::blinded_path::message::{BlindedMessagePath, MessageContext, MessageForwardNode};
 use lightning::blinded_path::IntroductionNode;
 use lightning::ln::msgs::SocketAddress;
 use lightning::onion_message::messenger::{
     Destination, MessageRouter as LightningMessageRouter, OnionMessagePath,
 };
+use lightning::sign::ReceiveAuthKey;
 use std::cell::RefCell;
 use std::str::FromStr;
 
@@ -53,7 +54,7 @@ impl<MR: LightningMessageRouter, C: PeerConnector> LightningMessageRouter for Me
             Ok(OnionMessagePath {
                 intermediate_nodes: vec![],
                 destination,
-                first_node_addresses: None,
+                first_node_addresses: vec![],
             })
         } else {
             let node_info = block_on(
@@ -81,7 +82,7 @@ impl<MR: LightningMessageRouter, C: PeerConnector> LightningMessageRouter for Me
                     Ok(OnionMessagePath {
                         intermediate_nodes: vec![],
                         destination,
-                        first_node_addresses: Some(addresses),
+                        first_node_addresses: addresses,
                     })
                 }
                 _ => Err(()),
@@ -92,33 +93,18 @@ impl<MR: LightningMessageRouter, C: PeerConnector> LightningMessageRouter for Me
     fn create_blinded_paths<T: bitcoin::secp256k1::Signing + bitcoin::secp256k1::Verification>(
         &self,
         recipient: PublicKey,
+        local_node_receive_key: ReceiveAuthKey,
         context: MessageContext,
-        peers: Vec<PublicKey>,
+        peers: Vec<MessageForwardNode>,
         secp_ctx: &Secp256k1<T>,
     ) -> Result<Vec<BlindedMessagePath>, ()> {
-        self.inner_message_router
-            .create_blinded_paths(recipient, context, peers, secp_ctx)
-    }
-
-    fn create_compact_blinded_paths<
-        T: bitcoin::secp256k1::Signing + bitcoin::secp256k1::Verification,
-    >(
-        &self,
-        recipient: PublicKey,
-        context: MessageContext,
-        peers: Vec<lightning::blinded_path::message::MessageForwardNode>,
-        secp_ctx: &Secp256k1<T>,
-    ) -> Result<Vec<BlindedMessagePath>, ()> {
-        let peers = peers
-            .into_iter()
-            .map(
-                |lightning::blinded_path::message::MessageForwardNode {
-                     node_id,
-                     short_channel_id: _,
-                 }| node_id,
-            )
-            .collect();
-        self.create_blinded_paths(recipient, context, peers, secp_ctx)
+        self.inner_message_router.create_blinded_paths(
+            recipient,
+            local_node_receive_key,
+            context,
+            peers,
+            secp_ctx,
+        )
     }
 }
 
@@ -164,8 +150,9 @@ mod tests {
         >(
             &self,
             _recipient: PublicKey,
+            _local_node_receive_key: ReceiveAuthKey,
             _context: MessageContext,
-            _peers: Vec<PublicKey>,
+            _peers: Vec<MessageForwardNode>,
             _secp_ctx: &Secp256k1<T>,
         ) -> Result<Vec<BlindedMessagePath>, ()> {
             *self.create_blinded_paths_calls.lock().unwrap() += 1;
@@ -203,14 +190,23 @@ mod tests {
         // Create test peer
         let peer_secret = SecretKey::from_slice(&[2; 32]).unwrap();
         let peer_node_id = PublicKey::from_secret_key(&secp_ctx, &peer_secret);
-        let peers = vec![peer_node_id];
+        let peers = vec![MessageForwardNode {
+            node_id: peer_node_id,
+            short_channel_id: None,
+        }];
 
         let context = MessageContext::Custom(vec![]);
 
         let message_router = MessageRouter::new(mock_router, mock_client);
 
         // Call create_blinded_paths
-        let result = message_router.create_blinded_paths(recipient, context, peers, &secp_ctx);
+        let result = message_router.create_blinded_paths(
+            recipient,
+            ReceiveAuthKey([0; 32]),
+            context,
+            peers,
+            &secp_ctx,
+        );
 
         // Verify that the inner router was called exactly once
         assert_eq!(
@@ -239,7 +235,13 @@ mod tests {
         let message_router = MessageRouter::new(mock_router, mock_client);
 
         // Call create_blinded_paths
-        let result = message_router.create_blinded_paths(recipient, context, peers, &secp_ctx);
+        let result = message_router.create_blinded_paths(
+            recipient,
+            ReceiveAuthKey([0; 32]),
+            context,
+            peers,
+            &secp_ctx,
+        );
 
         // Verify that the inner router was called and the error was forwarded
         assert_eq!(
@@ -291,7 +293,7 @@ mod tests {
 
         let path = result.unwrap();
         assert!(path.intermediate_nodes.is_empty());
-        assert!(path.first_node_addresses.is_none());
+        assert!(path.first_node_addresses.is_empty());
     }
 
     #[test]
@@ -317,7 +319,7 @@ mod tests {
 
         let path = result.unwrap();
         assert!(path.intermediate_nodes.is_empty());
-        assert!(path.first_node_addresses.is_none());
+        assert!(path.first_node_addresses.is_empty());
     }
 
     #[test]
@@ -579,9 +581,9 @@ mod tests {
 
         let path = result.unwrap();
         assert!(path.intermediate_nodes.is_empty());
-        assert!(path.first_node_addresses.is_some());
+        assert!(!path.first_node_addresses.is_empty());
 
-        let addresses = path.first_node_addresses.unwrap();
+        let addresses = path.first_node_addresses;
         assert_eq!(addresses.len(), 2);
         assert!(addresses
             .iter()

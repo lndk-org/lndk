@@ -1,22 +1,22 @@
-use bitcoin::hashes::Hmac;
+use bitcoin::hashes::{sha256, Hash};
 use bitcoin::key::Secp256k1;
 use bitcoin::Network;
 use futures::executor::block_on;
 use lightning::blinded_path::message::{BlindedMessagePath, OffersContext};
 use lightning::blinded_path::payment::BlindedPaymentPath;
 use lightning::blinded_path::IntroductionNode;
-use lightning::ln::channelmanager::{PaymentId, Verification};
+use lightning::ln::channelmanager::PaymentId;
 use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::offers::invoice::Bolt12Invoice;
 use lightning::offers::invoice_error::InvoiceError;
 use lightning::offers::invoice_request::InvoiceRequest;
-use lightning::offers::nonce::Nonce;
 use lightning::offers::offer::{Offer, Quantity};
 use lightning::onion_message::messenger::{
     Destination, MessageSendInstructions, Responder, ResponseInstruction,
 };
 use lightning::onion_message::offers::{OffersMessage, OffersMessageHandler};
 use lightning::sign::EntropySource;
+use lightning::sign::ReceiveAuthKey;
 use log::{debug, error, info, trace, warn};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -53,6 +53,7 @@ pub struct OfferHandler {
     pending_messages: Mutex<Vec<(OffersMessage, MessageSendInstructions)>>,
     pub messenger_utils: MessengerUtilities,
     expanded_key: ExpandedKey,
+    receive_auth_key: ReceiveAuthKey,
     /// The amount of time in seconds that we will wait for the offer creator to respond with
     /// an invoice. If not provided, we will use the default value of 15 seconds.
     pub response_invoice_timeout: u32,
@@ -120,6 +121,7 @@ impl OfferHandler {
             None => messenger_utils.get_secure_random_bytes(),
         };
         let expanded_key = ExpandedKey::new(random_bytes);
+        let receive_auth_key = ReceiveAuthKey(sha256::Hash::hash(&random_bytes).to_byte_array());
         let response_invoice_timeout =
             response_invoice_timeout.unwrap_or(DEFAULT_RESPONSE_INVOICE_TIMEOUT);
 
@@ -128,6 +130,7 @@ impl OfferHandler {
             pending_messages: Mutex::new(Vec::new()),
             messenger_utils,
             expanded_key,
+            receive_auth_key,
             response_invoice_timeout,
             client,
         }
@@ -187,6 +190,7 @@ impl OfferHandler {
             invoice_request,
             offer_context,
             &self.messenger_utils,
+            self.receive_auth_key,
         )
         .await
         .inspect_err(|_| {
@@ -332,24 +336,23 @@ impl OfferHandler {
     }
 
     /// Handles an invoice error for a payment ID.
-    /// Verifies the payment ID and removes it from active payments if valid.
-    pub fn handle_invoice_error(
-        &self,
-        payment_id: PaymentId,
-        nonce: Nonce,
-        hmac: Hmac<bitcoin::hashes::sha256::Hash>,
-    ) {
-        if let Ok(()) = payment_id.verify_for_offer_payment(hmac, nonce, &self.expanded_key) {
-            error!("Received an invoice error for payment_id {payment_id}. Payment is abandoned.");
-            let mut active_payments = self.active_payments.lock().unwrap();
-            active_payments.remove(&payment_id);
-        }
+    /// Removes the payment from active payments.
+    pub fn handle_invoice_error(&self, payment_id: PaymentId) {
+        error!("Received an invoice error for payment_id {payment_id}. Payment is abandoned.");
+        self.remove_active_payment(payment_id);
     }
 
     pub async fn create_offer(&self, mut params: CreateOfferParams) -> Result<Offer, OfferError> {
         let args = CreateOfferArgs::from_params(&params);
         let client = params.client.lightning().clone();
-        create_offer(client, args, &self.messenger_utils, &self.expanded_key).await
+        create_offer(
+            client,
+            args,
+            &self.messenger_utils,
+            &self.expanded_key,
+            self.receive_auth_key,
+        )
+        .await
     }
 
     pub async fn create_invoice(
@@ -501,16 +504,12 @@ impl OffersMessageHandler for OfferHandler {
             }
             OffersMessage::InvoiceError(error) => {
                 trace!("Received an invoice error: {error}.");
-                if let Some(OffersContext::OutboundPayment {
-                    payment_id,
-                    nonce,
-                    hmac: Some(hmac),
-                }) = context
-                {
-                    self.handle_invoice_error(payment_id, nonce, hmac)
+                if let Some(OffersContext::OutboundPayment { payment_id, .. }) = context {
+                    self.handle_invoice_error(payment_id)
                 }
                 None
             }
+            OffersMessage::StaticInvoice(_) => None,
         }
     }
 
@@ -525,14 +524,11 @@ mod tests {
     use super::PaymentState;
     use super::*;
 
-    const NONCE_BYTES: &[u8] = &[42u8; 16];
-
     #[test]
     fn test_handle_invoice_error_existing_payment() {
         // Create an OfferHandler with a payment ID in active_payments
         let handler = OfferHandler::default();
         let payment_id = PaymentId([42; 32]);
-        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
 
         // Insert a payment into active_payments
         {
@@ -546,11 +542,8 @@ mod tests {
             );
         }
 
-        // Calculate a valid HMAC
-        let hmac = payment_id.hmac_for_offer_payment(nonce, &handler.expanded_key);
-
         // Call handle_invoice_error
-        handler.handle_invoice_error(payment_id, nonce, hmac);
+        handler.handle_invoice_error(payment_id);
 
         // Verify payment was removed
         let active_payments = handler.active_payments.lock().unwrap();
@@ -562,12 +555,8 @@ mod tests {
         // Create an OfferHandler with an empty active_payments
         let handler = OfferHandler::default();
         let payment_id = PaymentId([42; 32]);
-        let nonce = Nonce::try_from(NONCE_BYTES).unwrap();
-
-        // Calculate a valid HMAC
-        let hmac = payment_id.hmac_for_offer_payment(nonce, &handler.expanded_key);
 
         // Call handle_invoice_error and nothing should happen.
-        handler.handle_invoice_error(payment_id, nonce, hmac);
+        handler.handle_invoice_error(payment_id);
     }
 }

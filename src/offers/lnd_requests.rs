@@ -10,10 +10,7 @@ use lightning::{
         payment::BlindedPaymentPath,
         Direction, IntroductionNode,
     },
-    ln::{
-        channelmanager::{PaymentId, Verification},
-        inbound_payment::ExpandedKey,
-    },
+    ln::{channelmanager::PaymentId, inbound_payment::ExpandedKey},
     offers::{
         invoice_request::InvoiceRequest,
         nonce::Nonce,
@@ -24,6 +21,7 @@ use lightning::{
         offers::OffersMessage,
     },
     sign::EntropySource,
+    sign::ReceiveAuthKey,
     types::payment::PaymentHash,
 };
 use log::{debug, error, info, trace};
@@ -91,12 +89,7 @@ pub(super) async fn create_invoice_request(
         .build_and_sign()
         .map_err(OfferError::BuildUIRFailure)?;
 
-    let hmac = payment_id.hmac_for_offer_payment(nonce, &expanded_key);
-    let offer_context = OffersContext::OutboundPayment {
-        payment_id,
-        nonce,
-        hmac: Some(hmac),
-    };
+    let offer_context = OffersContext::OutboundPayment { payment_id, nonce };
     Ok((invoice_request, payment_id, validated_amount, offer_context))
 }
 
@@ -180,6 +173,7 @@ pub(super) async fn create_offer(
     args: CreateOfferArgs,
     entropy_source: &MessengerUtilities,
     expanded_key: &ExpandedKey,
+    receive_auth_key: ReceiveAuthKey,
 ) -> Result<Offer, OfferError> {
     let info = creator
         .get_info()
@@ -191,9 +185,14 @@ pub(super) async fn create_offer(
     let secp_ctx = Secp256k1::new();
 
     let message_context = MessageContext::Offers(OffersContext::InvoiceRequest { nonce });
-    let paths =
-        create_reply_path_for_offer_creation(creator, node_id, message_context, entropy_source)
-            .await?;
+    let paths = create_reply_path_for_offer_creation(
+        creator,
+        node_id,
+        message_context,
+        entropy_source,
+        receive_auth_key,
+    )
+    .await?;
 
     let mut builder =
         OfferBuilder::deriving_signing_pubkey(node_id, expanded_key, nonce, &secp_ctx)
@@ -286,6 +285,7 @@ pub async fn create_reply_path_for_offer_creation(
     node_id: PublicKey,
     message_context: MessageContext,
     messenger_utils: &MessengerUtilities,
+    receive_auth_key: ReceiveAuthKey,
 ) -> Result<Vec<BlindedMessagePath>, OfferError> {
     // Find introduction channels for our blinded paths.
     let current_channels = connector.list_active_public_channels().await.map_err(|e| {
@@ -325,15 +325,16 @@ pub async fn create_reply_path_for_offer_creation(
     let secp_ctx = Secp256k1::new();
     if intro_channels.is_empty() {
         debug!(
-            "Failed to create a blinded path for the offer. 
+            "Failed to create a blinded path for the offer.
             No active public channels were found on which to build a path."
         );
-        let path =
-            BlindedMessagePath::one_hop(node_id, message_context, messenger_utils, &secp_ctx)
-                .map_err(|_| {
-                    error!("Could not create blinded path.");
-                    OfferError::BuildBlindedPathFailure
-                })?;
+        let path = BlindedMessagePath::one_hop(
+            node_id,
+            receive_auth_key,
+            message_context,
+            messenger_utils,
+            &secp_ctx,
+        );
         Ok(vec![path])
     } else {
         let mut paths = vec![];
@@ -345,14 +346,11 @@ pub async fn create_reply_path_for_offer_creation(
             let path = BlindedMessagePath::new(
                 &nodes,
                 node_id,
+                receive_auth_key,
                 message_context.clone(),
                 messenger_utils,
                 &secp_ctx,
-            )
-            .map_err(|_| {
-                error!("Could not create blinded path.");
-                OfferError::BuildBlindedPathFailure
-            })?;
+            );
             paths.push(path)
         }
         Ok(paths)
@@ -372,6 +370,7 @@ pub async fn create_reply_path_for_outgoing_payments(
     node_id: PublicKey,
     message_context: MessageContext,
     messenger_utils: &MessengerUtilities,
+    receive_auth_key: ReceiveAuthKey,
 ) -> Result<BlindedMessagePath, OfferError> {
     // Find an introduction node for our blinded path.
     let current_peers = connector.list_peers().await.map_err(|e| {
@@ -401,25 +400,26 @@ pub async fn create_reply_path_for_outgoing_payments(
 
     let secp_ctx = Secp256k1::new();
     if intro_node.is_none() {
-        Ok(
-            BlindedMessagePath::one_hop(node_id, message_context, messenger_utils, &secp_ctx)
-                .map_err(|_| {
-                    error!("Could not create blinded path.");
-                    OfferError::BuildBlindedPathFailure
-                })?,
-        )
+        Ok(BlindedMessagePath::one_hop(
+            node_id,
+            receive_auth_key,
+            message_context,
+            messenger_utils,
+            &secp_ctx,
+        ))
     } else {
         let nodes = vec![lightning::blinded_path::message::MessageForwardNode {
             node_id: intro_node.unwrap(),
             short_channel_id: None,
         }];
-        Ok(
-            BlindedMessagePath::new(&nodes, node_id, message_context, messenger_utils, &secp_ctx)
-                .map_err(|_| {
-                error!("Could not create blinded path.");
-                OfferError::BuildBlindedPathFailure
-            })?,
-        )
+        Ok(BlindedMessagePath::new(
+            &nodes,
+            node_id,
+            receive_auth_key,
+            message_context,
+            messenger_utils,
+            &secp_ctx,
+        ))
     }
 }
 
@@ -429,6 +429,7 @@ pub async fn send_invoice_request(
     invoice_request: InvoiceRequest,
     offer_context: OffersContext,
     messenger_utils: &MessengerUtilities,
+    receive_auth_key: ReceiveAuthKey,
 ) -> Result<(OffersMessage, MessageSendInstructions), OfferError> {
     // For now we connect directly to the introduction node of the blinded path so we don't need
     // any intermediate nodes here. In the future we'll query for a full path to the
@@ -460,6 +461,7 @@ pub async fn send_invoice_request(
         pubkey,
         message_context,
         messenger_utils,
+        receive_auth_key,
     )
     .await?;
 
@@ -626,7 +628,7 @@ mod tests {
             offer::{Amount, OfferId},
         },
         types::features::BlindedHopFeatures,
-        util::string::UntrustedString,
+        types::string::UntrustedString,
     };
     use mockall::predicate::eq;
     use tonic_lnd::{
@@ -655,7 +657,6 @@ mod tests {
         let offer_context = OffersContext::OutboundPayment {
             payment_id: PaymentId([42; 32]),
             nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
-            hmac: None,
         };
         MessageContext::Offers(offer_context)
     }
@@ -799,6 +800,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -816,6 +818,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -858,6 +861,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -905,6 +909,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -925,6 +930,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_err());
@@ -942,6 +948,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_err());
@@ -979,6 +986,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -1044,6 +1052,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -1087,6 +1096,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -1162,6 +1172,7 @@ mod tests {
             receiver_node_id,
             message_context,
             &MessengerUtilities::new([42; 32]),
+            ReceiveAuthKey([0; 32]),
         )
         .await;
         assert!(response.is_ok());
@@ -1434,7 +1445,7 @@ mod tests {
             quantity: Some(Quantity::One),
             expiry: None,
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_ok());
         let offer = result.unwrap();
@@ -1465,7 +1476,7 @@ mod tests {
             quantity: None,
             expiry: None,
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_ok());
         let offer = result.unwrap();
@@ -1496,7 +1507,7 @@ mod tests {
             quantity: None,
             expiry: Some(Duration::from_secs(3600)),
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_ok());
         let offer = result.unwrap();
@@ -1525,7 +1536,7 @@ mod tests {
             quantity: None,
             expiry: None,
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1557,7 +1568,7 @@ mod tests {
             quantity: None,
             expiry: None,
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_err());
         assert!(matches!(
@@ -1582,7 +1593,7 @@ mod tests {
             quantity: Some(Quantity::Unbounded),
             expiry: None,
         };
-        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(result.is_ok());
         let offer = result.unwrap();
@@ -1616,8 +1627,8 @@ mod tests {
             expiry: None,
         };
 
-        let offer1 = create_offer(creator_mock1, args, &entropy_source, &expanded_key).await;
-        let offer2 = create_offer(creator_mock2, args2, &entropy_source, &expanded_key).await;
+        let offer1 = create_offer(creator_mock1, args, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
+        let offer2 = create_offer(creator_mock2, args2, &entropy_source, &expanded_key, ReceiveAuthKey([0; 32])).await;
 
         assert!(offer1.is_ok());
         assert!(offer2.is_ok());

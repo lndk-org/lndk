@@ -23,14 +23,13 @@ use lightning::sign::NodeSigner;
 use lightning::sign::{EntropySource, RandomBytes};
 use lightning::types::features::InitFeatures;
 use lightning::util::logger::{Level, Logger, Record};
-use lightning::util::ser::{Readable, Writeable};
+use lightning::util::ser::{LengthReadable, Writeable};
 use log::{debug, error, info, trace, warn};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::io::Cursor;
 use std::marker::Copy;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -763,7 +762,9 @@ async fn produce_incoming_message_events(
                     }
 
                     let pubkey = PublicKey::from_slice(&incoming_message.peer).unwrap();
-                    let res = OnionMessage::read(&mut Cursor::new(incoming_message.data));
+                    let res = OnionMessage::read_from_fixed_length_buffer(
+                        &mut incoming_message.data.as_slice(),
+                    );
                     match res {
                         Ok(onion_message) => {
                             let event = MessengerEvents::IncomingMessage(pubkey, onion_message);
@@ -1075,9 +1076,9 @@ mod tests {
 
     use bytes::BufMut;
     use lightning::events::{EventHandler, EventsProvider};
-    use lightning::ln::msgs::{OnionMessage, OnionMessageHandler};
-    use lightning::util::ser::Readable;
-    use lightning::util::ser::Writeable;
+    use lightning::ln::msgs::{BaseMessageHandler, MessageSendEvent, OnionMessage, OnionMessageHandler};
+    use lightning::types::features::{InitFeatures, NodeFeatures};
+    use lightning::util::ser::{LengthReadable, Readable, Writeable};
     use mockall::mock;
     use std::io::Cursor;
     use tokio::sync::mpsc::channel;
@@ -1105,21 +1106,24 @@ mod tests {
         w.put_bytes(1, 1300);
         w.put_bytes(2, 32);
 
-        let mut readable = Cursor::new(w);
-        OnionMessage::read(&mut readable).unwrap()
+        OnionMessage::read_from_fixed_length_buffer(&mut w.as_slice()).unwrap()
     }
 
     mock! {
             OnionHandler{}
 
+            impl BaseMessageHandler for OnionHandler {
+                fn get_and_clear_pending_msg_events(&self) -> Vec<MessageSendEvent>;
+                fn peer_disconnected(&self, their_node_id: PublicKey);
+                fn provided_node_features(&self) -> NodeFeatures;
+                fn provided_init_features(&self, their_node_id: PublicKey) -> InitFeatures;
+                fn peer_connected(&self, their_node_id: PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
+            }
+
             impl OnionMessageHandler for OnionHandler {
                 fn handle_onion_message(&self, peer_node_id: PublicKey, msg: &OnionMessage);
                 fn next_onion_message_for_peer(&self, peer_node_id: PublicKey) -> Option<OnionMessage>;
-                fn peer_connected(&self, their_node_id: PublicKey, init: &Init, inbound: bool) -> Result<(), ()>;
-                fn peer_disconnected(&self, their_node_id: PublicKey);
                 fn timer_tick_occurred(&self);
-                fn provided_node_features(&self) -> lightning::types::features::NodeFeatures;
-                fn provided_init_features(&self, their_node_id: PublicKey) -> lightning::types::features::InitFeatures;
             }
     }
 

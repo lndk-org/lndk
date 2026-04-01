@@ -15,7 +15,7 @@ use lightning::ln::inbound_payment::ExpandedKey;
 use lightning::ln::msgs::UnsignedGossipMessage;
 use lightning::offers::invoice::UnsignedBolt12Invoice;
 use lightning::offers::invoice_request::InvoiceRequest;
-use lightning::sign::{NodeSigner, Recipient};
+use lightning::sign::{NodeSigner, PeerStorageKey, ReceiveAuthKey, Recipient};
 use lightning::types::features::BlindedHopFeatures;
 use log::error;
 use std::cell::RefCell;
@@ -322,7 +322,19 @@ impl NodeSigner for LndNodeSigner<'_> {
         }
     }
 
-    fn get_inbound_payment_key(&self) -> ExpandedKey {
+    fn get_expanded_key(&self) -> ExpandedKey {
+        unimplemented!("not required for onion messaging");
+    }
+
+    fn get_peer_storage_key(&self) -> PeerStorageKey {
+        unimplemented!("not required for onion messaging");
+    }
+
+    fn get_receive_auth_key(&self) -> ReceiveAuthKey {
+        unimplemented!("not required for onion messaging");
+    }
+
+    fn sign_message(&self, _msg: &[u8]) -> Result<String, ()> {
         unimplemented!("not required for onion messaging");
     }
 
