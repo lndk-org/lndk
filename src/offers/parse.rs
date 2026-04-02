@@ -39,6 +39,16 @@ pub async fn validate_amount(
                 Amount::Bitcoin {
                     amount_msats: bitcoin_amt,
                 } => {
+                    // Per BOLT 12 (bolts #1316): readers MUST NOT respond to
+                    // offers where offer_amount is zero. A zero amount when
+                    // present is semantically invalid since omitting the field
+                    // already indicates no minimum is required.
+                    if bitcoin_amt == 0 {
+                        return Err(OfferError::InvalidAmount(
+                            "Offer has amount explicitly set to 0, which is invalid per BOLT 12 spec"
+                                .to_string(),
+                        ));
+                    }
                     if let Some(msats) = pay_amount_msats {
                         if msats < bitcoin_amt {
                             return Err(OfferError::InvalidAmount(format!(
@@ -48,12 +58,6 @@ pub async fn validate_amount(
                         }
                         msats
                     } else {
-                        // If user didn't set amount, set it to the offer amount.
-                        if bitcoin_amt == 0 {
-                            return Err(OfferError::InvalidAmount(
-                                "Offer doesn't set an amount, so user must specify one".to_string(),
-                            ));
-                        }
                         bitcoin_amt
                     }
                 }
@@ -111,12 +115,6 @@ mod tests {
         assert!(validate_amount(offer_amount.as_ref(), Some(20000))
             .await
             .is_ok());
-
-        let offer = build_custom_offer(0);
-        let offer_amount = offer.amount();
-        assert!(validate_amount(offer_amount.as_ref(), Some(20000))
-            .await
-            .is_ok());
     }
 
     #[tokio::test]
@@ -127,10 +125,40 @@ mod tests {
         assert!(validate_amount(offer_amount.as_ref(), Some(1000))
             .await
             .is_err());
+    }
 
-        // Both user amount and offer amount can't be 0.
+    /// Per BOLT 12 spec clarification (https://github.com/lightning/bolts/pull/1316):
+    /// - Readers MUST NOT respond to offers where offer_amount is zero
+    /// - Writers MUST set offer_amount greater than zero when present
+    ///
+    /// An offer with amount=0 is semantically invalid because omitting
+    /// offer_amount already indicates no minimum is required. A zero value
+    /// when present is incorrect per the spec.
+    #[tokio::test]
+    async fn test_reject_offer_with_zero_amount() {
+        // With the rust-lightning fix (PR #4487), OfferBuilder::amount_msats(0)
+        // is silently normalized to None (no amount) at build time. Verify
+        // that building an offer with amount=0 produces amount=None.
         let offer = build_custom_offer(0);
-        let offer_amount = offer.amount();
-        assert!(validate_amount(offer_amount.as_ref(), None).await.is_err());
+        assert!(
+            offer.amount().is_none(),
+            "OfferBuilder must normalize amount_msats(0) to None per BOLT 12"
+        );
+
+        // Directly test that validate_amount rejects Amount::Bitcoin { amount_msats: 0 }.
+        // This covers the case where a raw TLV-decoded offer somehow has amount=0
+        // (e.g. from a non-compliant implementation). The rust-lightning parser
+        // already rejects these, but we defend in depth.
+        let zero_amount = Amount::Bitcoin { amount_msats: 0 };
+        assert!(
+            validate_amount(Some(&zero_amount), Some(20000))
+                .await
+                .is_err(),
+            "Offers with amount=0 must be rejected per BOLT 12 spec (bolts #1316)"
+        );
+        assert!(
+            validate_amount(Some(&zero_amount), None).await.is_err(),
+            "Offers with amount=0 must be rejected per BOLT 12 spec (bolts #1316)"
+        );
     }
 }

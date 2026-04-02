@@ -154,7 +154,7 @@ pub(super) async fn track_payment(
 }
 
 pub(super) struct CreateOfferArgs {
-    amount_msats: u64,
+    amount_msats: Option<u64>,
     chain: Network,
     description: Option<String>,
     issuer: Option<String>,
@@ -197,8 +197,14 @@ pub(super) async fn create_offer(
 
     let mut builder =
         OfferBuilder::deriving_signing_pubkey(node_id, expanded_key, nonce, &secp_ctx)
-            .amount_msats(args.amount_msats)
             .chain(args.chain);
+
+    // Per BOLT 12 (bolts #1316): writers MUST set offer_amount greater than
+    // zero when present. When no amount is specified, we omit the field
+    // entirely so readers interpret it as "no minimum amount required".
+    if let Some(amount_msats) = args.amount_msats {
+        builder = builder.amount_msats(amount_msats);
+    }
 
     builder = if let Some(path) = paths.first() {
         builder.path(path.clone())
@@ -1427,7 +1433,7 @@ mod tests {
         let expanded_key = ExpandedKey::new([42; 32]);
 
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: Some("Test offer".to_string()),
             issuer: Some("Test issuer".to_string()),
@@ -1458,7 +1464,7 @@ mod tests {
 
         // Only provide required parameters
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1481,6 +1487,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_offer_no_amount() {
+        let creator_mock = setup_create_offer_success_mock();
+
+        let entropy_source = MessengerUtilities::new([42; 32]);
+        let expanded_key = ExpandedKey::new([42; 32]);
+
+        // When no amount is specified, the offer should omit offer_amount
+        // entirely rather than setting it to 0 (per BOLT 12, bolts #1316).
+        let args = CreateOfferArgs {
+            amount_msats: None,
+            chain: Network::Regtest,
+            description: Some("donations welcome".to_string()),
+            issuer: None,
+            quantity: None,
+            expiry: None,
+        };
+        let result = create_offer(creator_mock, args, &entropy_source, &expanded_key).await;
+
+        assert!(result.is_ok());
+        let offer = result.unwrap();
+
+        // offer_amount must be None (omitted), not Some(Bitcoin { amount_msats: 0 }).
+        assert!(
+            offer.amount().is_none(),
+            "Offer created without amount must omit offer_amount, not set it to 0"
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_offer_with_expiry() {
         let creator_mock = setup_create_offer_success_mock();
 
@@ -1489,7 +1524,7 @@ mod tests {
 
         // Include expiry parameter
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1518,7 +1553,7 @@ mod tests {
         let expanded_key = ExpandedKey::new([42; 32]);
 
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1550,7 +1585,7 @@ mod tests {
         let expanded_key = ExpandedKey::new([42; 32]);
 
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1575,7 +1610,7 @@ mod tests {
 
         // Test with different quantity types
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1599,7 +1634,7 @@ mod tests {
         let expanded_key = ExpandedKey::new([42; 32]);
 
         let args = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
@@ -1608,7 +1643,7 @@ mod tests {
         };
 
         let args2 = CreateOfferArgs {
-            amount_msats: 1000,
+            amount_msats: Some(1000),
             chain: Network::Regtest,
             description: None,
             issuer: None,
