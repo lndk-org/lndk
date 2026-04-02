@@ -246,7 +246,7 @@ impl Offers for LNDKServer {
 
         let request = CreateOfferParams {
             client,
-            amount_msats: inner_request.amount.unwrap_or(0),
+            amount_msats: inner_request.amount,
             chain: network,
             description: inner_request.description.clone(),
             issuer: inner_request.issuer.clone(),
