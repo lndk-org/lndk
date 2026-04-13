@@ -9,7 +9,7 @@ use lightning::blinded_path::IntroductionNode;
 use lightning::ln::channelmanager::PaymentId;
 use lightning::offers::nonce::Nonce;
 use lightning::offers::offer::{Amount, Offer};
-use lightning::util::string::PrintableString;
+use lightning::types::string::PrintableString;
 use log::error;
 
 use bitcoin::secp256k1::PublicKey;
@@ -20,6 +20,9 @@ use lightning::offers::offer::Quantity;
 use lightning::onion_message::messenger::Destination;
 use lndk::lnd::validate_lnd_creds;
 use lndk::offers::handler::{CreateOfferParams, OfferHandler, PayOfferParams};
+use lightning::bitcoin::hashes::sha256;
+use lightning::bitcoin::hashes::Hash;
+use lightning::sign::ReceiveAuthKey;
 use lndk::offers::{create_reply_path_for_outgoing_payments, OfferError};
 use lndk::onion_messenger::MessengerUtilities;
 use lndk::{setup_logger, LifecycleSignals};
@@ -490,10 +493,10 @@ async fn test_reply_path_unannounced_peers() {
     let offer_context = OffersContext::OutboundPayment {
         payment_id: PaymentId([42; 32]),
         nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
-        hmac: None,
     };
     let offer_context = MessageContext::Offers(offer_context);
     let messenger_utils = MessengerUtilities::new([42; 32]);
+    let receive_auth_key = ReceiveAuthKey(sha256::Hash::hash(&[42; 32]).to_byte_array());
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // private channel and as such, is an unadvertised node. Because of that, create_reply_path
     // should not use ldk2 as an introduction node and should return a reply path directly to
@@ -503,6 +506,7 @@ async fn test_reply_path_unannounced_peers() {
         lnd_pubkey,
         offer_context,
         &messenger_utils,
+        receive_auth_key,
     )
     .await;
     assert!(reply_path.is_ok());
@@ -532,10 +536,10 @@ async fn test_reply_path_announced_peers() {
     let offer_context = OffersContext::OutboundPayment {
         payment_id: PaymentId([42; 32]),
         nonce: Nonce::try_from(NONCE_BYTES).unwrap(),
-        hmac: None,
     };
     let offer_context = MessageContext::Offers(offer_context);
     let messenger_utils = MessengerUtilities::new([42; 32]);
+    let receive_auth_key = ReceiveAuthKey(sha256::Hash::hash(&[42; 32]).to_byte_array());
 
     // In the small network we produced above, the lnd node is only connected to ldk2, which has a
     // public channel and as such, is indeed an advertised node. Because of this, we make sure
@@ -546,6 +550,7 @@ async fn test_reply_path_announced_peers() {
         lnd_pubkey,
         offer_context,
         &messenger_utils,
+        receive_auth_key,
     )
     .await;
     assert!(reply_path.is_ok());
