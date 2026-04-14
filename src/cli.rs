@@ -183,7 +183,9 @@ enum Commands {
     },
     /// CreateOffer creates a BOLT 12 offer.
     CreateOffer {
-        /// The amount of the offer in millisatoshis.
+        /// The amount of the offer in millisatoshis. Per BOLT 12, this must be
+        /// greater than zero when present. If omitted, the offer has no minimum
+        /// amount requirement.
         #[arg(long, required = false)]
         amount: Option<u64>,
         /// The description of the offer.
