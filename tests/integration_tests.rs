@@ -1021,7 +1021,7 @@ async fn test_create_offer() {
 
     let create_offer_params = CreateOfferParams {
         client: lnd.client.clone().unwrap(),
-        amount_msats: 20_000,
+        amount_msats: Some(20_000),
         chain: Network::Regtest,
         description: None,
         issuer: None,
@@ -1201,7 +1201,7 @@ async fn test_receive_payment_from_offer() {
 
     let create_offer_params = CreateOfferParams {
         client: lnd.client.clone().unwrap(),
-        amount_msats: 20_000,
+        amount_msats: Some(20_000),
         chain: Network::Regtest,
         description: None,
         issuer: None,
@@ -1410,7 +1410,7 @@ async fn test_receive_payment_from_offer_with_multiple_blinded_paths() {
 
     let create_offer_params = CreateOfferParams {
         client: lnd.client.clone().unwrap(),
-        amount_msats: 20_000,
+        amount_msats: Some(20_000),
         chain: Network::Regtest,
         description: None,
         issuer: None,
