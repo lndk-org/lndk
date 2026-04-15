@@ -18,6 +18,7 @@ use lightning::{
         invoice_request::InvoiceRequest,
         nonce::Nonce,
         offer::{Offer, OfferBuilder, Quantity},
+        parse::Bolt12SemanticError,
     },
     onion_message::{
         messenger::{Destination, MessageSendInstructions},
@@ -74,11 +75,20 @@ pub(super) async fn create_invoice_request(
     // 2) We don't pay duplicate invoices.
     let secp_ctx = Secp256k1::new();
     let nonce = lightning::offers::nonce::Nonce::from_entropy_source(entropy_source);
+    let offer_chains = offer.chains();
     let builder = offer
         .request_invoice(&expanded_key, nonce, &secp_ctx, payment_id)
         .map_err(OfferError::BuildUIRFailure)?
         .chain(network)
-        .map_err(OfferError::BuildUIRFailure)?
+        .map_err(|e| {
+            if matches!(e, Bolt12SemanticError::UnsupportedChain) {
+                error!(
+                    "Chain mismatch: our node is on {:?}, but offer supports chains: {:?}",
+                    network, offer_chains
+                );
+            }
+            OfferError::BuildUIRFailure(e)
+        })?
         .amount_msats(validated_amount)
         .map_err(OfferError::BuildUIRFailure)?;
 

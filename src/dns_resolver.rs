@@ -1,6 +1,7 @@
 use crate::OfferError;
 use bitcoin_payment_instructions::hrn_resolution::{HrnResolution, HrnResolver, HumanReadableName};
 use bitcoin_payment_instructions::http_resolver::HTTPHrnResolver;
+use log::{debug, info};
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -35,8 +36,13 @@ impl LndkDNSResolverMessageHandler {
     }
 
     pub async fn resolver_hrn_to_offer(&self, name_str: &str) -> Result<String, OfferError> {
+        info!("Resolving human-readable name: {}", name_str);
         let resolved_uri = self.resolve_locally(name_str.to_string()).await?;
-        self.extract_offer_from_uri(&resolved_uri)
+        debug!("Resolved {} to URI: {}", name_str, resolved_uri);
+
+        let offer = self.extract_offer_from_uri(&resolved_uri)?;
+        info!("Successfully resolved {} to offer: {}", name_str, offer);
+        Ok(offer)
     }
 
     pub fn extract_offer_from_uri(&self, uri: &str) -> Result<String, OfferError> {
@@ -58,6 +64,7 @@ impl LndkDNSResolverMessageHandler {
         let hrn_parsed = HumanReadableName::from_encoded(&name)
             .map_err(|_| OfferError::ParseHrnFailure(name.clone()))?;
 
+        debug!("Parsed HRN, starting DNS resolution for {}", name);
         let resolution = self
             .resolver
             .resolve_hrn(&hrn_parsed)
@@ -65,7 +72,10 @@ impl LndkDNSResolverMessageHandler {
             .map_err(|e| OfferError::HrnResolutionFailure(format!("{}: {}", name, e)))?;
 
         let uri = match resolution {
-            HrnResolution::DNSSEC { result, .. } => result,
+            HrnResolution::DNSSEC { result, .. } => {
+                debug!("DNSSEC resolution succeeded for {}", name);
+                result
+            }
             HrnResolution::LNURLPay { .. } => {
                 return Err(OfferError::ResolveUriError(
                     "LNURL resolution not supported in this flow".to_string(),
