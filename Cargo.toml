@@ -47,6 +47,8 @@ tar = "0.4.45"
 triggered = "0.1.2"
 prost = "0.14.1"
 async_fn_traits = "0.1.1"
+bitcoin-payment-instructions = { version = "0.7", features = ["http"] }
+url = "2.5"
 
 # Integration test dependencies, only enabled with itest feature
 bitcoincore-rpc = { version = "0.19.0", optional = true }
